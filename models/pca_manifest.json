@@ -1,0 +1,64 @@
+{
+  "types": {
+    "v_I": "ndarray",
+    "v": "ndarray",
+    "v_ratio": "ndarray",
+    "p_k": "ndarray",
+    "data_mean": "ndarray",
+    "data_std": "ndarray",
+    "T_95_limit": "scalar",
+    "T_99_limit": "scalar",
+    "SPE_95_limit": "scalar",
+    "SPE_99_limit": "scalar",
+    "P": "ndarray",
+    "k": "ndarray",
+    "P_t": "ndarray",
+    "X": "ndarray",
+    "data_nor": "DataFrame"
+  },
+  "shapes": {
+    "v_I": [
+      4,
+      4
+    ],
+    "v": [
+      6
+    ],
+    "v_ratio": [
+      6
+    ],
+    "p_k": [
+      6,
+      4
+    ],
+    "data_mean": [
+      6
+    ],
+    "data_std": [
+      6
+    ],
+    "P": [
+      6,
+      6
+    ],
+    "k": [
+      2
+    ],
+    "P_t": [
+      6,
+      6
+    ],
+    "X": [
+      6,
+      6
+    ],
+    "data_nor": [
+      43546,
+      6
+    ]
+  },
+  "paths": {
+    "arrays": "./models/pca_arrays.npz",
+    "data_nor": "./models/pca_data_nor.csv"
+  }
+}

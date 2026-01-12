@@ -75,7 +75,7 @@ warnings.filterwarnings('ignore')
 #----------------------------------------data loading------------------------------
 # VIN_data = pd.read_excel('./data/Name_list.xls')  # Changed path and removed Chinese characters
 # print(os.getcwd())
-# VIN_data = pd.read_excel('./Code/data/Fig3abfandFigS13.xlsx')  # Changed path and removed Chinese characters
+# VIN_data = pd.read_excel('./data/Fig3abfandFigS13.xlsx')  # Changed path and removed Chinese characters
 # vin = VIN_data.iloc[1, 0]
 # print(vin)
 
@@ -88,10 +88,10 @@ warnings.filterwarnings('ignore')
 # for i in range(79 + 1):
 #     vin = f'VIN_{i}'
 #     print(vin)
-#     test_X = safe_load(f'./Code/data/DTI/{i}/vin_1.pkl')
+#     test_X = safe_load(f'./data/DTI/{i}/vin_1.pkl')
 #     if (sum(test_X[:,:,2])[0] != 0):
 #         print(f"Skipping {vin} due to zero current data.")
-#         plot_testX_timeseries(test_X, feature_names="combined_tensor", title="combined_tensor", figsize=(12, 6), save_path=f'./Code/', show=True, seperate=True, start_idx=0,_range=[2,2])
+#         plot_testX_timeseries(test_X, feature_names="combined_tensor", title="combined_tensor", figsize=(12, 6), save_path=f'./', show=True, seperate=True, start_idx=0,_range=[2,2])
 #         continue
 
 
@@ -100,8 +100,8 @@ PLOT_MODE = False
 for i in [0]:
     BATTERY_TYPE = 'QAS' # 'DTI' or 'QAS'
     VEHICLE_ID = f'{i}'
-    PATH = f"./Code/{BATTERY_TYPE}-{VEHICLE_ID}"
-    # PATH = f"./Code/temp/{BATTERY_TYPE}-{VEHICLE_ID}"
+    PATH = f"./data/data_analysis/{BATTERY_TYPE}-{VEHICLE_ID}"
+    # PATH = f"./temp/{BATTERY_TYPE}-{VEHICLE_ID}"
     LSTM_TRAINING = False
     LSTM_LOAD = True if not LSTM_TRAINING else True
     dir_ = os.path.dirname(PATH)
@@ -115,7 +115,7 @@ for i in [0]:
     #----------------------------------------Data loading for LSTM (customized) ------------------------------
     # print(os.getcwd())
     if LSTM_LOAD:
-        test_X = safe_load(f'./Code/data/{BATTERY_TYPE}/{VEHICLE_ID}/vin_1.pkl')
+        test_X = safe_load(f'./data/{BATTERY_TYPE}/{VEHICLE_ID}/vin_1.pkl')
 
     #----------------------------------------Hyper Parameter Setting---------------------
     TIME_STEP = 1  # rnn time step
@@ -152,8 +152,8 @@ for i in [0]:
                     loss_train_100.append(loss.cpu().detach().numpy())
 
     #----------------------------------------Data loading for MC-AE (customized) ------------------------------
-    combined_tensor = safe_load(f'./Code/data/{BATTERY_TYPE}/{VEHICLE_ID}/vin_2.pkl')
-    combined_tensorx = safe_load(f'./Code/data/{BATTERY_TYPE}/{VEHICLE_ID}/vin_3.pkl')
+    combined_tensor = safe_load(f'./data/{BATTERY_TYPE}/{VEHICLE_ID}/vin_2.pkl')
+    combined_tensorx = safe_load(f'./data/{BATTERY_TYPE}/{VEHICLE_ID}/vin_3.pkl')
 
     #----------------------------------------Training for MC-AE--------------------------
     dim_x = 2 # [estimated pack voltage 1, estimated pack volatage 2]
@@ -230,7 +230,8 @@ for epoch in range(EPOCH):
         optimizer.step()
     avg_loss = total_loss / num_batches
     print('Epoch: {:2d} | Average Loss: {:.4f}'.format(epoch, avg_loss))
-
+    
+save_net_state(model=net, models_dir=f"./models/", filename='net.pth')
 train_loader2 = DataLoader(Dataset(x_recovered, y_recovered, z_recovered, q_recovered), batch_size=len(x_recovered),
                         shuffle=False)
 for iteration, (x, y, z, q) in enumerate(train_loader2):
@@ -243,6 +244,8 @@ for iteration, (x, y, z, q) in enumerate(train_loader2):
 AA = recon_imtest.cpu().detach().numpy()
 yTrainU = y_recovered.cpu().detach().numpy()
 ERRORU = AA - yTrainU
+
+
 
 train_loader_soc = DataLoader(Dataset(x_recovered2, y_recovered2, z_recovered2, q_recovered2), batch_size=BATCHSIZE, shuffle=False)
 optimizer = torch.optim.Adam(netx.parameters(), lr=LR)
@@ -267,6 +270,7 @@ for epoch in range(EPOCH):
     avg_loss = total_loss / num_batches
     avg_loss_list_x.append(avg_loss)
     print('Epoch: {:2d} | Average Loss: {:.4f}'.format(epoch, avg_loss))
+save_net_state(model=netx, models_dir=f"./models/", filename='netx.pth')
 
 train_loaderx2 = DataLoader(Dataset(x_recovered2, y_recovered2, z_recovered2, q_recovered2), batch_size=len(x_recovered2), shuffle=False)
 for iteration, (x, y, z, q) in enumerate(train_loaderx2):
@@ -283,20 +287,20 @@ ERRORX = BB - yTrainX
 
 df_data = DiagnosisFeature(ERRORU,ERRORX)
 
-results = PCA(df_data,0.95,0.95)
+results = PCA(df_data,0.99,0.99)
 
-save_pca_results(f"./Code/", results)
-# (v_I, v, v_ratio, p_k, data_mean, data_std, T_95_limit, T_99_limit, SPE_95_limit, SPE_99_limit, P, k, P_t, X, data_nor) = results
-# t2_array = T2_array(df_data, data_mean, data_std, p_k, v_I)
-# plot_array(t2_array, title="Hotelling T² over time",
-#             figsize=(12, 4), save_path=None, show=True)
+save_pca_results(f"./models/", results)
+(v_I, v, v_ratio, p_k, data_mean, data_std, T_95_limit, T_99_limit, SPE_95_limit, SPE_99_limit, P, k, P_t, X, data_nor) = results
+t2_array = T2_array(df_data, data_mean, data_std, p_k, v_I)
+plot_array(t2_array, title="Hotelling T² over time",
+            figsize=(12, 4), save_path=None, show=True)
 
-# spe_array = SPE_array(df_data, data_mean, data_std, p_k)
-# plot_array(spe_array, title="Squared Prediction Error over time",       
-#             figsize=(12, 4), save_path=None, show=True)
+spe_array = SPE_array(df_data, data_mean, data_std, p_k)
+plot_array(spe_array, title="Squared Prediction Error over time",       
+            figsize=(12, 4), save_path=None, show=True)
 
 
-loads = load_pca_results(f"./Code/")
+loads = load_pca_results(f"./models/")
 (v_I, v, v_ratio, p_k, data_mean, data_std,
      T_95_limit, T_99_limit, SPE_95_limit, SPE_99_limit,
      P, k, P_t, X, data_nor) = loads
@@ -308,4 +312,16 @@ plot_array(t2_array, title="Hotelling T² over time", x_label="Time", y_label="T
 spe_array = SPE_array(data_in, data_mean, data_std, p_k)
 plot_array(spe_array, title="Squared Prediction Error (SPE) over time",x_label="Time", y_label="SPE",
             figsize=(12, 4), save_path=None, show=True)
+
+
+psi_array = spe_array / SPE_99_limit + t2_array / T_99_limit
+plot_array(psi_array, title="Comprehensive Index ",x_label="Time", y_label="CI",
+            figsize=(12, 4), save_path=None, show=True)
+
+Pi = (p_k @ v_I @ p_k.T / SPE_99_limit) + ((np.eye(p_k.shape[0]) - p_k @ p_k.T) / T_99_limit)
+M = np.dot(X, Pi)
+tr_M = np.trace(M)
+tr_M2 = np.trace(np.dot(M, M))
+g = tr_M2 / tr_M
+h = (tr_M ** 2) / tr_M2
 print("Done")
