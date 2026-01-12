@@ -10,12 +10,11 @@ from Function_ import *
 from Class_ import *
 import math
 import math
-from create_dataset import series_to_supervised
 from sklearn import preprocessing
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from sklearn.datasets import load_boston
+# from sklearn.datasets import load_boston
 from sklearn import metrics
 from sklearn.model_selection import train_test_split
 from sklearn import preprocessing
@@ -64,8 +63,8 @@ for i in range(1):
         combined_tensorx = pickle.load(file)
 
     dim_x = 2
-    dim_y = 110
-    dim_z = 110
+    dim_y = 110 
+    dim_z = 110 
     dim_q = 3
 
     # Use indexing to separate

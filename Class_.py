@@ -1,9 +1,8 @@
-from create_dataset import series_to_supervised
 from sklearn import preprocessing
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from sklearn.datasets import load_boston
+# from sklearn.datasets import load_boston
 from sklearn import metrics
 from sklearn.model_selection import train_test_split
 from sklearn import preprocessing
@@ -14,7 +13,7 @@ import torch.nn.functional as F
 from torch import nn
 from torchvision import transforms as tfs
 
-class MyDataset(torch.utils.data.Dataset):
+class MyDataset(Dataset):
     def __init__(self, data, target):
         self.data = data
         self.target = target
@@ -38,7 +37,7 @@ class LSTM(nn.Module):
             batch_first=True,  # input & output will has batch size as 1s dimension. e.g. (batch, time_step, input_size)
             bidirectional=True
         )
-        self.out = nn.Linear(36, 2)
+        self.out = nn.Linear(36, 2) # Bi-directional LSTM 이기 때문에, 최종 추론에는 순방향 18 hidden node 그리고 역방향 18 hidden node 가중치를 모두 포함.
     def forward(self, x):
         r_out, (hidden_state1, hidden_state2) = self.lstm(x, None) 
         outs = []  
