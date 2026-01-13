@@ -27,6 +27,7 @@ from torchvision import transforms as tfs
 import scipy.stats as stats
 import seaborn as sns
 import pickle
+import argparse
 
 device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
@@ -35,12 +36,29 @@ print(torch.cuda.device_count())
 warnings.filterwarnings('ignore')
 # VIN_data = pd.read_excel(r'./data/Name_list.xls')
 
+parser = argparse.ArgumentParser(description="Run diagnostics plotting with CLI options")
+parser.add_argument("--battery-type", choices=["QAS","DTI"], default="QAS", help="배터리 유형 선택 (DTI fault index range = [77~79], QAS fault index range = [335~392])")
+parser.add_argument("--vehicle-id", type=int, default=335, help="기본 차량 ID")
+parser.add_argument("--vehicle-ids", type=str, default=None, help="쉼표로 구분된 ID 목록 예: 335,336")
+parser.add_argument("--models-dir", type=str, default="./models")
+parser.add_argument("--results-dir", type=str, default="./results")
+parser.add_argument("--x-start", type=int, default=20)
+parser.add_argument("--x-tick-step", type=int, default=3000)
+parser.add_argument("--sigma-levels", type=str, default="3,4.5,6")
+args = parser.parse_args()
+
+def _parse_ids(ids_str, fallback):
+    if ids_str is None:
+        return [fallback]
+    return [int(s.strip()) for s in ids_str.split(',') if s.strip()]
+
+vehicle_ids = _parse_ids(args.vehicle_ids, args.vehicle_id)
+
 
 # DTI fault index range = [77~79]
 # QAS fault index range = [335~392]
-# for i in range(1):
-for i in [335]:
-    BATTERY_TYPE = 'QAS' # 'DTI' or 'QAS'
+for i in vehicle_ids:
+    BATTERY_TYPE = args.battery_type # 'DTI' or 'QAS'
     VEHICLE_ID = f'{i}'
     path = f'./data/{BATTERY_TYPE}/{VEHICLE_ID}/'
     # vin = VIN_data.iloc[i, 0]
@@ -57,10 +75,10 @@ for i in [335]:
     netx_loaded = CombinedAE(input_size=2, encode2_input_size=4, output_size=110, activation_fn=torch.sigmoid,
                              use_dx_in_forward=True).to(device)
 
-    net_state_dict = torch.load('./models/net.pth')
+    net_state_dict = torch.load(os.path.join(args.models_dir, 'net.pth'))
     net_loaded.load_state_dict(net_state_dict)
 
-    netx_state_dict = torch.load('./models/netx.pth')
+    netx_state_dict = torch.load(os.path.join(args.models_dir, 'netx.pth'))
     netx_loaded.load_state_dict(netx_state_dict)
     
     combined_tensor = safe_load(f'./data/{BATTERY_TYPE}/{VEHICLE_ID}/vin_2.pkl')
@@ -102,14 +120,14 @@ for i in [335]:
 
     df_data = DiagnosisFeature(ERRORU,ERRORX)
     
-    loads = load_pca_results(f"./models/")
+    loads = load_pca_results(args.models_dir)
     (v_I, v, v_ratio, p_k, data_mean, data_std,
         T_95_limit, T_99_limit, SPE_95_limit, SPE_99_limit,
         P, k, P_t, X, data_nor) = loads
     
-    sigma_level = [3, 4.5, 6]
+    sigma_levels = [float(s.strip()) for s in args.sigma_levels.split(',') if s.strip()]
     pi, g, h = chi_square_dist_components(p_k, v_I, X, SPE_95_limit, T_95_limit)
-    thresholds = diagnosis_thresholds(g, h, sigma_level=sigma_level, show_plot=False)
+    thresholds = diagnosis_thresholds(g, h, sigma_levels=sigma_levels, show_plot=False)
     
     ## =================== Training Diagnosis =================== ##
     training_data = (data_nor * data_std) + data_mean
@@ -122,15 +140,15 @@ for i in [335]:
                              spe_array_train,
                              CI_array_train,
                              thresholds,
-                             sigma_labels=sigma_level,
-                             title="Training Diagnostics",
+                             sigma_levels=sigma_levels,
+                             title="Training",
                              x_label="Time",
                              y_labels=("T²", "SPE", "CI"),
                              figsize=(12, 10),
                              save_path="./results/training_diagnostics.png",
                              show=False,
-                             x_start=20,
-                             x_tick_step=3000)
+                             x_start=args.x_start,
+                             x_tick_step=args.x_tick_step)
     
     ## =================== Testing Diagnosis =================== ##
     t2_array = T2_array(df_data, data_mean, data_std, p_k, v_I)
@@ -141,15 +159,15 @@ for i in [335]:
                              spe_array,
                              CI_array,
                              thresholds,
-                             sigma_labels=sigma_level,
-                             title="Testing Diagnostics",
+                             sigma_levels=sigma_levels,
+                             title="Test",
                              x_label="Time",
                              y_labels=("T²", "SPE", "CI"),
                              figsize=(12, 10),
                              save_path="./results/testing_diagnostics.png",
                              show=False,
-                             x_start=20,
-                             x_tick_step=3000)
+                             x_start=args.x_start,
+                             x_tick_step=args.x_tick_step)
     
     print("Done")    
 

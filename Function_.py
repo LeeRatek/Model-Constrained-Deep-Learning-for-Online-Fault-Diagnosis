@@ -6,7 +6,7 @@ import pandas as pd
 import matplotlib.ticker as mtick
 import os
 import json
-import warnings
+# import warnings
 from pyparsing import Any
 import torch.nn as nn
 import torch
@@ -16,6 +16,7 @@ from scipy.stats import norm
 from pandas import DataFrame
 from pandas import concat
 import io
+from datetime import datetime
 
 # Function to safely load a PyTorch model (serialized by GPU) or any pickled object to CPU
 def _to_cpu(obj: Any):
@@ -301,7 +302,7 @@ def chi_square_dist_components(p_k, v_I, X, SPE_limit, T_limit):
     h = (tr_M ** 2) / tr_M2
     return Pi, g, h
 
-def diagnosis_thresholds(g, h, sigma_level=[2, 3, 4.5, 6], show_plot=True):
+def diagnosis_thresholds(g, h, sigma_levels=[2, 3, 4.5, 6], show_plot=True):
     mean = h
     sigma = np.sqrt(2 * h)
     
@@ -309,7 +310,7 @@ def diagnosis_thresholds(g, h, sigma_level=[2, 3, 4.5, 6], show_plot=True):
     pdf = chi2.pdf(x, h)
     
     thresholds = list()
-    for k in sigma_level:
+    for k in sigma_levels:
         thresholds.append(g * (mean + k * sigma))
     
     # -----------------------------
@@ -321,9 +322,9 @@ def diagnosis_thresholds(g, h, sigma_level=[2, 3, 4.5, 6], show_plot=True):
     print(f'{"k(SD)":>6} {"Threshold":>12} {"Area":>12}')
     print('-' * 50)
 
-    for i in range(len(sigma_level)):
+    for i in range(len(sigma_levels)):
         area = chi2.cdf(thresholds[i], h)
-        print(f'{sigma_level[i]:6.1f} {thresholds[i]:12.4f} {area:12.6f}')
+        print(f'{sigma_levels[i]:6.1f} {thresholds[i]:12.4f} {area:12.6f}')
     
     if not show_plot:
         return thresholds
@@ -339,9 +340,9 @@ def diagnosis_thresholds(g, h, sigma_level=[2, 3, 4.5, 6], show_plot=True):
     plt.axvline(mean, color='k', linewidth=2, label='Mean')
 
     # Plot SD ranges
-    for i in range(len(sigma_level)):
+    for i in range(len(sigma_levels)):
         plt.axvline(thresholds[i], linestyle='--', linewidth=1.2)
-        plt.text(thresholds[i], max(pdf) * 0.9, f'{sigma_level[i]} SD',
+        plt.text(thresholds[i], max(pdf) * 0.9, f'{sigma_levels[i]} SD',
                 rotation=90, verticalalignment='bottom')
 
     # Labels and title
@@ -853,7 +854,7 @@ def plot_diagnostics_triplet(t2_array,
                              spe_array,
                              CI_array,
                              thresholds:list=None,
-                             sigma_labels=None,
+                             sigma_levels=None,
                              title=None,
                              x_label="Time",
                              y_labels=("T²", "SPE", "CI"),
@@ -876,7 +877,7 @@ def plot_diagnostics_triplet(t2_array,
         spe_array: (N,) 형태의 1D 배열
         CI_array: (N,) 형태의 1D 배열
         thresholds: 수평 임계선 값 리스트/튜플(예: diagnosis_thresholds 결과)
-        sigma_labels: 각 임계선 라벨 리스트(예: ["3σ", "4.5σ", "6σ"]). None이면 자동 라벨.
+        sigma_levels: 각 임계선 라벨 리스트(예: ["3σ", "4.5σ", "6σ"]). None이면 자동 라벨.
         title: 전체 Figure 타이틀
         x_label: 공통 x축 라벨(기본: "Time")
         y_labels: 각 서브플롯 y축 라벨 튜플(기본: ("T²", "SPE", "CI"))
@@ -939,8 +940,7 @@ def plot_diagnostics_triplet(t2_array,
         thr = list(thresholds)
         # 최대 3개까지만 표시(요청사항 대응)
         thr = thr[:3]
-        if sigma_labels is None:
-            sigma_labels = [f"Threshold {i+1}" for i in range(len(thr))]
+        sigma_labels = [f"Threshold {i+1} ({sigma_levels[i]:.1f}\u03C3)" for i in range(len(thr))]
         for val, lab, col in zip(thr, sigma_labels, threshold_color):
             axes[2].axhline(val, color=col, linestyle='--', linewidth=1.2, label=lab)
         axes[2].legend(loc='best', fontsize=8)
@@ -960,3 +960,21 @@ def plot_diagnostics_triplet(t2_array,
     else:
         plt.close(fig)
 
+def make_model_path_based_timestamp(base="models", make:bool=False, prefix:str=None, tz="Asia/Seoul"):
+    # tzinfo 설정: zoneinfo 우선, 실패 시 pytz로 폴백
+    try:
+        from zoneinfo import ZoneInfo  # Python 3.9+
+        tzinfo = ZoneInfo(tz)
+    except Exception:
+        import pytz  # pip install pytz 필요
+        tzinfo = pytz.timezone(tz)
+
+    now = datetime.now(tzinfo)
+    timestamp = now.strftime("26%m%d_%H%M%S")
+    if prefix is None:
+        path = os.path.join(base, timestamp)
+    else:
+        path = os.path.join(base, f"{prefix}_{timestamp}")
+    if make:
+        os.makedirs(path, exist_ok=True)
+    return path
