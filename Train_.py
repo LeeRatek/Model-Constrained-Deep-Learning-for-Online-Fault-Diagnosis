@@ -49,9 +49,20 @@ warnings.filterwarnings('ignore')
 PLOT_MODE = False
 LSTM_TRAINING = False
 LSTM_LOAD = False if not LSTM_TRAINING else True
-# for i in range(392 + 1):
-for i in [0]:
-    BATTERY_TYPE = 'QAS' # 'DTI' or 'QAS'
+FIRST_LOAD = True
+BATTERY_TYPE = 'QAS' # 'DTI' or 'QAS'
+
+dim_x = 2 # [estimated pack voltage 1, estimated pack volatage 2]
+dim_y = 110 if BATTERY_TYPE == 'QAS' else 85 # DTI 일경우 85 이고 QAS일 경우 110인듯 [각 셀의 voltage]
+dim_z = 110 if BATTERY_TYPE == 'QAS' else 85 # DTI 일경우 85 이고 QAS일 경우 110인듯 [각 셀의 estimated voltage diviation]
+dim_q = 3 # [Board Temperature, Board-end SOC, Current]
+
+dim_x2 = 2 # [estimated pack SOC 1, estimated pack SOC 2]
+dim_y2 = 110 if BATTERY_TYPE == 'QAS' else 85 # DTI 일경우 85 이고 QAS일 경우 110인듯 [각 셀의 SOC]
+dim_z2 = 110 if BATTERY_TYPE == 'QAS' else 85 # DTI 일경우 85 이고 QAS일 경우 110인듯 [각 셀의 estimated SOC diviation]
+dim_q2= 4 # [Board Temperature, Board-end SOC, Velocity, Current]
+
+for i in range(10):
     VEHICLE_ID = f'{i}'
     PATH = f"./data/data_analysis/{BATTERY_TYPE}-{VEHICLE_ID}"
     # PATH = f"./temp/{BATTERY_TYPE}-{VEHICLE_ID}"
@@ -103,40 +114,39 @@ for i in [0]:
                     loss_train_100.append(loss.cpu().detach().numpy())
 
     #----------------------------------------Data loading for MC-AE (customized) ------------------------------
-    combined_tensor = safe_load(f'./data/{BATTERY_TYPE}/{VEHICLE_ID}/vin_2.pkl')
-    combined_tensorx = safe_load(f'./data/{BATTERY_TYPE}/{VEHICLE_ID}/vin_3.pkl')
-
-    #----------------------------------------Training for MC-AE--------------------------
-    dim_x = 2 # [estimated pack voltage 1, estimated pack volatage 2]
-    dim_y = 110 if BATTERY_TYPE == 'QAS' else 85 # DTI 일경우 85 이고 QAS일 경우 110인듯 [각 셀의 voltage]
-    dim_z = 110 if BATTERY_TYPE == 'QAS' else 85 # DTI 일경우 85 이고 QAS일 경우 110인듯 [각 셀의 estimated voltage diviation]
-    dim_q = 3 # [Board Temperature, Board-end SOC, Current]
-
-    x_recovered = combined_tensor[:, :dim_x] # 0~1
-    y_recovered = combined_tensor[:, dim_x:dim_x + dim_y] # 2~111
-    z_recovered = combined_tensor[:, dim_x + dim_y: dim_x + dim_y + dim_z] # 112~221
-    q_recovered = combined_tensor[:, dim_x + dim_y + dim_z:] # 222~
-
-    dim_x2 = 2 # [estimated pack SOC 1, estimated pack SOC 2]
-    dim_y2 = 110 if BATTERY_TYPE == 'QAS' else 85 # DTI 일경우 85 이고 QAS일 경우 110인듯 [각 셀의 SOC]
-    dim_z2 = 110 if BATTERY_TYPE == 'QAS' else 85 # DTI 일경우 85 이고 QAS일 경우 110인듯 [각 셀의 estimated SOC diviation]
-    dim_q2= 4 # [Board Temperature, Board-end SOC, Velocity, Current]
-
-    x_recovered2 = combined_tensorx[:, :dim_x2]
-    y_recovered2 = combined_tensorx[:, dim_x2:dim_x2 + dim_y2]
-    z_recovered2 = combined_tensorx[:, dim_x2 + dim_y2: dim_x2 + dim_y2 + dim_z2]
-    q_recovered2 = combined_tensorx[:, dim_x2 + dim_y2 + dim_z2:]
-
-    #----------------------------------------Plotting the input data--------------------------
+    tensor = safe_load(f'./data/{BATTERY_TYPE}/{VEHICLE_ID}/vin_2.pkl')
+    tensorx = safe_load(f'./data/{BATTERY_TYPE}/{VEHICLE_ID}/vin_3.pkl')
+        
     if PLOT_MODE:
         plot_testX_timeseries(test_X, feature_names="Data for LSTM", title="vin1", figsize=(12, 6), save_path=f'{PATH}/vin1', show=False, seperate=True, start_idx=vin1_start)
-        plot_testX_timeseries(combined_tensor, feature_names="Data for voltage estimation", title="vin2", figsize=(12, 6), save_path=f'{PATH}/vin2', show=False, seperate=True, start_idx=vin2_start, _range=[0,dim_x+2])
-        plot_testX_timeseries(combined_tensor, feature_names="Data for voltage estimation", title="vin2", figsize=(12, 6), save_path=f'{PATH}/vin2', show=False, seperate=True, start_idx=vin2_start, _range=[dim_x + dim_y,dim_x + dim_y + 2])
-        plot_testX_timeseries(combined_tensor, feature_names="Data for voltage estimation", title="vin2", figsize=(12, 6), save_path=f'{PATH}/vin2', show=False, seperate=True, start_idx=vin2_start, _range=[dim_x + dim_y + dim_z,dim_x + dim_y + dim_z + dim_q - 1])
+        plot_testX_timeseries(tensor, feature_names="Data for voltage estimation", title="vin2", figsize=(12, 6), save_path=f'{PATH}/vin2', show=False, seperate=True, start_idx=vin2_start, _range=[0,dim_x+2])
+        plot_testX_timeseries(tensor, feature_names="Data for voltage estimation", title="vin2", figsize=(12, 6), save_path=f'{PATH}/vin2', show=False, seperate=True, start_idx=vin2_start, _range=[dim_x + dim_y,dim_x + dim_y + 2])
+        plot_testX_timeseries(tensor, feature_names="Data for voltage estimation", title="vin2", figsize=(12, 6), save_path=f'{PATH}/vin2', show=False, seperate=True, start_idx=vin2_start, _range=[dim_x + dim_y + dim_z,dim_x + dim_y + dim_z + dim_q - 1])
         # plot_testX_timeseries(combined_tensor, feature_names="Data for voltage estimation", title="vin2", figsize=(12, 6), save_path=f'{PATH}/vin2', show=False, seperate=True, start_idx=1000, _range=[0,combined_tensor.shape[-1]])
-        plot_testX_timeseries(combined_tensorx, feature_names="Data for SOC estimation", title="vin3", figsize=(12, 6), save_path=f'{PATH}/vin3', show=False, seperate=True, start_idx=vin3_start, _range=[0,dim_x2+2])
-        plot_testX_timeseries(combined_tensorx, feature_names="Data for SOC estimation", title="vin3", figsize=(12, 6), save_path=f'{PATH}/vin3', show=False, seperate=True, start_idx=vin3_start, _range=[dim_x2 + dim_y2,dim_x2 + dim_y2 + 2])
-        plot_testX_timeseries(combined_tensorx, feature_names="Data for SOC estimation", title="vin3", figsize=(12, 6), save_path=f'{PATH}/vin3', show=False, seperate=True, start_idx=vin3_start, _range=[dim_x2 + dim_y2 + dim_z2,dim_x2 + dim_y2 + dim_z2 + dim_q2 - 1])
+        plot_testX_timeseries(tensorx, feature_names="Data for SOC estimation", title="vin3", figsize=(12, 6), save_path=f'{PATH}/vin3', show=False, seperate=True, start_idx=vin3_start, _range=[0,dim_x2+2])
+        plot_testX_timeseries(tensorx, feature_names="Data for SOC estimation", title="vin3", figsize=(12, 6), save_path=f'{PATH}/vin3', show=False, seperate=True, start_idx=vin3_start, _range=[dim_x2 + dim_y2,dim_x2 + dim_y2 + 2])
+        plot_testX_timeseries(tensorx, feature_names="Data for SOC estimation", title="vin3", figsize=(12, 6), save_path=f'{PATH}/vin3', show=False, seperate=True, start_idx=vin3_start, _range=[dim_x2 + dim_y2 + dim_z2,dim_x2 + dim_y2 + dim_z2 + dim_q2 - 1])
+    else:
+        if FIRST_LOAD:
+            FIRST_LOAD = False
+            combined_tensor = tensor
+            combined_tensorx = tensorx
+        else:
+            combined_tensor = torch.cat((combined_tensor, tensor), dim=0)
+            combined_tensorx = torch.cat((combined_tensorx, tensorx), dim=0)
+
+print("Amount of data used for training:", combined_tensor.shape[0])
+
+#----------------------------------------Training for MC-AE--------------------------
+x_recovered = combined_tensor[:, :dim_x] # 0~1
+y_recovered = combined_tensor[:, dim_x:dim_x + dim_y] # 2~111
+z_recovered = combined_tensor[:, dim_x + dim_y: dim_x + dim_y + dim_z] # 112~221
+q_recovered = combined_tensor[:, dim_x + dim_y + dim_z:] # 222~
+
+x_recovered2 = combined_tensorx[:, :dim_x2]
+y_recovered2 = combined_tensorx[:, dim_x2:dim_x2 + dim_y2]
+z_recovered2 = combined_tensorx[:, dim_x2 + dim_y2: dim_x2 + dim_y2 + dim_z2]
+q_recovered2 = combined_tensorx[:, dim_x2 + dim_y2 + dim_z2:]
 
 if PLOT_MODE:
     exit()
