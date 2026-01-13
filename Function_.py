@@ -1,3 +1,4 @@
+import pickle
 import matplotlib.pyplot as plt
 import matplotlib as mpl
 import numpy as np
@@ -6,6 +7,7 @@ import matplotlib.ticker as mtick
 import os
 import json
 import warnings
+from pyparsing import Any
 import torch.nn as nn
 import torch
 from scipy import stats
@@ -13,6 +15,42 @@ from scipy.stats import chi2
 from scipy.stats import norm
 from pandas import DataFrame
 from pandas import concat
+import io
+
+# Function to safely load a PyTorch model (serialized by GPU) or any pickled object to CPU
+def _to_cpu(obj: Any):
+    if torch.is_tensor(obj):
+        print( "Its a tensor, moved to CPU")
+        return obj.detach().cpu()
+    if isinstance(obj, (list, tuple)):
+        print( "Its a list or tuple, moved to CPU")
+        return type(obj)(_to_cpu(x) for x in obj)
+    if isinstance(obj, dict):
+        print( "Its a dict, moved to CPU")
+        return {k: _to_cpu(v) for k, v in obj.items()}
+    return obj
+
+def safe_load(path: str):
+    try:
+        print( "Trying torch.load")
+        return _to_cpu(torch.load(path, map_location=torch.device('cpu'), weights_only=False))
+    except Exception:
+        print( "Trying pickle.load")
+        class CPUUnpickler(pickle.Unpickler):
+            def find_class(self, module, name):
+                if module == 'torch.storage' and name == '_load_from_bytes':
+                    return lambda b: torch.load(io.BytesIO(b), map_location=torch.device('cpu'), weights_only=False)
+                return super().find_class(module, name)
+        try:
+            print( "Trying CPUUnpickler")
+            with open(path, 'rb') as f:
+                obj = CPUUnpickler(f).load()
+            return _to_cpu(obj)
+        except Exception:
+            print( "Trying normal pickle.load")
+            with open(path, 'rb') as f:
+                obj = pickle.load(f)
+            return _to_cpu(obj)
 
 def calculate_volt_modepi(volt_all):
     """
@@ -253,6 +291,65 @@ def SPE(data_in, data_mean, data_std, p_k):
     Q_count = np.dot(np.dot((I - np.dot(p_k, p_k.T)), test_data_nor).T,
                      np.dot((I - np.dot(p_k, p_k.T)), test_data_nor))
     return Q_count # Squared prediction error
+
+def chi_square_dist_components(p_k, v_I, X, SPE_limit, T_limit):
+    Pi = (p_k @ v_I @ p_k.T / SPE_limit) + ((np.eye(p_k.shape[0]) - p_k @ p_k.T) / T_limit)
+    M = np.dot(X, Pi)
+    tr_M = np.trace(M)
+    tr_M2 = np.trace(np.dot(M, M))
+    g = tr_M2 / tr_M
+    h = (tr_M ** 2) / tr_M2
+    return Pi, g, h
+
+def diagnosis_thresholds(g, h, sigma_level=[2, 3, 4.5, 6], show_plot=True):
+    mean = h
+    sigma = np.sqrt(2 * h)
+    
+    x = np.linspace(0, 30, 10000)
+    pdf = chi2.pdf(x, h)
+    
+    thresholds = list()
+    for k in sigma_level:
+        thresholds.append(g * (mean + k * sigma))
+    
+    # -----------------------------
+    # Numerical output
+    # -----------------------------
+    print(f'Chi-square distribution (df = {h})')
+    print(f'Mean = {mean:.2f}, SD = {sigma:.2f}\n')
+
+    print(f'{"k(SD)":>6} {"Threshold":>12} {"Area":>12}')
+    print('-' * 50)
+
+    for i in range(len(sigma_level)):
+        area = chi2.cdf(thresholds[i], h)
+        print(f'{sigma_level[i]:6.1f} {thresholds[i]:12.4f} {area:12.6f}')
+    
+    if not show_plot:
+        return thresholds
+    
+    # -----------------------------
+    # Plot PDF
+    # -----------------------------    
+    plt.figure()
+    plt.plot(g * x, pdf, linewidth=2)
+    plt.grid(True)
+
+    # Plot mean
+    plt.axvline(mean, color='k', linewidth=2, label='Mean')
+
+    # Plot SD ranges
+    for i in range(len(sigma_level)):
+        plt.axvline(thresholds[i], linestyle='--', linewidth=1.2)
+        plt.text(thresholds[i], max(pdf) * 0.9, f'{sigma_level[i]} SD',
+                rotation=90, verticalalignment='bottom')
+
+    # Labels and title
+    plt.xlabel('x')
+    plt.ylabel('Probability Density')
+    plt.title(f'Chi-square Distribution (df = {h}) with SD Ranges')
+    plt.legend()
+    plt.show()
 
 def save_pca_results(output_dir, pca_outputs):
     """
@@ -751,3 +848,115 @@ def plot_timeseries(test_X, feature_names=None, title=None, figsize=(12, 6), sav
             plt.show()
         else:
             plt.close(fig)
+
+def plot_diagnostics_triplet(t2_array,
+                             spe_array,
+                             CI_array,
+                             thresholds:list=None,
+                             sigma_labels=None,
+                             title=None,
+                             x_label="Time",
+                             y_labels=("T²", "SPE", "CI"),
+                             figsize=(12, 10),
+                             save_path=None,
+                             show=True,
+                             x_start=None,
+                             x_tick_step=1000):
+    """
+    세 개의 진단 시계열을 하나의 Figure에 3x1 서브플롯으로 그립니다.
+
+    - 상단: T²(Hotelling)
+    - 중단: SPE
+    - 하단: CI(Comprehensive Index; CI)
+
+    CI 서브플롯에만 `thresholds`로 전달된 값들을 수평선으로 표시합니다.
+
+    Args:
+        t2_array: (N,) 형태의 1D 배열
+        spe_array: (N,) 형태의 1D 배열
+        CI_array: (N,) 형태의 1D 배열
+        thresholds: 수평 임계선 값 리스트/튜플(예: diagnosis_thresholds 결과)
+        sigma_labels: 각 임계선 라벨 리스트(예: ["3σ", "4.5σ", "6σ"]). None이면 자동 라벨.
+        title: 전체 Figure 타이틀
+        x_label: 공통 x축 라벨(기본: "Time")
+        y_labels: 각 서브플롯 y축 라벨 튜플(기본: ("T²", "SPE", "CI"))
+        figsize: Figure 크기
+        save_path: 저장 경로. None이면 저장하지 않음
+        show: True면 화면 표시, False면 닫음
+    """
+
+    def _to_1d(a):
+        if isinstance(a, pd.Series):
+            return a.values
+        return np.asarray(a).reshape(-1)
+
+    t2 = _to_1d(t2_array[x_start:] if x_start is not None else t2_array)
+    spe = _to_1d(spe_array[x_start:] if x_start is not None else spe_array)
+    CI = _to_1d(CI_array[x_start:] if x_start is not None else CI_array)
+
+    n = len(CI)
+    # x_start가 지정되면 해당 값부터 시작하도록 x축 생성
+    if x_start is not None:
+        x = np.arange(n) + x_start
+    else:
+        x = np.arange(n)
+
+    fig, axes = plt.subplots(nrows=3, ncols=1, figsize=figsize, sharex=True)
+
+    # Top: T²
+    axes[0].plot(x, t2, color='tab:blue', lw=1.4)
+    axes[0].set_ylabel(y_labels[0])
+    axes[0].set_title("Hostelling's T² Statistic")
+    axes[0].grid(True, alpha=0.3)
+    # x축 범위를 x_start부터 최대값까지 고정
+    axes[0].set_xlim(x[0], x[-1])
+
+    # Middle: SPE
+    axes[1].plot(x, spe, color='tab:blue', lw=1.4)
+    axes[1].set_ylabel(y_labels[1])
+    axes[1].set_title("Squared Prediction Error (SPE)")
+    axes[1].grid(True, alpha=0.3)
+    axes[1].set_xlim(x[0], x[-1])
+
+    # Bottom: CI (CI) + thresholds
+    axes[2].plot(x, CI, color='tab:blue', lw=1.4, label='CI')
+    axes[2].set_ylabel(y_labels[2])
+    axes[2].set_xlabel(x_label)
+    axes[2].set_title("Comprehensive Index (CI)")
+    axes[2].grid(True, alpha=0.3)
+    axes[2].set_xlim(x[0], x[-1])
+
+    # 시작 눈금을 포함시키기 위해 눈금 간격을 고정할 수 있는 옵션
+    if x_tick_step is not None:
+        ticks = np.floor(np.arange(x[0], x[-1] + 1, x_tick_step)/x_tick_step)*x_tick_step
+        ticks[0] = x_start if x_start is not None else 0
+        ticks = np.append(ticks, x[-1]) if ticks[-1] != x[-1] else ticks
+        for ax in axes:
+            ax.xaxis.set_major_locator(mtick.FixedLocator(ticks))
+
+    threshold_color = ["tab:red", "tab:purple", "tab:green"]
+    if thresholds is not None:
+        thr = list(thresholds)
+        # 최대 3개까지만 표시(요청사항 대응)
+        thr = thr[:3]
+        if sigma_labels is None:
+            sigma_labels = [f"Threshold {i+1}" for i in range(len(thr))]
+        for val, lab, col in zip(thr, sigma_labels, threshold_color):
+            axes[2].axhline(val, color=col, linestyle='--', linewidth=1.2, label=lab)
+        axes[2].legend(loc='best', fontsize=8)
+
+    if title:
+        fig.suptitle(title, y=0.98)
+    fig.tight_layout()
+
+    if save_path is not None:
+        dir_ = os.path.dirname(save_path)
+        if dir_:
+            os.makedirs(dir_, exist_ok=True)
+        fig.savefig(save_path, dpi=150)
+
+    if show:
+        plt.show()
+    else:
+        plt.close(fig)
+
