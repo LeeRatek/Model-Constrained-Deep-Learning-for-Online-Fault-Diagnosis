@@ -27,47 +27,23 @@ warnings.filterwarnings('ignore')
 
 parser = argparse.ArgumentParser(description="Run MC-AE training with CLI options")
 parser.add_argument("--battery-type", choices=["QAS","DTI"], default="QAS")
-parser.add_argument("--vehicle-start", type=int, default=0, help="배터리 유형 선택 (DTI fault index range = [77~79], QAS fault index range = [335~392])")
-parser.add_argument("--vehicle-end", type=int, default=19, help="배터리 유형 선택 (DTI fault index range = [77~79], QAS fault index range = [335~392])")
-parser.add_argument("--plot-mode", action="store_true")
+parser.add_argument("--vehicle-start", type=int, default=0, help="Filtered normal vehicle ID 시작 인덱스")
+parser.add_argument("--vehicle-end", type=int, default=0, help="Filtered normal vehicle ID 끝 인덱스")
 parser.add_argument("--lstm-training", action="store_true")
 parser.add_argument("--lstm-load", action="store_true")
 parser.add_argument("--models-dir", type=str, default="./models")
-parser.add_argument("--vin1-start", type=int, default=1000)
-parser.add_argument("--vin2-start", type=int, default=1000)
-parser.add_argument("--vin3-start", type=int, default=1000)
-parser.add_argument("--ae-epochs", type=int, default=3000)
+parser.add_argument("--vin1-start", type=int, default=0)
+parser.add_argument("--vin2-start", type=int, default=0)
+parser.add_argument("--vin3-start", type=int, default=0)
+parser.add_argument("--ae-epochs", type=int, default=300)
 parser.add_argument("--ae-lr", type=float, default=5e-4)
-parser.add_argument("--ae-batchsize", type=int, default=200)
+parser.add_argument("--ae-batchsize", type=int, default=100)
 parser.add_argument("--lstm-epochs", type=int, default=300)
 parser.add_argument("--lstm-lr", type=float, default=5e-4)
 parser.add_argument("--lstm-batchsize", type=int, default=100)
 args = parser.parse_args()
 
-#----------------------------------------data loading------------------------------
-# VIN_data = pd.read_excel('./data/Name_list.xls')  # Changed path and removed Chinese characters
-# print(os.getcwd())
-# VIN_data = pd.read_excel('./data/Fig3abfandFigS13.xlsx')  # Changed path and removed Chinese characters
-# vin = VIN_data.iloc[1, 0]
-# print(vin)
 
-# lstm = torch.load('./models/lstm.pth').to(device)  # Changed path
-# with open('./data/test/' + vin + '/vin_1.pkl', 'rb') as file:  # Changed path
-#     test_X = pickle.load(file)
-# test
-
-# DTI는 79까지, QAS는 392까지
-# for i in range(79 + 1):
-#     vin = f'VIN_{i}'
-#     print(vin)
-#     test_X = safe_load(f'./data/DTI/{i}/vin_1.pkl')
-#     if (sum(test_X[:,:,2])[0] != 0):
-#         print(f"Skipping {vin} due to zero current data.")
-#         plot_testX_timeseries(test_X, feature_names="combined_tensor", title="combined_tensor", figsize=(12, 6), save_path=f'./', show=True, seperate=True, start_idx=0,_range=[2,2])
-#         continue
-
-
-PLOT_MODE = args.plot_mode
 LSTM_TRAINING = args.lstm_training
 LSTM_LOAD = args.lstm_load if args.lstm_training else args.lstm_load
 FIRST_LOAD = True
@@ -84,11 +60,15 @@ dim_z2 = 110 if BATTERY_TYPE == 'QAS' else 85 # DTI 일경우 85 이고 QAS일 �
 dim_q2= 4 # [Board Temperature, Board-end SOC, Velocity, Current]
 
 # 모델 저장 경로 설정
-MODEL_PATH = args.models_dir
 
-for i in range(args.vehicle_start, args.vehicle_end + 1):
+model_path = make_model_path_based_timestamp(base=args.models_dir)
+
+start = time.perf_counter()
+
+normal_list = np.load(f"./{BATTERY_TYPE}_filtered_vehicle_ids_normal.npy").astype(np.int64).tolist()
+for i in normal_list[args.vehicle_start:args.vehicle_end+1]:
     VEHICLE_ID = f'{i}'
-    PATH = f"./data/data_analysis/{BATTERY_TYPE}-{VEHICLE_ID}"   
+    PATH = f"./data/data_analysis_start_at_0/{BATTERY_TYPE}-{VEHICLE_ID}"   
 
     #----------------------------------------Data loading for LSTM (customized) ------------------------------
     # print(os.getcwd())
@@ -115,7 +95,6 @@ for i in range(args.vehicle_start, args.vehicle_end + 1):
         loss_func = nn.MSELoss()
 
         # LSTM Training
-        i = 0
         hidden_state = None
         loss_train_100 = []
         for epoch in range(EPOCH):
@@ -132,27 +111,21 @@ for i in range(args.vehicle_start, args.vehicle_end + 1):
     #----------------------------------------Data loading for MC-AE (customized) ------------------------------
     tensor = safe_load(f'./data/{BATTERY_TYPE}/{VEHICLE_ID}/vin_2.pkl')
     tensorx = safe_load(f'./data/{BATTERY_TYPE}/{VEHICLE_ID}/vin_3.pkl')
-        
-    if PLOT_MODE:
-        plot_testX_timeseries(test_X, feature_names="Data for LSTM", title="vin1", figsize=(12, 6), save_path=f'{PATH}/vin1', show=False, seperate=True, start_idx=args.vin1_start)
-        plot_testX_timeseries(tensor, feature_names="Data for voltage estimation", title="vin2", figsize=(12, 6), save_path=f'{PATH}/vin2', show=False, seperate=True, start_idx=args.vin2_start, _range=[0,dim_x+2])
-        plot_testX_timeseries(tensor, feature_names="Data for voltage estimation", title="vin2", figsize=(12, 6), save_path=f'{PATH}/vin2', show=False, seperate=True, start_idx=args.vin2_start, _range=[dim_x + dim_y,dim_x + dim_y + 2])
-        plot_testX_timeseries(tensor, feature_names="Data for voltage estimation", title="vin2", figsize=(12, 6), save_path=f'{PATH}/vin2', show=False, seperate=True, start_idx=args.vin2_start, _range=[dim_x + dim_y + dim_z,dim_x + dim_y + dim_z + dim_q - 1])
-        # plot_testX_timeseries(combined_tensor, feature_names="Data for voltage estimation", title="vin2", figsize=(12, 6), save_path=f'{PATH}/vin2', show=False, seperate=True, start_idx=1000, _range=[0,combined_tensor.shape[-1]])
-        plot_testX_timeseries(tensorx, feature_names="Data for SOC estimation", title="vin3", figsize=(12, 6), save_path=f'{PATH}/vin3', show=False, seperate=True, start_idx=args.vin3_start, _range=[0,dim_x2+2])
-        plot_testX_timeseries(tensorx, feature_names="Data for SOC estimation", title="vin3", figsize=(12, 6), save_path=f'{PATH}/vin3', show=False, seperate=True, start_idx=args.vin3_start, _range=[dim_x2 + dim_y2,dim_x2 + dim_y2 + 2])
-        plot_testX_timeseries(tensorx, feature_names="Data for SOC estimation", title="vin3", figsize=(12, 6), save_path=f'{PATH}/vin3', show=False, seperate=True, start_idx=args.vin3_start, _range=[dim_x2 + dim_y2 + dim_z2,dim_x2 + dim_y2 + dim_z2 + dim_q2 - 1])
+    
+    #----------------------------------------Preprocessing ------------------------------#
+    start_idx = get_start_index(tensor)
+    tensor = normalize_columns_0_to_1(tensor[start_idx:, :])
+    tensorx = normalize_columns_0_to_1(tensorx[start_idx:, :])
+    
+    if FIRST_LOAD:
+        FIRST_LOAD = False
+        combined_tensor = tensor
+        combined_tensorx = tensorx
     else:
-        if FIRST_LOAD:
-            FIRST_LOAD = False
-            combined_tensor = tensor
-            combined_tensorx = tensorx
-        else:
-            combined_tensor = torch.cat((combined_tensor, tensor), dim=0)
-            combined_tensorx = torch.cat((combined_tensorx, tensorx), dim=0)
+        combined_tensor = torch.cat((combined_tensor, tensor), dim=0)
+        combined_tensorx = torch.cat((combined_tensorx, tensorx), dim=0)
 
-if PLOT_MODE:
-    exit()
+
 
 print("Amount of data used for training:", combined_tensor.shape[0])
 
@@ -184,8 +157,8 @@ train_loader_u = DataLoader(Dataset(x_recovered, y_recovered, z_recovered, q_rec
                       shuffle=False)
 
 # Instantiate the networks
-net = CombinedAE(input_size=2, encode2_input_size=3, output_size=110, activation_fn=custom_activation, use_dx_in_forward=True).to(device)
-netx = CombinedAE(input_size=2, encode2_input_size=4, output_size=110, activation_fn=torch.sigmoid, use_dx_in_forward=True).to(device)
+net = CombinedAE(input_size=2, encode2_input_size=3, output_size=dim_y, activation_fn=custom_activation, use_dx_in_forward=True).to(device)
+netx = CombinedAE(input_size=2, encode2_input_size=4, output_size=dim_y, activation_fn=torch.sigmoid, use_dx_in_forward=True).to(device)
 
 optimizer = torch.optim.Adam(net.parameters(), lr=AE_LR)
 loss_f = nn.MSELoss()
@@ -208,7 +181,7 @@ for epoch in range(AE_EPOCH):
     avg_loss = total_loss / num_batches
     print('Epoch: {:2d} | Average Loss: {:.4f}'.format(epoch, avg_loss))
     
-save_net_state(model=net, models_dir=f"{MODEL_PATH}/", filename='net.pth')
+save_net_state(model=net, models_dir=f"{model_path}/", filename='net.pth')
 train_loader2 = DataLoader(Dataset(x_recovered, y_recovered, z_recovered, q_recovered), batch_size=len(x_recovered),
                         shuffle=False)
 for iteration, (x, y, z, q) in enumerate(train_loader2):
@@ -245,7 +218,7 @@ for epoch in range(AE_EPOCH):
     avg_loss = total_loss / num_batches
     avg_loss_list_x.append(avg_loss)
     print('Epoch: {:2d} | Average Loss: {:.4f}'.format(epoch, avg_loss))
-save_net_state(model=netx, models_dir=f"{MODEL_PATH}/", filename='netx.pth')
+save_net_state(model=netx, models_dir=f"{model_path}/", filename='netx.pth')
 
 train_loaderx2 = DataLoader(Dataset(x_recovered2, y_recovered2, z_recovered2, q_recovered2), batch_size=len(x_recovered2), shuffle=False)
 for iteration, (x, y, z, q) in enumerate(train_loaderx2):
@@ -264,8 +237,14 @@ df_data = DiagnosisFeature(ERRORU,ERRORX)
 
 results = PCA(df_data,0.99,0.99)
 
-save_pca_results(f"{MODEL_PATH}/", results)
-(v_I, v, v_ratio, p_k, data_mean, data_std, T_95_limit, T_99_limit, SPE_95_limit, SPE_99_limit, P, k, P_t, X, data_nor) = results
+elapsed = time.perf_counter() - start
+h, rem = divmod(elapsed, 3600)
+m, s = divmod(rem, 60)
+print(f"{int(h)}시간 {int(m)}분 {s:.3f}초")
+
+save_pca_results(f"{model_path}/", results)
+
+# (v_I, v, v_ratio, p_k, data_mean, data_std, T_95_limit, T_99_limit, SPE_95_limit, SPE_99_limit, P, k, P_t, X, data_nor) = results
 
 # t2_array = T2_array(df_data, data_mean, data_std, p_k, v_I)
 # plot_array(t2_array, title="Hotelling T² over time",

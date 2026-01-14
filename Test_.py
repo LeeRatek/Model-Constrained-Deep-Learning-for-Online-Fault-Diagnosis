@@ -38,8 +38,8 @@ warnings.filterwarnings('ignore')
 
 parser = argparse.ArgumentParser(description="Run diagnostics plotting with CLI options")
 parser.add_argument("--battery-type", choices=["QAS","DTI"], default="QAS", help="배터리 유형 선택 (DTI fault index range = [77~79], QAS fault index range = [335~392])")
-parser.add_argument("--vehicle-id", type=int, default=335, help="기본 차량 ID")
-parser.add_argument("--vehicle-ids", type=str, default=None, help="쉼표로 구분된 ID 목록 예: 335,336")
+parser.add_argument("--vehicle-start", type=int, default=0, help="Filtered fault vehicle ID 시작 인덱스")
+parser.add_argument("--vehicle-end", type=int, default=19, help="Filtered fault vehicle ID 끝 인덱스")
 parser.add_argument("--models-dir", type=str, default="./models")
 parser.add_argument("--results-dir", type=str, default="./results")
 parser.add_argument("--x-start", type=int, default=20)
@@ -47,18 +47,12 @@ parser.add_argument("--x-tick-step", type=int, default=3000)
 parser.add_argument("--sigma-levels", type=str, default="3,4.5,6")
 args = parser.parse_args()
 
-def _parse_ids(ids_str, fallback):
-    if ids_str is None:
-        return [fallback]
-    return [int(s.strip()) for s in ids_str.split(',') if s.strip()]
-
-vehicle_ids = _parse_ids(args.vehicle_ids, args.vehicle_id)
-
-
+BATTERY_TYPE = args.battery_type # 'DTI' or 'QAS'
+print(f"args.models_dir: {args.models_dir}")
 # DTI fault index range = [77~79]
 # QAS fault index range = [335~392]
-for i in vehicle_ids:
-    BATTERY_TYPE = args.battery_type # 'DTI' or 'QAS'
+falt_list = np.load(f"./{BATTERY_TYPE}_filtered_vehicle_ids_fault.npy").astype(np.int64).tolist()
+for i in falt_list[args.vehicle_start:args.vehicle_end+1]:
     VEHICLE_ID = f'{i}'
     path = f'./data/{BATTERY_TYPE}/{VEHICLE_ID}/'
     # vin = VIN_data.iloc[i, 0]
@@ -83,6 +77,10 @@ for i in vehicle_ids:
     
     combined_tensor = safe_load(f'./data/{BATTERY_TYPE}/{VEHICLE_ID}/vin_2.pkl')
     combined_tensorx = safe_load(f'./data/{BATTERY_TYPE}/{VEHICLE_ID}/vin_3.pkl')
+    
+    start_idx = get_start_index(combined_tensor)
+    combined_tensor = normalize_columns_0_to_1(combined_tensor[start_idx:, :])
+    combined_tensorx = normalize_columns_0_to_1(combined_tensorx[start_idx:, :])
 
     dim_x = 2
     dim_y = 110 

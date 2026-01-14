@@ -459,8 +459,8 @@ def load_pca_results(output_dir):
 
     with open(manifest_path, "r", encoding="utf-8") as f:
         manifest = json.load(f)
-
-    arrays = np.load(manifest["paths"]["arrays"], allow_pickle=False)
+    arrays_path = os.path.join(output_dir, "pca_arrays.npz")
+    arrays = np.load(arrays_path, allow_pickle=False)
 
     # Extract arrays and scalars
     v_I = arrays["v_I"]
@@ -481,7 +481,9 @@ def load_pca_results(output_dir):
 
     # Load data_nor according to stored type
     dn_type = manifest["types"]["data_nor"]
-    dn_path = manifest["paths"]["data_nor"]
+    
+    dn_path = os.path.join(output_dir, "pca_data_nor.csv")
+    # dn_path = manifest["paths"]["data_nor"]
     if dn_type == "DataFrame":
         # Read back CSV with index preserved
         data_nor = pd.read_csv(dn_path, index_col=0)
@@ -960,6 +962,82 @@ def plot_diagnostics_triplet(t2_array,
     else:
         plt.close(fig)
 
+def plot_distribution_with_stats(
+    data,
+    bins=50,
+    kde=True,
+    normal_fit=False,
+    figsize=(10, 5),
+    title="Distribution with mean/std",
+    save_path=None,
+    show=True,
+    ddof=1,
+    block=False,
+):
+    # 1D 벡터로 변환
+    try:
+        import torch
+        if isinstance(data, torch.Tensor):
+            x = data.detach().cpu().numpy().ravel()
+        else:
+            x = np.asarray(data).ravel()
+    except Exception:
+        x = np.asarray(data).ravel()
+
+    # 통계
+    mu = float(np.mean(x))
+    std = float(np.std(x, ddof=ddof))
+    var = float(np.var(x, ddof=ddof))
+    n = int(x.size)
+
+    # 플롯
+    fig, ax = plt.subplots(figsize=figsize)
+    used_seaborn = False
+    if kde:
+        try:
+            import seaborn as sns
+            sns.histplot(x, bins=bins, kde=True, stat="density", color="tab:blue", ax=ax)
+            used_seaborn = True
+        except Exception:
+            ax.hist(x, bins=bins, density=True, color="tab:blue", alpha=0.7)
+    else:
+        ax.hist(x, bins=bins, density=True, color="tab:blue", alpha=0.7)
+
+    # 평균/±σ 라인
+    ax.axvline(mu, color="red", lw=2, label=f"mean = {mu:.3f}")
+    ax.axvline(mu - std, color="purple", ls="--", lw=1.5, label=f"mean-σ = {mu - std:.3f}")
+    ax.axvline(mu + std, color="purple", ls="--", lw=1.5, label=f"mean+σ = {mu + std:.3f}")
+
+    # 정규분포 피팅(선택)
+    if normal_fit:
+        try:
+            from scipy.stats import norm
+            xs = np.linspace(np.min(x), np.max(x), 500)
+            ax.plot(xs, norm.pdf(xs, loc=mu, scale=std), color="orange", lw=2, label="Normal fit (μ, σ)")
+        except Exception:
+            pass
+
+    # 텍스트 박스
+    text = f"n = {n}\nmean = {mu:.3f}\nstd = {std:.3f}\nvar = {var:.3f}"
+    ax.text(0.02, 0.98, text, transform=ax.transAxes, va="top", ha="left",
+            bbox=dict(boxstyle="round", fc="white", ec="gray", alpha=0.8))
+
+    ax.set_xlabel("Value")
+    ax.set_ylabel("Density" if used_seaborn or kde else "Frequency")
+    ax.set_title(title)
+    ax.legend(loc="best")
+    plt.tight_layout()
+
+    if save_path:
+        fig.savefig(save_path, dpi=150)
+
+    if show:
+        plt.show(block=block)
+    else:
+        plt.close(fig)
+
+    return {"mean": mu, "std": std, "var": var, "count": n}
+
 def make_model_path_based_timestamp(base="models", make:bool=False, prefix:str=None, tz="Asia/Seoul"):
     # tzinfo 설정: zoneinfo 우선, 실패 시 pytz로 폴백
     try:
@@ -978,3 +1056,63 @@ def make_model_path_based_timestamp(base="models", make:bool=False, prefix:str=N
     if make:
         os.makedirs(path, exist_ok=True)
     return path
+
+def last_index_of(tensor, value, operator='=='):
+    start_idx = 0
+    result = np.array([])
+    if operator == '==':
+        result = np.where(np.array(tensor)[:,0] == value)[0]
+    elif operator == '<':
+        result = np.where(np.array(tensor)[:,0] < value)[0]
+    elif operator == '<=':
+        result = np.where(np.array(tensor)[:,0] <= value)[0]
+    elif operator == '>':
+        result = np.where(np.array(tensor)[:,0] > value)[0]
+    elif operator == '>=':
+        result = np.where(np.array(tensor)[:,0] >= value)[0]
+    elif operator == '!=':
+        result = np.where(np.array(tensor)[:,0] != value)[0]
+        
+    if result.size != 0:
+            start_idx = result[-1] + 1
+    return start_idx
+
+def get_start_index(tensor):
+    start_idx = 0
+    start_idx = np.max([start_idx,last_index_of(tensor, 0, operator='<')]) # 0 means minimum voltage
+    start_idx = np.max([start_idx,last_index_of(tensor, 0, operator='==')]) # 0 means minimum voltage
+    start_idx = np.max([start_idx,last_index_of(tensor, 5, operator='>')]) # 5 means maximum voltage
+    return start_idx
+
+def is_abnormal(tensor):
+    abnormal_data = False
+    if last_index_of(tensor, 0, operator='<') != 0 or last_index_of(tensor, 5, operator='>') != 0:
+        abnormal_data = True
+    return abnormal_data
+
+def normalize_columns_0_to_1(X, eps=1e-12):
+    """
+    입력 행렬의 각 열을 [0,1] 범위로 정규화합니다.
+
+    - torch.Tensor와 numpy.ndarray 모두 지원합니다.
+    - 분모(최대-최소)가 0인 열은 eps로 치환합니다.
+
+    Args:
+        X: (n×m) 배열/텐서
+        eps: 분모가 0일 때 사용할 작은 값
+
+    Returns:
+        동일 타입(torch.Tensor 또는 np.ndarray)의 정규화된 행렬
+    """
+    if isinstance(X, torch.Tensor):
+        Xf = X.to(dtype=torch.float64)
+        col_min = Xf.min(dim=0, keepdim=True).values
+        col_max = Xf.max(dim=0, keepdim=True).values
+        denom = torch.clamp(col_max - col_min, min=eps)
+        return (Xf - col_min) / denom
+    else:
+        A = np.asarray(X, dtype=float)
+        col_min = np.min(A, axis=0, keepdims=True)
+        col_max = np.max(A, axis=0, keepdims=True)
+        denom = np.maximum(col_max - col_min, eps)
+        return (A - col_min) / denom
