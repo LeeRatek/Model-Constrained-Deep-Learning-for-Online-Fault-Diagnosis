@@ -63,6 +63,16 @@ elif args.learning_case == 4:
     PREPROCESSING = False
     SKIP_CHARGE_READY = False
     
+dim_x = 2 # [estimated pack voltage 1, estimated pack volatage 2]
+dim_y = 110 if BATTERY_TYPE == 'QAS' else 85 # DTI 일경우 85 이고 QAS일 경우 110인듯 [각 셀의 voltage]
+dim_z = 110 if BATTERY_TYPE == 'QAS' else 85 # DTI 일경우 85 이고 QAS일 경우 110인듯 [각 셀의 estimated voltage diviation]
+dim_q = 3 # [Board Temperature, Board-end SOC, Current]
+
+dim_x2 = 2 # [estimated pack SOC 1, estimated pack SOC 2]
+dim_y2 = 110 if BATTERY_TYPE == 'QAS' else 85 # DTI 일경우 85 이고 QAS일 경우 110인듯 [각 셀의 SOC]
+dim_z2 = 110 if BATTERY_TYPE == 'QAS' else 85 # DTI 일경우 85 이고 QAS일 경우 110인듯 [각 셀의 estimated SOC diviation]
+dim_q2= 4 # [Board Temperature, Board-end SOC, Velocity, Current]
+
 print_sim_config(
     title="Train Run",
     config=args,
@@ -115,11 +125,6 @@ for i in falt_list[args.vehicle_start:args.vehicle_end+1]:
         combined_tensor = combined_tensor[start_idx:, :]
         combined_tensorx = combined_tensorx[start_idx:, :]
     
-    dim_x = 2
-    dim_y = 110 
-    dim_z = 110 
-    dim_q = 3
-
     # Use indexing to separate
     x_recovered = combined_tensor[:, :dim_x]
     y_recovered = combined_tensor[:, dim_x:dim_x + dim_y]
@@ -127,11 +132,6 @@ for i in falt_list[args.vehicle_start:args.vehicle_end+1]:
     q_recovered = combined_tensor[:, dim_x + dim_y + dim_z:]
     net_loaded = net_loaded.double()
     recon_imtest = net_loaded(x_recovered, z_recovered, q_recovered)
-
-    dim_x2 = 2
-    dim_y2 = 110
-    dim_z2 = 110
-    dim_q2= 4
 
     # Use indexing to separate
     x_recovered2 = combined_tensorx[:, :dim_x2]
