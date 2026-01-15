@@ -23,11 +23,12 @@ class MODE(IntEnum):
     FILTER_MODE = 2
     ANALYSIS_MODE = 3
 
-mode = MODE.FILTER_MODE
+mode = MODE.ANALYSIS_MODE
 LSTM_LOAD = False
 FIRST_LOAD = True
-BATTERY_TYPE = "DTI" # 'DTI' or 'QAS'
+BATTERY_TYPE = "QAS" # 'DTI' or 'QAS'
 PREPROCESSING = True
+SKIP_CHARGE_READY = False
 
 dim_x = 2 # [estimated pack voltage 1, estimated pack volatage 2]
 dim_y = 110 if BATTERY_TYPE == 'QAS' else 85 # DTI 일경우 85 이고 QAS일 경우 110인듯 [각 셀의 voltage]
@@ -46,7 +47,8 @@ filtered_vehicle_ids = np.array([])
 (vin1_start, vin2_start, vin3_start) = (0, 0, 0)
 
 start_idxes = []
-for i in range(0, max_idx + 1):
+# for i in range(0, max_idx + 1):
+for i in range(0, 1):
     VEHICLE_ID = f'{i}'
     PATH = f"./data/data_analysis_start_at_0/{BATTERY_TYPE}-{VEHICLE_ID}"   
 
@@ -59,7 +61,12 @@ for i in range(0, max_idx + 1):
     tensorx = safe_load(f'./data/{BATTERY_TYPE}/{VEHICLE_ID}/vin_3.pkl')
     
     if PREPROCESSING:
-        start_idx = get_start_index(tensor)
+        start_idx = 0
+        start_idx = np.max([start_idx,last_index_of(tensor, feature_idx=0, value=0, operator='<=')]) # 0 means minimum voltage
+        start_idx = np.max([start_idx,last_index_of(tensor, feature_idx=0, value=5, operator='>')]) # 5 means maximum voltage
+        cell_div_idxes = list(range(dim_x + dim_y, dim_x + dim_y + dim_z))
+        tensor = normalize_columns_0_to_1(tensor[start_idx:, :], exclude_cols=cell_div_idxes)
+        tensorx = normalize_columns_0_to_1(tensorx[start_idx:, :], exclude_cols=cell_div_idxes)
         # if np.min(np.array(tensor)[start_idx:,0]) < 0:
         #     print(f"Vehicle ID {i} has negative voltage data, skipping.")
         #     continue
@@ -68,6 +75,12 @@ for i in range(0, max_idx + 1):
         #     continue
         # tensor = normalize_columns_0_to_1(tensor[start_idx:, :])
         # tensorx = normalize_columns_0_to_1(tensorx[start_idx:, :])
+        
+    if SKIP_CHARGE_READY:
+        charge_idx = 224 if BATTERY_TYPE == "QAS" else 174
+        start_idx = last_index_of(tensor, feature_idx=charge_idx, value=-500, operator='<') # -500 means minimum current during charge ready
+        tensor = tensor[start_idx:, :]
+        tensorx = tensorx[start_idx:, :]
         
         if is_abnormal(tensor):
             print(f"Vehicle ID {i} has abnormal voltage data, skipping.")
@@ -116,6 +129,10 @@ upre2 = narray1[:,1]
 temp = narray1[:,dim_x + dim_y + dim_z]
 soc = narray1[:,dim_x + dim_y + dim_z + 1]
 current = narray1[:,dim_x + dim_y + dim_z + 2]
+u1 = narray1[:,dim_x]
+d_u1 = narray1[:,dim_x + dim_y]
+u2 = narray1[:,dim_x +1 ]
+d_u2 = narray1[:,dim_x + dim_y + 1]
 for i in range(dim_y):
     if i == 0:
         u = narray1[:,dim_x + i]
@@ -145,6 +162,26 @@ plot_distribution_with_stats(soc,
 plot_distribution_with_stats(current,
                                      bins=60, kde=True, normal_fit=True,
                                      title="Current Sample Distribution",
+                                     save_path=None, show=True)
+
+plot_distribution_with_stats(u1,
+                                     bins=60, kde=True, normal_fit=True,
+                                     title="True Voltage 1 Sample Distribution",
+                                     save_path=None, show=True)
+
+plot_distribution_with_stats(u2,
+                                     bins=60, kde=True, normal_fit=True,
+                                     title="True Voltage 2 Sample Distribution",
+                                     save_path=None, show=True)
+
+plot_distribution_with_stats(d_u1,
+                                     bins=60, kde=True, normal_fit=True,
+                                     title="Volatage divation 1 Sample Distribution",
+                                     save_path=None, show=True)
+
+plot_distribution_with_stats(d_u2,
+                                     bins=60, kde=True, normal_fit=True,
+                                     title="Volatage divation 2 Sample Distribution",
                                      save_path=None, show=True)
 
 print("Amount of data used for training:", combined_tensor.shape[0])

@@ -1057,31 +1057,31 @@ def make_model_path_based_timestamp(base="models", make:bool=False, prefix:str=N
         os.makedirs(path, exist_ok=True)
     return path
 
-def last_index_of(tensor, value, operator='=='):
+def last_index_of(tensor, feature_idx, value, operator='=='):
     start_idx = 0
     result = np.array([])
     if operator == '==':
-        result = np.where(np.array(tensor)[:,0] == value)[0]
+        result = np.where(np.array(tensor)[:,feature_idx] == value)[0]
     elif operator == '<':
-        result = np.where(np.array(tensor)[:,0] < value)[0]
+        result = np.where(np.array(tensor)[:,feature_idx] < value)[0]
     elif operator == '<=':
-        result = np.where(np.array(tensor)[:,0] <= value)[0]
+        result = np.where(np.array(tensor)[:,feature_idx] <= value)[0]
     elif operator == '>':
-        result = np.where(np.array(tensor)[:,0] > value)[0]
+        result = np.where(np.array(tensor)[:,feature_idx] > value)[0]
     elif operator == '>=':
-        result = np.where(np.array(tensor)[:,0] >= value)[0]
+        result = np.where(np.array(tensor)[:,feature_idx] >= value)[0]
     elif operator == '!=':
-        result = np.where(np.array(tensor)[:,0] != value)[0]
+        result = np.where(np.array(tensor)[:,feature_idx] != value)[0]
         
     if result.size != 0:
             start_idx = result[-1] + 1
     return start_idx
 
-def get_start_index(tensor):
+def get_start_index(tensor, feature_idx):
     start_idx = 0
-    start_idx = np.max([start_idx,last_index_of(tensor, 0, operator='<')]) # 0 means minimum voltage
-    start_idx = np.max([start_idx,last_index_of(tensor, 0, operator='==')]) # 0 means minimum voltage
-    start_idx = np.max([start_idx,last_index_of(tensor, 5, operator='>')]) # 5 means maximum voltage
+    start_idx = np.max([start_idx,last_index_of(tensor, feature_idx, operator='<')]) # 0 means minimum voltage
+    start_idx = np.max([start_idx,last_index_of(tensor, feature_idx, operator='==')]) # 0 means minimum voltage
+    start_idx = np.max([start_idx,last_index_of(tensor, feature_idx, operator='>')]) # 5 means maximum voltage
     return start_idx
 
 def is_abnormal(tensor):
@@ -1090,7 +1090,7 @@ def is_abnormal(tensor):
         abnormal_data = True
     return abnormal_data
 
-def normalize_columns_0_to_1(X, eps=1e-12):
+def normalize_columns_0_to_1(X, eps=1e-12, exclude_cols=None, exclude_ranges=None):
     """
     입력 행렬의 각 열을 [0,1] 범위로 정규화합니다.
 
@@ -1100,19 +1100,81 @@ def normalize_columns_0_to_1(X, eps=1e-12):
     Args:
         X: (n×m) 배열/텐서
         eps: 분모가 0일 때 사용할 작은 값
+        exclude_cols: 정규화에서 제외할 컬럼 인덱스들(0-based). 예: [0, 1, 2]
+        exclude_ranges: 정규화에서 제외할 컬럼 구간들(0-based, inclusive).
+            예: [(110, 220)]  -> 110~220 컬럼은 정규화하지 않음
 
     Returns:
         동일 타입(torch.Tensor 또는 np.ndarray)의 정규화된 행렬
     """
+    def _build_normalize_mask(n_cols: int):
+        mask = np.ones(n_cols, dtype=bool)
+
+        if exclude_cols is not None:
+            for c in exclude_cols:
+                try:
+                    ci = int(c)
+                except Exception:
+                    continue
+                if 0 <= ci < n_cols:
+                    mask[ci] = False
+
+        if exclude_ranges is not None:
+            for r in exclude_ranges:
+                if r is None:
+                    continue
+                try:
+                    start, end = r
+                except Exception:
+                    continue
+                try:
+                    start_i = int(start)
+                    end_i = int(end)
+                except Exception:
+                    continue
+                if end_i < start_i:
+                    start_i, end_i = end_i, start_i
+                start_i = max(start_i, 0)
+                end_i = min(end_i, n_cols - 1)
+                if start_i <= end_i:
+                    mask[start_i : end_i + 1] = False
+
+        return mask
+
     if isinstance(X, torch.Tensor):
         Xf = X.to(dtype=torch.float64)
-        col_min = Xf.min(dim=0, keepdim=True).values
-        col_max = Xf.max(dim=0, keepdim=True).values
+        if Xf.ndim != 2:
+            raise ValueError(f"Expected 2D tensor (n×m), got shape {tuple(Xf.shape)}")
+
+        n_cols = int(Xf.shape[1])
+        np_mask = _build_normalize_mask(n_cols)
+        if not np.any(np_mask):
+            return Xf
+
+        col_mask = torch.as_tensor(np_mask, dtype=torch.bool, device=Xf.device)
+        X_sel = Xf[:, col_mask]
+        col_min = X_sel.min(dim=0, keepdim=True).values
+        col_max = X_sel.max(dim=0, keepdim=True).values
         denom = torch.clamp(col_max - col_min, min=eps)
-        return (Xf - col_min) / denom
+
+        out = Xf.clone()
+        out[:, col_mask] = (X_sel - col_min) / denom
+        return out
     else:
         A = np.asarray(X, dtype=float)
-        col_min = np.min(A, axis=0, keepdims=True)
-        col_max = np.max(A, axis=0, keepdims=True)
+        if A.ndim != 2:
+            raise ValueError(f"Expected 2D array (n×m), got shape {A.shape}")
+
+        n_cols = int(A.shape[1])
+        mask = _build_normalize_mask(n_cols)
+        if not np.any(mask):
+            return A
+
+        A_sel = A[:, mask]
+        col_min = np.min(A_sel, axis=0, keepdims=True)
+        col_max = np.max(A_sel, axis=0, keepdims=True)
         denom = np.maximum(col_max - col_min, eps)
-        return (A - col_min) / denom
+
+        out = A.copy()
+        out[:, mask] = (A_sel - col_min) / denom
+        return out

@@ -28,14 +28,14 @@ warnings.filterwarnings('ignore')
 parser = argparse.ArgumentParser(description="Run MC-AE training with CLI options")
 parser.add_argument("--battery-type", choices=["QAS","DTI"], default="QAS")
 parser.add_argument("--vehicle-start", type=int, default=0, help="Filtered normal vehicle ID 시작 인덱스")
-parser.add_argument("--vehicle-end", type=int, default=0, help="Filtered normal vehicle ID 끝 인덱스")
+parser.add_argument("--vehicle-end", type=int, default=4, help="Filtered normal vehicle ID 끝 인덱스")
 parser.add_argument("--lstm-training", action="store_true")
 parser.add_argument("--lstm-load", action="store_true")
 parser.add_argument("--models-dir", type=str, default="./models")
 parser.add_argument("--vin1-start", type=int, default=0)
 parser.add_argument("--vin2-start", type=int, default=0)
 parser.add_argument("--vin3-start", type=int, default=0)
-parser.add_argument("--ae-epochs", type=int, default=300)
+parser.add_argument("--ae-epochs", type=int, default=800)
 parser.add_argument("--ae-lr", type=float, default=5e-4)
 parser.add_argument("--ae-batchsize", type=int, default=100)
 parser.add_argument("--lstm-epochs", type=int, default=300)
@@ -48,7 +48,8 @@ LSTM_TRAINING = args.lstm_training
 LSTM_LOAD = args.lstm_load if args.lstm_training else args.lstm_load
 FIRST_LOAD = True
 BATTERY_TYPE = args.battery_type # 'DTI' or 'QAS'
-
+PREPROCESSING = True
+SKIP_CHARGE_READY = True
 dim_x = 2 # [estimated pack voltage 1, estimated pack volatage 2]
 dim_y = 110 if BATTERY_TYPE == 'QAS' else 85 # DTI 일경우 85 이고 QAS일 경우 110인듯 [각 셀의 voltage]
 dim_z = 110 if BATTERY_TYPE == 'QAS' else 85 # DTI 일경우 85 이고 QAS일 경우 110인듯 [각 셀의 estimated voltage diviation]
@@ -66,8 +67,10 @@ model_path = make_model_path_based_timestamp(base=args.models_dir)
 start = time.perf_counter()
 
 normal_list = np.load(f"./{BATTERY_TYPE}_filtered_vehicle_ids_normal.npy").astype(np.int64).tolist()
+vehicle_idxes = []
 for i in normal_list[args.vehicle_start:args.vehicle_end+1]:
     VEHICLE_ID = f'{i}'
+    vehicle_idxes.append(VEHICLE_ID)
     PATH = f"./data/data_analysis_start_at_0/{BATTERY_TYPE}-{VEHICLE_ID}"   
 
     #----------------------------------------Data loading for LSTM (customized) ------------------------------
@@ -113,9 +116,20 @@ for i in normal_list[args.vehicle_start:args.vehicle_end+1]:
     tensorx = safe_load(f'./data/{BATTERY_TYPE}/{VEHICLE_ID}/vin_3.pkl')
     
     #----------------------------------------Preprocessing ------------------------------#
-    start_idx = get_start_index(tensor)
-    tensor = normalize_columns_0_to_1(tensor[start_idx:, :])
-    tensorx = normalize_columns_0_to_1(tensorx[start_idx:, :])
+    
+    if PREPROCESSING:
+        start_idx = 0
+        start_idx = np.max([start_idx,last_index_of(tensor, feature_idx=0, value=0, operator='<=')]) # 0 means minimum voltage
+        start_idx = np.max([start_idx,last_index_of(tensor, feature_idx=0, value=5, operator='>')]) # 5 means maximum voltage
+        cell_div_idxes = list(range(dim_x + dim_y, dim_x + dim_y + dim_z))
+        tensor = normalize_columns_0_to_1(tensor[start_idx:, :], exclude_cols=cell_div_idxes)
+        tensorx = normalize_columns_0_to_1(tensorx[start_idx:, :], exclude_cols=cell_div_idxes)
+    
+    if SKIP_CHARGE_READY:
+        charge_idx = 224 if BATTERY_TYPE == "QAS" else 174
+        start_idx = last_index_of(tensor, feature_idx=charge_idx, value=-500, operator='<') # -500 means minimum current during charge ready
+        tensor = tensor[start_idx:, :]
+        tensorx = tensorx[start_idx:, :]
     
     if FIRST_LOAD:
         FIRST_LOAD = False
@@ -126,7 +140,7 @@ for i in normal_list[args.vehicle_start:args.vehicle_end+1]:
         combined_tensorx = torch.cat((combined_tensorx, tensorx), dim=0)
 
 
-
+print(f"Vehicle IDs used for training: {vehicle_idxes}")
 print("Amount of data used for training:", combined_tensor.shape[0])
 
 #----------------------------------------Training for MC-AE--------------------------
@@ -139,6 +153,23 @@ x_recovered2 = combined_tensorx[:, :dim_x2]
 y_recovered2 = combined_tensorx[:, dim_x2:dim_x2 + dim_y2]
 z_recovered2 = combined_tensorx[:, dim_x2 + dim_y2: dim_x2 + dim_y2 + dim_z2]
 q_recovered2 = combined_tensorx[:, dim_x2 + dim_y2 + dim_z2:]
+
+# plot_distribution_with_stats(x_recovered,
+#                                      bins=60, kde=True, normal_fit=True,
+#                                      title="x_recovered Sample Distribution",
+#                                      save_path=None, show=True)
+# plot_distribution_with_stats(y_recovered,
+#                                      bins=60, kde=True, normal_fit=True,
+#                                      title="y_recovered Sample Distribution",
+#                                      save_path=None, show=True)
+# plot_distribution_with_stats(z_recovered,
+#                                      bins=60, kde=True, normal_fit=True,
+#                                      title="z_recovered Sample Distribution",
+#                                      save_path=None, show=True)
+# plot_distribution_with_stats(q_recovered,
+#                                      bins=60, kde=True, normal_fit=True,
+#                                      title="q_recovered Sample Distribution",
+#                                      save_path=None, show=True)
 
 AE_EPOCH = args.ae_epochs
 AE_LR = args.ae_lr
@@ -179,7 +210,8 @@ for epoch in range(AE_EPOCH):
         loss_u.backward()
         optimizer.step()
     avg_loss = total_loss / num_batches
-    print('Epoch: {:2d} | Average Loss: {:.4f}'.format(epoch, avg_loss))
+    if epoch % 50 == 0:
+        print('Epoch: {:2d} | Average Loss: {:.4f}'.format(epoch, avg_loss))
     
 save_net_state(model=net, models_dir=f"{model_path}/", filename='net.pth')
 train_loader2 = DataLoader(Dataset(x_recovered, y_recovered, z_recovered, q_recovered), batch_size=len(x_recovered),
@@ -217,7 +249,8 @@ for epoch in range(AE_EPOCH):
         optimizer.step()
     avg_loss = total_loss / num_batches
     avg_loss_list_x.append(avg_loss)
-    print('Epoch: {:2d} | Average Loss: {:.4f}'.format(epoch, avg_loss))
+    if epoch % 50 == 0:
+        print('Epoch: {:2d} | Average Loss: {:.4f}'.format(epoch, avg_loss))
 save_net_state(model=netx, models_dir=f"{model_path}/", filename='netx.pth')
 
 train_loaderx2 = DataLoader(Dataset(x_recovered2, y_recovered2, z_recovered2, q_recovered2), batch_size=len(x_recovered2), shuffle=False)

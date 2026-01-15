@@ -39,8 +39,8 @@ warnings.filterwarnings('ignore')
 parser = argparse.ArgumentParser(description="Run diagnostics plotting with CLI options")
 parser.add_argument("--battery-type", choices=["QAS","DTI"], default="QAS", help="배터리 유형 선택 (DTI fault index range = [77~79], QAS fault index range = [335~392])")
 parser.add_argument("--vehicle-start", type=int, default=0, help="Filtered fault vehicle ID 시작 인덱스")
-parser.add_argument("--vehicle-end", type=int, default=19, help="Filtered fault vehicle ID 끝 인덱스")
-parser.add_argument("--models-dir", type=str, default="./models")
+parser.add_argument("--vehicle-end", type=int, default=0, help="Filtered fault vehicle ID 끝 인덱스")
+parser.add_argument("--models-dir", type=str, default="./models/260115_084910")
 parser.add_argument("--results-dir", type=str, default="./results")
 parser.add_argument("--x-start", type=int, default=20)
 parser.add_argument("--x-tick-step", type=int, default=3000)
@@ -48,6 +48,8 @@ parser.add_argument("--sigma-levels", type=str, default="3,4.5,6")
 args = parser.parse_args()
 
 BATTERY_TYPE = args.battery_type # 'DTI' or 'QAS'
+PREPROCESSING = False
+SKIP_CHARGE_READY = True
 print(f"args.models_dir: {args.models_dir}")
 # DTI fault index range = [77~79]
 # QAS fault index range = [335~392]
@@ -78,10 +80,21 @@ for i in falt_list[args.vehicle_start:args.vehicle_end+1]:
     combined_tensor = safe_load(f'./data/{BATTERY_TYPE}/{VEHICLE_ID}/vin_2.pkl')
     combined_tensorx = safe_load(f'./data/{BATTERY_TYPE}/{VEHICLE_ID}/vin_3.pkl')
     
-    start_idx = get_start_index(combined_tensor)
-    combined_tensor = normalize_columns_0_to_1(combined_tensor[start_idx:, :])
-    combined_tensorx = normalize_columns_0_to_1(combined_tensorx[start_idx:, :])
+    
+    if PREPROCESSING:
+        start_idx = 0
+        start_idx = np.max([start_idx,last_index_of(combined_tensor, feature_idx=0, value=0, operator='<=')]) # 0 means minimum voltage
+        start_idx = np.max([start_idx,last_index_of(combined_tensor, feature_idx=0, value=5, operator='>')]) # 5 means maximum voltage
+        cell_div_idxes = list(range(dim_x + dim_y, dim_x + dim_y + dim_z))
+        combined_tensor = normalize_columns_0_to_1(combined_tensor[start_idx:, :], exclude_cols=cell_div_idxes)
+        combined_tensorx = normalize_columns_0_to_1(combined_tensorx[start_idx:, :], exclude_cols=cell_div_idxes)
 
+    if SKIP_CHARGE_READY:
+        charge_idx = 224 if BATTERY_TYPE == "QAS" else 174
+        start_idx = last_index_of(combined_tensor, feature_idx=charge_idx, value=-500, operator='<') # -500 means minimum current during charge ready
+        combined_tensor = combined_tensor[start_idx:, :]
+        combined_tensorx = combined_tensorx[start_idx:, :]
+    
     dim_x = 2
     dim_y = 110 
     dim_z = 110 
