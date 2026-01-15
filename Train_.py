@@ -32,7 +32,8 @@ parser.add_argument("--vehicle-start", type=int, default=0, help="Filtered norma
 parser.add_argument("--vehicle-end", type=int, default=3, help="Filtered normal vehicle ID 끝 인덱스")
 parser.add_argument("--lstm-training", action="store_true")
 parser.add_argument("--lstm-load", action="store_true")
-parser.add_argument("--models-dir", type=str, default="./models")
+parser.add_argument("--models-dir", type=str, default="./models" if os.environ.get("MODEL_DIR") is None else os.environ.get("MODEL_DIR"))
+parser.add_argument("--source-data-dir", type=str, default="./data" if os.environ.get("SOURCE_DIR") is None else os.environ.get("SOURCE_DIR"))
 parser.add_argument("--vin1-start", type=int, default=0)
 parser.add_argument("--vin2-start", type=int, default=0)
 parser.add_argument("--vin3-start", type=int, default=0)
@@ -42,7 +43,7 @@ parser.add_argument("--ae-batchsize", type=int, default=100)
 parser.add_argument("--lstm-epochs", type=int, default=300)
 parser.add_argument("--lstm-lr", type=float, default=5e-4)
 parser.add_argument("--lstm-batchsize", type=int, default=100)
-parser.add_argument("--learning-case", type=int, default=2, help="1: Skip and no nomalization, 2: Skip but doing normalization, 3: No skip but doing normalization, 4: No skip and no normalization.")
+parser.add_argument("--learning-case", type=int, default=1, help="1: Skip and no nomalization, 2: Skip but doing normalization, 3: No skip but doing normalization, 4: No skip and no normalization.")
 args = parser.parse_args()
 
 
@@ -74,7 +75,7 @@ dim_q2= 4 # [Board Temperature, Board-end SOC, Velocity, Current]
 
 # 모델 저장 경로 설정
 
-model_path = make_model_path_based_timestamp(base=args.models_dir)
+model_path = make_model_path_based_timestamp(base=args.mdoels_dir)
 
 start = time.perf_counter()
 
@@ -84,12 +85,12 @@ FIRST_LOAD = True
 for i in normal_list[args.vehicle_start:args.vehicle_end+1]:
     VEHICLE_ID = f'{i}'
     vehicle_idxes.append(VEHICLE_ID)
-    PATH = f"./data/data_analysis_start_at_0/{BATTERY_TYPE}-{VEHICLE_ID}"   
+    PATH = f"{args.source_data_dir}/data_analysis_start_at_0/{BATTERY_TYPE}-{VEHICLE_ID}"   
 
     #----------------------------------------Data loading for LSTM (customized) ------------------------------
     # print(os.getcwd())
     if LSTM_LOAD:
-        test_X = safe_load(f'./data/{BATTERY_TYPE}/{VEHICLE_ID}/vin_1.pkl')
+        test_X = safe_load(f'{args.source_data_dir}/{BATTERY_TYPE}/{VEHICLE_ID}/vin_1.pkl')
 
     #----------------------------------------Hyper Parameter Setting---------------------
     TIME_STEP = 1  # rnn time step
@@ -125,8 +126,8 @@ for i in normal_list[args.vehicle_start:args.vehicle_end+1]:
                     loss_train_100.append(loss.cpu().detach().numpy())
 
     #----------------------------------------Data loading for MC-AE (customized) ------------------------------
-    tensor = safe_load(f'./data/{BATTERY_TYPE}/{VEHICLE_ID}/vin_2.pkl')
-    tensorx = safe_load(f'./data/{BATTERY_TYPE}/{VEHICLE_ID}/vin_3.pkl')
+    tensor = safe_load(f'{args.source_data_dir}/{BATTERY_TYPE}/{VEHICLE_ID}/vin_2.pkl')
+    tensorx = safe_load(f'{args.source_data_dir}/{BATTERY_TYPE}/{VEHICLE_ID}/vin_3.pkl')
     
     #----------------------------------------Preprocessing ------------------------------#
     
@@ -167,7 +168,9 @@ with redirect_stdout(buf):
 
 text = buf.getvalue()
 print(text, end="")  # 콘솔 출력
-
+os.makedirs(model_path, exist_ok=True)
+with open(f"{model_path}/sim_config.txt", "w", encoding="utf-8") as f:
+    f.write(text)    # 파일 저장
 #----------------------------------------Training for MC-AE--------------------------
 x_recovered = combined_tensor[:, :dim_x] # 0~1
 y_recovered = combined_tensor[:, dim_x:dim_x + dim_y] # 2~111
@@ -220,9 +223,6 @@ for epoch in range(AE_EPOCH):
     avg_loss = total_loss / num_batches
     if epoch % 50 == 0:
         print('Epoch: {:2d} | Average Loss: {:.4f}'.format(epoch, avg_loss))
-    
-with open(f"{model_path}/sim_config.txt", "w", encoding="utf-8") as f:
-    f.write(text)    # 파일 저장
     
 save_net_state(model=net, models_dir=f"{model_path}/", filename='net.pth')
 train_loader2 = DataLoader(Dataset(x_recovered, y_recovered, z_recovered, q_recovered), batch_size=len(x_recovered),

@@ -34,14 +34,15 @@ os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
 print(torch.cuda.device_count())
 
 warnings.filterwarnings('ignore')
-# VIN_data = pd.read_excel(r'./data/Name_list.xls')
+# VIN_data = pd.read_excel(r'{args.source_data_dir}/Name_list.xls')
 
 parser = argparse.ArgumentParser(description="Run diagnostics plotting with CLI options")
 parser.add_argument("--battery-type", choices=["QAS","DTI"], default="QAS", help="배터리 유형 선택 (DTI fault index range = [77~79], QAS fault index range = [335~392])")
 parser.add_argument("--vehicle-start", type=int, default=0, help="Filtered fault vehicle ID 시작 인덱스")
 parser.add_argument("--vehicle-end", type=int, default=0, help="Filtered fault vehicle ID 끝 인덱스")
 parser.add_argument("--models-dir", type=str, default="./models/260115_084910")
-parser.add_argument("--results-dir", type=str, default="./results")
+parser.add_argument("--results-dir", type=str, default="./results" if os.environ.get("RESULTS_DIR") is None else os.environ.get("RESULTS_DIR"))
+parser.add_argument("--source-data-dir", type=str, default="./data" if os.environ.get("SOURCE_DIR") is None else os.environ.get("SOURCE_DIR"))
 parser.add_argument("--x-start", type=int, default=20)
 parser.add_argument("--x-tick-step", type=int, default=3000)
 parser.add_argument("--sigma-levels", type=str, default="3,4.5,6")
@@ -75,12 +76,12 @@ print_sim_config(
 falt_list = np.load(f"./{BATTERY_TYPE}_filtered_vehicle_ids_fault.npy").astype(np.int64).tolist()
 for i in falt_list[args.vehicle_start:args.vehicle_end+1]:
     VEHICLE_ID = f'{i}'
-    path = f'./data/{BATTERY_TYPE}/{VEHICLE_ID}/'
+    path = f'{args.source_data_dir}/{BATTERY_TYPE}/{VEHICLE_ID}/'
     # vin = VIN_data.iloc[i, 0]
     # print(vin)
 
     # lstm = torch.load('./models/lstm.pth').to(device)
-    # test_X = safe_load(f'./data/{BATTERY_TYPE}/{VEHICLE_ID}/vin_1.pkl')
+    # test_X = safe_load(f'{args.source_data_dir}/{BATTERY_TYPE}/{VEHICLE_ID}/vin_1.pkl')
     # # test
     # lstm.eval()
     # prediction = lstm(test_X)
@@ -96,8 +97,8 @@ for i in falt_list[args.vehicle_start:args.vehicle_end+1]:
     netx_state_dict = torch.load(os.path.join(args.models_dir, 'netx.pth'))
     netx_loaded.load_state_dict(netx_state_dict)
     
-    combined_tensor = safe_load(f'./data/{BATTERY_TYPE}/{VEHICLE_ID}/vin_2.pkl')
-    combined_tensorx = safe_load(f'./data/{BATTERY_TYPE}/{VEHICLE_ID}/vin_3.pkl')
+    combined_tensor = safe_load(f'{args.source_data_dir}/{BATTERY_TYPE}/{VEHICLE_ID}/vin_2.pkl')
+    combined_tensorx = safe_load(f'{args.source_data_dir}/{BATTERY_TYPE}/{VEHICLE_ID}/vin_3.pkl')
     
     
     if PREPROCESSING:
