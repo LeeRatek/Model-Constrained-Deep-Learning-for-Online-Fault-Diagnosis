@@ -23,11 +23,11 @@ class MODE(IntEnum):
     FILTER_MODE = 2
     ANALYSIS_MODE = 3
 
-mode = MODE.ANALYSIS_MODE
+mode = MODE.PLOT_MODE
 LSTM_LOAD = False
 FIRST_LOAD = True
 BATTERY_TYPE = "QAS" # 'DTI' or 'QAS'
-PREPROCESSING = True
+PREPROCESSING = False
 SKIP_CHARGE_READY = False
 
 dim_x = 2 # [estimated pack voltage 1, estimated pack volatage 2]
@@ -44,13 +44,13 @@ max_idx = 392 if BATTERY_TYPE == "QAS" else 79
 fault_idx = 335 if BATTERY_TYPE == "QAS" else 77
 # "QAS" = [0~392], "DTI" = [0~79]
 filtered_vehicle_ids = np.array([])
-(vin1_start, vin2_start, vin3_start) = (0, 0, 0)
+(vin1_start, vin2_start, vin3_start) = (200, 200, 200)
 
 start_idxes = []
-# for i in range(0, max_idx + 1):
-for i in range(0, 1):
+for i in range(0, max_idx + 1):
+# for i in range(0, 1):
     VEHICLE_ID = f'{i}'
-    PATH = f"./data/data_analysis_start_at_0/{BATTERY_TYPE}-{VEHICLE_ID}"   
+    PATH = f"./data/data_analysis_start_at_{vin2_start}/{BATTERY_TYPE}-{VEHICLE_ID}"   
 
     #----------------------------------------Data loading for LSTM (customized) ------------------------------
     if LSTM_LOAD:

@@ -85,8 +85,6 @@ FIRST_LOAD = True
 for i in normal_list[args.vehicle_start:args.vehicle_end+1]:
     VEHICLE_ID = f'{i}'
     vehicle_idxes.append(VEHICLE_ID)
-    PATH = f"{args.source_data_dir}/data_analysis_start_at_0/{BATTERY_TYPE}-{VEHICLE_ID}"   
-
     #----------------------------------------Data loading for LSTM (customized) ------------------------------
     # print(os.getcwd())
     if LSTM_LOAD:
