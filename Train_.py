@@ -75,7 +75,7 @@ dim_q2= 4 # [Board Temperature, Board-end SOC, Velocity, Current]
 
 # 모델 저장 경로 설정
 
-model_path = make_model_path_based_timestamp(base=args.mdoels_dir)
+model_path = make_model_path_based_timestamp(base=args.models_dir)
 
 start = time.perf_counter()
 
