@@ -176,7 +176,7 @@ for i in falt_list[args.vehicle_start:args.vehicle_end+1]:
                              x_label="Time",
                              y_labels=("T²", "SPE", "CI"),
                              figsize=(12, 10),
-                             save_path="./results/training_diagnostics.png",
+                             save_path=f"{args.results_dir}/training_diagnostics.png",
                              show=False,
                              x_start=args.x_start,
                              x_tick_step=args.x_tick_step)
@@ -195,7 +195,7 @@ for i in falt_list[args.vehicle_start:args.vehicle_end+1]:
                              x_label="Time",
                              y_labels=("T²", "SPE", "CI"),
                              figsize=(12, 10),
-                             save_path="./results/testing_diagnostics.png",
+                             save_path=f"{args.results_dir}/testing_diagnostics.png",
                              show=False,
                              x_start=args.x_start,
                              x_tick_step=args.x_tick_step)
