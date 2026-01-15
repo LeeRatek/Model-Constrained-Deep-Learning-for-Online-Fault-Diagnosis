@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import pickle
 import matplotlib.pyplot as plt
 import matplotlib as mpl
@@ -16,7 +18,12 @@ from scipy.stats import norm
 from pandas import DataFrame
 from pandas import concat
 import io
+
 from datetime import datetime
+from typing import Mapping, Sequence
+from dataclasses import asdict, is_dataclass
+import platform
+import sys
 
 # Function to safely load a PyTorch model (serialized by GPU) or any pickled object to CPU
 def _to_cpu(obj: Any):
@@ -1178,3 +1185,100 @@ def normalize_columns_0_to_1(X, eps=1e-12, exclude_cols=None, exclude_ranges=Non
         out = A.copy()
         out[:, mask] = (A_sel - col_min) / denom
         return out
+    
+def _as_mapping(config: Any) -> dict:
+    """Namespace/dict/dataclass/object 모두 dict 비슷하게 변환."""
+    if config is None:
+        return {}
+    if isinstance(config, Mapping):
+        return dict(config)
+    if is_dataclass(config):
+        return asdict(config)
+    if hasattr(config, "__dict__"):
+        return dict(vars(config))
+    return {"config": config}
+
+
+def _fmt(v: Any, max_len: int = 180) -> str:
+    if v is None:
+        s = "None"
+    elif isinstance(v, (list, tuple, set)):
+        s = "[" + ", ".join(map(str, list(v))) + "]"
+    else:
+        s = str(v)
+
+    s = s.replace("\n", "\\n")
+    if len(s) > max_len:
+        s = s[: max_len - 3] + "..."
+    return s
+
+
+def print_sim_config(
+    title: str = "Simulation Settings",
+    config: Any = None,
+    include: Sequence[str] | None = None,
+    exclude: Sequence[str] | None = None,
+    extra: Mapping[str, Any] | None = None,
+    sort_keys: bool = True,
+    show_system: bool = True,
+) -> None:
+    """
+    시뮬레이션 세팅(실험 설정)을 깔끔하게 출력.
+
+    - config: argparse.Namespace, dict, dataclass, 또는 일반 객체(속성 기반)
+    - include: 출력할 key들만 선택 (None이면 전체)
+    - exclude: 제외할 key들
+    - extra: 추가로 더 붙이고 싶은 값들(예: device, seed, git hash 등)
+    """
+    cfg = _as_mapping(config)
+
+    if include is not None:
+        cfg = {k: cfg.get(k, None) for k in include}
+
+    if exclude is not None:
+        for k in exclude:
+            cfg.pop(k, None)
+
+    if extra:
+        # extra가 우선권(override)
+        cfg.update(dict(extra))
+
+    items = list(cfg.items())
+    if sort_keys:
+        items.sort(key=lambda kv: kv[0])
+
+    # 시스템 정보(선택)
+    sys_lines = []
+    if show_system:
+        sys_lines = [
+            ("timestamp", datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
+            ("python", sys.version.split()[0]),
+            ("platform", f"{platform.system()} {platform.release()} ({platform.machine()})"),
+            ("cwd", os.getcwd()),
+        ]
+
+    # 출력 폭 계산
+    all_items = sys_lines + items
+    key_w = max([len(str(k)) for k, _ in all_items] + [3])
+    val_w = 0
+    for _, v in all_items:
+        val_w = max(val_w, len(_fmt(v)))
+
+    line_w = min(max(key_w + 3 + val_w + 2, 60), 140)
+
+    def hr(ch: str = "=") -> str:
+        return ch * line_w
+
+    print(hr("="))
+    print(title.center(line_w))
+    print(hr("="))
+
+    if sys_lines:
+        for k, v in sys_lines:
+            print(f"{str(k):<{key_w}} : {_fmt(v)}")
+        print(hr("-"))
+
+    for k, v in items:
+        print(f"{str(k):<{key_w}} : {_fmt(v)}")
+
+    print(hr("="))

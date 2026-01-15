@@ -45,12 +45,31 @@ parser.add_argument("--results-dir", type=str, default="./results")
 parser.add_argument("--x-start", type=int, default=20)
 parser.add_argument("--x-tick-step", type=int, default=3000)
 parser.add_argument("--sigma-levels", type=str, default="3,4.5,6")
+parser.add_argument("--learning-case", type=int, default=1, help="1: Skip and no nomalization, 2: Skip but doing normalization, 3: No skip but doing normalization, 4: No skip and no normalization.")
 args = parser.parse_args()
 
 BATTERY_TYPE = args.battery_type # 'DTI' or 'QAS'
-PREPROCESSING = False
-SKIP_CHARGE_READY = True
-print(f"args.models_dir: {args.models_dir}")
+if args.learning_case == 1:
+    PREPROCESSING = False
+    SKIP_CHARGE_READY = True
+elif args.learning_case == 2:
+    PREPROCESSING = True
+    SKIP_CHARGE_READY = True
+elif args.learning_case == 3:
+    PREPROCESSING = True
+    SKIP_CHARGE_READY = False
+elif args.learning_case == 4:
+    PREPROCESSING = False
+    SKIP_CHARGE_READY = False
+    
+print_sim_config(
+    title="Train Run",
+    config=args,
+    extra={
+        "device": str(device),
+    },
+    # exclude=["password", "token"],  # 민감정보 방지용
+    )
 # DTI fault index range = [77~79]
 # QAS fault index range = [335~392]
 falt_list = np.load(f"./{BATTERY_TYPE}_filtered_vehicle_ids_fault.npy").astype(np.int64).tolist()
