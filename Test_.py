@@ -40,8 +40,8 @@ parser = argparse.ArgumentParser(description="Run diagnostics plotting with CLI 
 parser.add_argument("--battery-type", choices=["QAS","DTI"], default="QAS", help="배터리 유형 선택 (DTI fault index range = [77~79], QAS fault index range = [335~392])")
 parser.add_argument("--vehicle-start", type=int, default=0, help="Filtered fault vehicle ID 시작 인덱스")
 parser.add_argument("--vehicle-end", type=int, default=0, help="Filtered fault vehicle ID 끝 인덱스")
-parser.add_argument("--models-dir", type=str, default="./models/260115_102724")
-parser.add_argument("--results-dir", type=str, default="./results" if os.environ.get("RESULT_DIR") is None else os.environ.get("RESULT_DIR"))
+parser.add_argument("--models-dir", type=str, default="./models/260115_141449")
+parser.add_argument("--results-dir", type=str, default="./results2" if os.environ.get("RESULT_DIR") is None else os.environ.get("RESULT_DIR"))
 parser.add_argument("--source-data-dir", type=str, default="./data" if os.environ.get("SOURCE_DIR") is None else os.environ.get("SOURCE_DIR"))
 parser.add_argument("--x-start", type=int, default=20)
 parser.add_argument("--x-tick-step", type=int, default=3000)
@@ -85,6 +85,7 @@ print_sim_config(
     )
 # DTI fault index range = [77~79]
 # QAS fault index range = [335~392]
+# falt_list = np.load(f"./{BATTERY_TYPE}_filtered_vehicle_ids_normal.npy").astype(np.int64).tolist()
 falt_list = np.load(f"./{BATTERY_TYPE}_filtered_vehicle_ids_fault.npy").astype(np.int64).tolist()
 for i in falt_list[args.vehicle_start:args.vehicle_end+1]:
     VEHICLE_ID = f'{i}'
@@ -166,25 +167,25 @@ for i in falt_list[args.vehicle_start:args.vehicle_end+1]:
     thresholds = diagnosis_thresholds(g, h, sigma_levels=sigma_levels, show_plot=False)
     
     ## =================== Training Diagnosis =================== ##
-    training_data = (data_nor * data_std) + data_mean
-    t2_array_train = T2_array(training_data, data_mean, data_std, p_k, v_I)
-    spe_array_train = SPE_array(training_data, data_mean, data_std, p_k)
-    CI_array_train = spe_array_train / SPE_95_limit + t2_array_train / T_95_limit
+    # training_data = (data_nor * data_std) + data_mean
+    # t2_array_train = T2_array(training_data, data_mean, data_std, p_k, v_I)
+    # spe_array_train = SPE_array(training_data, data_mean, data_std, p_k)
+    # CI_array_train = spe_array_train / SPE_95_limit + t2_array_train / T_95_limit
     
     
-    plot_diagnostics_triplet(t2_array_train,
-                             spe_array_train,
-                             CI_array_train,
-                             thresholds,
-                             sigma_levels=sigma_levels,
-                             title="Training",
-                             x_label="Time",
-                             y_labels=("T²", "SPE", "CI"),
-                             figsize=(12, 10),
-                             save_path=f"{args.results_dir}/training_diagnostics_case{args.learning_case}.png",
-                             show=False,
-                             x_start=args.x_start,
-                             x_tick_step=args.x_tick_step)
+    # plot_diagnostics_triplet(t2_array_train,
+    #                          spe_array_train,
+    #                          CI_array_train,
+    #                          thresholds,
+    #                          sigma_levels=sigma_levels,
+    #                          title="Training",
+    #                          x_label="Time",
+    #                          y_labels=("T²", "SPE", "CI"),
+    #                          figsize=(12, 10),
+    #                          save_path=f"{args.results_dir}/{VEHICLE_ID}_training_diagnostics_case{args.learning_case}.png",
+    #                          show=False,
+    #                          x_start=args.x_start,
+    #                          x_tick_step=args.x_tick_step)
     
     ## =================== Testing Diagnosis =================== ##
     t2_array = T2_array(df_data, data_mean, data_std, p_k, v_I)
@@ -200,7 +201,7 @@ for i in falt_list[args.vehicle_start:args.vehicle_end+1]:
                              x_label="Time",
                              y_labels=("T²", "SPE", "CI"),
                              figsize=(12, 10),
-                             save_path=f"{args.results_dir}/testing_diagnostics_case{args.learning_case}.png",
+                             save_path=f"{args.results_dir}/{VEHICLE_ID}_testing_diagnostics_case{args.learning_case}.png",
                              show=False,
                              x_start=args.x_start,
                              x_tick_step=args.x_tick_step)

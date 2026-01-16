@@ -221,7 +221,8 @@ def solvers(volt_modepi, volt_di, volt_all, soc, b, current, temp_avg):
 
 
 def custom_activation(x):
-    return 2.5 + 1.8 * torch.sigmoid(x)
+    # return 2.5 + 1.8 * torch.sigmoid(x)
+    return torch.sigmoid(x)
 
 
 def PCA(data, l1, l2):
