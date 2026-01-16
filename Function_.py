@@ -221,8 +221,8 @@ def solvers(volt_modepi, volt_di, volt_all, soc, b, current, temp_avg):
 
 
 def custom_activation(x):
-    # return 2.5 + 1.8 * torch.sigmoid(x)
-    return torch.sigmoid(x)
+    return 2.5 + 1.8 * torch.sigmoid(x)
+    # return torch.sigmoid(x)
 
 
 def PCA(data, l1, l2):
@@ -1283,3 +1283,16 @@ def print_sim_config(
         print(f"{str(k):<{key_w}} : {_fmt(v)}")
 
     print(hr("="))
+
+
+from pathlib import Path
+import re
+
+def read_learning_case_from_sim_config(models_dir: str) -> int:
+    sim_path = Path(models_dir) / "sim_config.txt"
+    text = sim_path.read_text(encoding="utf-8")
+
+    m = re.search(r"(?m)^\s*learning_case\s*:\s*(\d+)\s*$", text)
+    if not m:
+        raise ValueError(f"learning_case를 찾지 못했습니다: {sim_path}")
+    return int(m.group(1))

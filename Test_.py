@@ -38,30 +38,31 @@ warnings.filterwarnings('ignore')
 
 parser = argparse.ArgumentParser(description="Run diagnostics plotting with CLI options")
 parser.add_argument("--battery-type", choices=["QAS","DTI"], default="QAS", help="배터리 유형 선택 (DTI fault index range = [77~79], QAS fault index range = [335~392])")
-parser.add_argument("--vehicle-start", type=int, default=0, help="Filtered fault vehicle ID 시작 인덱스")
-parser.add_argument("--vehicle-end", type=int, default=0, help="Filtered fault vehicle ID 끝 인덱스")
-parser.add_argument("--models-dir", type=str, default="./models/260115_141449")
-parser.add_argument("--results-dir", type=str, default="./results2" if os.environ.get("RESULT_DIR") is None else os.environ.get("RESULT_DIR"))
+parser.add_argument("--vehicle-start", type=int, default=10, help="Filtered fault vehicle ID 시작 인덱스")
+parser.add_argument("--vehicle-end", type=int, default=13, help="Filtered fault vehicle ID 끝 인덱스")
+parser.add_argument("--models-dir", type=str, default="./models/260116_162836")
+parser.add_argument("--results-dir", type=str, default="./results5" if os.environ.get("RESULT_DIR") is None else os.environ.get("RESULT_DIR"))
 parser.add_argument("--source-data-dir", type=str, default="./data" if os.environ.get("SOURCE_DIR") is None else os.environ.get("SOURCE_DIR"))
 parser.add_argument("--x-start", type=int, default=20)
 parser.add_argument("--x-tick-step", type=int, default=3000)
 parser.add_argument("--sigma-levels", type=str, default="3,4.5,6")
 parser.add_argument("--normalize-dx", action="store_true")
 parser.add_argument("--normalize-val", type=int, default=4)
-parser.add_argument("--learning-case", type=int, default=1, help="1: Skip and no nomalization, 2: Skip but doing normalization, 3: No skip but doing normalization, 4: No skip and no normalization.")
 args = parser.parse_args()
 
+learning_case = read_learning_case_from_sim_config(args.models_dir)
+
 BATTERY_TYPE = args.battery_type # 'DTI' or 'QAS'
-if args.learning_case == 1:
+if learning_case == 1:
     PREPROCESSING = False
     SKIP_CHARGE_READY = True
-elif args.learning_case == 2:
+elif learning_case == 2:
     PREPROCESSING = True
     SKIP_CHARGE_READY = True
-elif args.learning_case == 3:
+elif learning_case == 3:
     PREPROCESSING = True
     SKIP_CHARGE_READY = False
-elif args.learning_case == 4:
+elif learning_case == 4:
     PREPROCESSING = False
     SKIP_CHARGE_READY = False
     
@@ -80,13 +81,16 @@ print_sim_config(
     config=args,
     extra={
         "device": str(device),
+        "learning_case": learning_case,
+        "PREPROCESSING": PREPROCESSING,
+        "SKIP_CHARGE_READY": SKIP_CHARGE_READY
     },
     # exclude=["password", "token"],  # 민감정보 방지용
     )
 # DTI fault index range = [77~79]
 # QAS fault index range = [335~392]
-# falt_list = np.load(f"./{BATTERY_TYPE}_filtered_vehicle_ids_normal.npy").astype(np.int64).tolist()
-falt_list = np.load(f"./{BATTERY_TYPE}_filtered_vehicle_ids_fault.npy").astype(np.int64).tolist()
+falt_list = np.load(f"./{BATTERY_TYPE}_filtered_vehicle_ids_normal.npy").astype(np.int64).tolist()
+# falt_list = np.load(f"./{BATTERY_TYPE}_filtered_vehicle_ids_fault.npy").astype(np.int64).tolist()
 for i in falt_list[args.vehicle_start:args.vehicle_end+1]:
     VEHICLE_ID = f'{i}'
     path = f'{args.source_data_dir}/{BATTERY_TYPE}/{VEHICLE_ID}/'
@@ -99,7 +103,11 @@ for i in falt_list[args.vehicle_start:args.vehicle_end+1]:
     # lstm.eval()
     # prediction = lstm(test_X)
 
-    net_loaded = CombinedAE(input_size=2, encode2_input_size=3, output_size=110,
+    if PREPROCESSING:
+        net_loaded = CombinedAE(input_size=2, encode2_input_size=3, output_size=110,
+                            activation_fn=torch.sigmoid, use_dx_in_forward=True).to(device)
+    else:
+        net_loaded = CombinedAE(input_size=2, encode2_input_size=3, output_size=110,
                             activation_fn=custom_activation, use_dx_in_forward=True).to(device)
     netx_loaded = CombinedAE(input_size=2, encode2_input_size=4, output_size=110, activation_fn=torch.sigmoid,
                              use_dx_in_forward=True).to(device)
@@ -156,7 +164,7 @@ for i in falt_list[args.vehicle_start:args.vehicle_end+1]:
     ERRORX = BB - yTrainX
 
     df_data = DiagnosisFeature(ERRORU,ERRORX)
-    
+    # results = PCA(df_data,0.99,0.99)
     loads = load_pca_results(args.models_dir)
     (v_I, v, v_ratio, p_k, data_mean, data_std,
         T_95_limit, T_99_limit, SPE_95_limit, SPE_99_limit,
@@ -182,12 +190,14 @@ for i in falt_list[args.vehicle_start:args.vehicle_end+1]:
     #                          x_label="Time",
     #                          y_labels=("T²", "SPE", "CI"),
     #                          figsize=(12, 10),
-    #                          save_path=f"{args.results_dir}/{VEHICLE_ID}_training_diagnostics_case{args.learning_case}.png",
+    #                          save_path=f"{args.results_dir}/{VEHICLE_ID}_training_diagnostics_case{learning_case}.png",
     #                          show=False,
     #                          x_start=args.x_start,
     #                          x_tick_step=args.x_tick_step)
     
     ## =================== Testing Diagnosis =================== ##
+    data_mean = np.mean(df_data, 0)
+    data_std = np.std(df_data, 0)
     t2_array = T2_array(df_data, data_mean, data_std, p_k, v_I)
     spe_array = SPE_array(df_data, data_mean, data_std, p_k)
     CI_array = spe_array / SPE_95_limit + t2_array / T_95_limit
@@ -201,7 +211,7 @@ for i in falt_list[args.vehicle_start:args.vehicle_end+1]:
                              x_label="Time",
                              y_labels=("T²", "SPE", "CI"),
                              figsize=(12, 10),
-                             save_path=f"{args.results_dir}/{VEHICLE_ID}_testing_diagnostics_case{args.learning_case}.png",
+                             save_path=f"{args.results_dir}/{VEHICLE_ID}_testing_diagnostics_case{learning_case}.png",
                              show=False,
                              x_start=args.x_start,
                              x_tick_step=args.x_tick_step)

@@ -166,6 +166,8 @@ with redirect_stdout(buf):
         "device": str(device),
         "Vehicle IDs used for training": vehicle_idxes,
         "Amount of data used for training": combined_tensor.shape[0],
+        "PREPROCESSING": PREPROCESSING,
+        "SKIP_CHARGE_READY": SKIP_CHARGE_READY
     },
     # exclude=["password", "token"],  # 민감정보 방지용
     )
@@ -203,6 +205,12 @@ train_loader_u = DataLoader(Dataset(x_recovered, y_recovered, z_recovered, q_rec
                       shuffle=False)
 
 # Instantiate the networks
+if PREPROCESSING:
+    net = CombinedAE(input_size=2, encode2_input_size=3, output_size=110,
+                        activation_fn=torch.sigmoid, use_dx_in_forward=True).to(device)
+else:
+    net = CombinedAE(input_size=2, encode2_input_size=3, output_size=110,
+                        activation_fn=custom_activation, use_dx_in_forward=True).to(device)
 net = CombinedAE(input_size=2, encode2_input_size=3, output_size=dim_y, activation_fn=custom_activation, use_dx_in_forward=True).to(device)
 netx = CombinedAE(input_size=2, encode2_input_size=4, output_size=dim_y, activation_fn=torch.sigmoid, use_dx_in_forward=True).to(device)
 
