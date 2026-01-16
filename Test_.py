@@ -46,6 +46,8 @@ parser.add_argument("--source-data-dir", type=str, default="./data" if os.enviro
 parser.add_argument("--x-start", type=int, default=20)
 parser.add_argument("--x-tick-step", type=int, default=3000)
 parser.add_argument("--sigma-levels", type=str, default="3,4.5,6")
+parser.add_argument("--normalize-dx", action="store_true")
+parser.add_argument("--normalize-val", type=int, default=4)
 parser.add_argument("--learning-case", type=int, default=1, help="1: Skip and no nomalization, 2: Skip but doing normalization, 3: No skip but doing normalization, 4: No skip and no normalization.")
 args = parser.parse_args()
 
@@ -118,6 +120,9 @@ for i in falt_list[args.vehicle_start:args.vehicle_end+1]:
         cell_div_idxes = list(range(dim_x + dim_y, dim_x + dim_y + dim_z))
         combined_tensor = normalize_columns_0_to_1(combined_tensor[start_idx:, :], exclude_cols=cell_div_idxes)
         combined_tensorx = normalize_columns_0_to_1(combined_tensorx[start_idx:, :], exclude_cols=cell_div_idxes)
+        if args.normalize_dx:
+            combined_tensor[:,range(dim_x + dim_y, dim_x + dim_y + dim_z)] = combined_tensor[:,range(dim_x + dim_y, dim_x + dim_y + dim_z)].div(args.normalize_val)
+            # tensorx[:,range(dim_x2 + dim_y2, dim_x2 + dim_y2 + dim_z2)] = tensorx[:,range(dim_x2 + dim_y2, dim_x2 + dim_y2 + dim_z2)].div(0.1)
 
     if SKIP_CHARGE_READY:
         charge_idx = 224 if BATTERY_TYPE == "QAS" else 174

@@ -48,7 +48,6 @@ filtered_vehicle_ids = np.array([])
 
 start_idxes = []
 for i in range(0, max_idx + 1):
-# for i in range(0, 1):
     VEHICLE_ID = f'{i}'
     PATH = f"./data/data_analysis_start_at_{vin2_start}/{BATTERY_TYPE}-{VEHICLE_ID}"   
 
@@ -75,7 +74,13 @@ for i in range(0, max_idx + 1):
         #     continue
         # tensor = normalize_columns_0_to_1(tensor[start_idx:, :])
         # tensorx = normalize_columns_0_to_1(tensorx[start_idx:, :])
-        
+    
+    # volt_all = pd.DataFrame(tensor[:,dim_x:dim_x+dim_y])
+    # volt_modepi, volt_di = calculate_volt_modepi(pd.DataFrame(tensor[:,dim_x:dim_x+dim_y]))
+    # Temperature = pd.DataFrame(tensor[:,dim_x + dim_y + dim_z])
+    # soc_all = pd.DataFrame(tensorx[:,dim_x + dim_y + dim_z + 1])
+    # current = pd.DataFrame(tensor[:,dim_x + dim_y + dim_z + 2])
+    
     if SKIP_CHARGE_READY:
         charge_idx = 224 if BATTERY_TYPE == "QAS" else 174
         start_idx = last_index_of(tensor, feature_idx=charge_idx, value=-500, operator='<') # -500 means minimum current during charge ready

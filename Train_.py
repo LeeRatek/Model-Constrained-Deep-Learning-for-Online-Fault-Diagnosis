@@ -43,7 +43,9 @@ parser.add_argument("--ae-batchsize", type=int, default=100)
 parser.add_argument("--lstm-epochs", type=int, default=300)
 parser.add_argument("--lstm-lr", type=float, default=5e-4)
 parser.add_argument("--lstm-batchsize", type=int, default=100)
-parser.add_argument("--learning-case", type=int, default=1, help="1: Skip and no nomalization, 2: Skip but doing normalization, 3: No skip but doing normalization, 4: No skip and no normalization.")
+parser.add_argument("--normalize-dx", action="store_true")
+parser.add_argument("--normalize-val", type=int, default=4)
+parser.add_argument("--learning-case", type=int, default=2, help="1: Skip and no nomalization, 2: Skip but doing normalization, 3: No skip but doing normalization, 4: No skip and no normalization.")
 args = parser.parse_args()
 
 
@@ -136,6 +138,10 @@ for i in normal_list[args.vehicle_start:args.vehicle_end+1]:
         cell_div_idxes = list(range(dim_x + dim_y, dim_x + dim_y + dim_z))
         tensor = normalize_columns_0_to_1(tensor[start_idx:, :], exclude_cols=cell_div_idxes)
         tensorx = normalize_columns_0_to_1(tensorx[start_idx:, :], exclude_cols=cell_div_idxes)
+        if args.normalize_dx:
+            tensor[:,range(dim_x + dim_y, dim_x + dim_y + dim_z)] = tensor[:,range(dim_x + dim_y, dim_x + dim_y + dim_z)].div(args.normalize_val)
+            # tensorx[:,range(dim_x2 + dim_y2, dim_x2 + dim_y2 + dim_z2)] = tensorx[:,range(dim_x2 + dim_y2, dim_x2 + dim_y2 + dim_z2)].div(0.1)
+        
     
     if SKIP_CHARGE_READY:
         charge_idx = 224 if BATTERY_TYPE == "QAS" else 174
