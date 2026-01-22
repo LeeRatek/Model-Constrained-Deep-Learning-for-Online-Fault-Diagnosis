@@ -38,11 +38,11 @@ parser.add_argument("--vin1-start", type=int, default=0)
 parser.add_argument("--vin2-start", type=int, default=0)
 parser.add_argument("--vin3-start", type=int, default=0)
 parser.add_argument("--ae-epochs", type=int, default=800)
-parser.add_argument("--ae-lr", type=float, default=5e-4)
+parser.add_argument("--ae-lr", type=float, default=5e-4) # based on original manuscript
 parser.add_argument("--ae-batchsize", type=int, default=100)
 parser.add_argument("--lstm-epochs", type=int, default=300)
-parser.add_argument("--lstm-lr", type=float, default=5e-4)
-parser.add_argument("--lstm-batchsize", type=int, default=100)
+parser.add_argument("--lstm-lr", type=float, default=1e-4) # based on original manuscript
+parser.add_argument("--lstm-batchsize", type=int, default=100) # based on original manuscript
 parser.add_argument("--normalize-dx", action="store_true")
 parser.add_argument("--normalize-val", type=int, default=4)
 parser.add_argument("--learning-case", type=int, default=2, help="1: Skip and no nomalization, 2: Skip but doing normalization, 3: No skip but doing normalization, 4: No skip and no normalization.")
@@ -131,6 +131,12 @@ for i in normal_list[args.vehicle_start:args.vehicle_end+1]:
     
     #----------------------------------------Preprocessing ------------------------------#
     
+    if SKIP_CHARGE_READY:
+        charge_idx = 224 if BATTERY_TYPE == "QAS" else 174
+        start_idx = last_index_of(tensor, feature_idx=charge_idx, value=-500, operator='<') # -500 means minimum current during charge ready
+        tensor = tensor[start_idx:, :]
+        tensorx = tensorx[start_idx:, :]
+    
     if PREPROCESSING:
         start_idx = 0
         start_idx = np.max([start_idx,last_index_of(tensor, feature_idx=0, value=0, operator='<=')]) # 0 means minimum voltage
@@ -141,13 +147,6 @@ for i in normal_list[args.vehicle_start:args.vehicle_end+1]:
         if args.normalize_dx:
             tensor[:,range(dim_x + dim_y, dim_x + dim_y + dim_z)] = tensor[:,range(dim_x + dim_y, dim_x + dim_y + dim_z)].div(args.normalize_val)
             # tensorx[:,range(dim_x2 + dim_y2, dim_x2 + dim_y2 + dim_z2)] = tensorx[:,range(dim_x2 + dim_y2, dim_x2 + dim_y2 + dim_z2)].div(0.1)
-        
-    
-    if SKIP_CHARGE_READY:
-        charge_idx = 224 if BATTERY_TYPE == "QAS" else 174
-        start_idx = last_index_of(tensor, feature_idx=charge_idx, value=-500, operator='<') # -500 means minimum current during charge ready
-        tensor = tensor[start_idx:, :]
-        tensorx = tensorx[start_idx:, :]
     
     if FIRST_LOAD:
         FIRST_LOAD = False
@@ -211,7 +210,6 @@ if PREPROCESSING:
 else:
     net = CombinedAE(input_size=2, encode2_input_size=3, output_size=110,
                         activation_fn=custom_activation, use_dx_in_forward=True).to(device)
-net = CombinedAE(input_size=2, encode2_input_size=3, output_size=dim_y, activation_fn=custom_activation, use_dx_in_forward=True).to(device)
 netx = CombinedAE(input_size=2, encode2_input_size=4, output_size=dim_y, activation_fn=torch.sigmoid, use_dx_in_forward=True).to(device)
 
 optimizer = torch.optim.Adam(net.parameters(), lr=AE_LR)

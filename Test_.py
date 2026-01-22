@@ -38,10 +38,10 @@ warnings.filterwarnings('ignore')
 
 parser = argparse.ArgumentParser(description="Run diagnostics plotting with CLI options")
 parser.add_argument("--battery-type", choices=["QAS","DTI"], default="QAS", help="배터리 유형 선택 (DTI fault index range = [77~79], QAS fault index range = [335~392])")
-parser.add_argument("--vehicle-start", type=int, default=10, help="Filtered fault vehicle ID 시작 인덱스")
-parser.add_argument("--vehicle-end", type=int, default=13, help="Filtered fault vehicle ID 끝 인덱스")
-parser.add_argument("--models-dir", type=str, default="./models/260116_162836")
-parser.add_argument("--results-dir", type=str, default="./results5" if os.environ.get("RESULT_DIR") is None else os.environ.get("RESULT_DIR"))
+parser.add_argument("--vehicle-start", type=int, default=20, help="Filtered fault vehicle ID 시작 인덱스")
+parser.add_argument("--vehicle-end", type=int, default=30, help="Filtered fault vehicle ID 끝 인덱스")
+parser.add_argument("--models-dir", type=str, default="./models/260116_172204")
+parser.add_argument("--results-dir", type=str, default="./results7" if os.environ.get("RESULT_DIR") is None else os.environ.get("RESULT_DIR"))
 parser.add_argument("--source-data-dir", type=str, default="./data" if os.environ.get("SOURCE_DIR") is None else os.environ.get("SOURCE_DIR"))
 parser.add_argument("--x-start", type=int, default=20)
 parser.add_argument("--x-tick-step", type=int, default=3000)
@@ -89,144 +89,145 @@ print_sim_config(
     )
 # DTI fault index range = [77~79]
 # QAS fault index range = [335~392]
-falt_list = np.load(f"./{BATTERY_TYPE}_filtered_vehicle_ids_normal.npy").astype(np.int64).tolist()
+falt_list = [np.load(f"./{BATTERY_TYPE}_filtered_vehicle_ids_normal.npy").astype(np.int64).tolist(), 
+             np.load(f"./{BATTERY_TYPE}_filtered_vehicle_ids_fault.npy").astype(np.int64).tolist()]
 # falt_list = np.load(f"./{BATTERY_TYPE}_filtered_vehicle_ids_fault.npy").astype(np.int64).tolist()
-for i in falt_list[args.vehicle_start:args.vehicle_end+1]:
-    VEHICLE_ID = f'{i}'
-    path = f'{args.source_data_dir}/{BATTERY_TYPE}/{VEHICLE_ID}/'
-    # vin = VIN_data.iloc[i, 0]
-    # print(vin)
+for vehicle_id in falt_list:
+    for i in vehicle_id[args.vehicle_start:args.vehicle_end+1]:
+        VEHICLE_ID = f'{i}'
+        path = f'{args.source_data_dir}/{BATTERY_TYPE}/{VEHICLE_ID}/'
+        # vin = VIN_data.iloc[i, 0]
+        # print(vin)
 
-    # lstm = torch.load('./models/lstm.pth').to(device)
-    # test_X = safe_load(f'{args.source_data_dir}/{BATTERY_TYPE}/{VEHICLE_ID}/vin_1.pkl')
-    # # test
-    # lstm.eval()
-    # prediction = lstm(test_X)
+        # lstm = torch.load('./models/lstm.pth').to(device)
+        # test_X = safe_load(f'{args.source_data_dir}/{BATTERY_TYPE}/{VEHICLE_ID}/vin_1.pkl')
+        # # test
+        # lstm.eval()
+        # prediction = lstm(test_X)
 
-    if PREPROCESSING:
-        net_loaded = CombinedAE(input_size=2, encode2_input_size=3, output_size=110,
-                            activation_fn=torch.sigmoid, use_dx_in_forward=True).to(device)
-    else:
-        net_loaded = CombinedAE(input_size=2, encode2_input_size=3, output_size=110,
-                            activation_fn=custom_activation, use_dx_in_forward=True).to(device)
-    netx_loaded = CombinedAE(input_size=2, encode2_input_size=4, output_size=110, activation_fn=torch.sigmoid,
-                             use_dx_in_forward=True).to(device)
+        if PREPROCESSING:
+            net_loaded = CombinedAE(input_size=2, encode2_input_size=3, output_size=110,
+                                activation_fn=torch.sigmoid, use_dx_in_forward=True).to(device)
+        else:
+            net_loaded = CombinedAE(input_size=2, encode2_input_size=3, output_size=110,
+                                activation_fn=custom_activation, use_dx_in_forward=True).to(device)
+        netx_loaded = CombinedAE(input_size=2, encode2_input_size=4, output_size=110, activation_fn=torch.sigmoid,
+                                use_dx_in_forward=True).to(device)
 
-    net_state_dict = torch.load(os.path.join(args.models_dir, 'net.pth'))
-    net_loaded.load_state_dict(net_state_dict)
+        net_state_dict = torch.load(os.path.join(args.models_dir, 'net.pth'))
+        net_loaded.load_state_dict(net_state_dict)
 
-    netx_state_dict = torch.load(os.path.join(args.models_dir, 'netx.pth'))
-    netx_loaded.load_state_dict(netx_state_dict)
-    
-    combined_tensor = safe_load(f'{args.source_data_dir}/{BATTERY_TYPE}/{VEHICLE_ID}/vin_2.pkl')
-    combined_tensorx = safe_load(f'{args.source_data_dir}/{BATTERY_TYPE}/{VEHICLE_ID}/vin_3.pkl')
-    
-    
-    if PREPROCESSING:
-        start_idx = 0
-        start_idx = np.max([start_idx,last_index_of(combined_tensor, feature_idx=0, value=0, operator='<=')]) # 0 means minimum voltage
-        start_idx = np.max([start_idx,last_index_of(combined_tensor, feature_idx=0, value=5, operator='>')]) # 5 means maximum voltage
-        cell_div_idxes = list(range(dim_x + dim_y, dim_x + dim_y + dim_z))
-        combined_tensor = normalize_columns_0_to_1(combined_tensor[start_idx:, :], exclude_cols=cell_div_idxes)
-        combined_tensorx = normalize_columns_0_to_1(combined_tensorx[start_idx:, :], exclude_cols=cell_div_idxes)
-        if args.normalize_dx:
-            combined_tensor[:,range(dim_x + dim_y, dim_x + dim_y + dim_z)] = combined_tensor[:,range(dim_x + dim_y, dim_x + dim_y + dim_z)].div(args.normalize_val)
-            # tensorx[:,range(dim_x2 + dim_y2, dim_x2 + dim_y2 + dim_z2)] = tensorx[:,range(dim_x2 + dim_y2, dim_x2 + dim_y2 + dim_z2)].div(0.1)
+        netx_state_dict = torch.load(os.path.join(args.models_dir, 'netx.pth'))
+        netx_loaded.load_state_dict(netx_state_dict)
+        
+        combined_tensor = safe_load(f'{args.source_data_dir}/{BATTERY_TYPE}/{VEHICLE_ID}/vin_2.pkl')
+        combined_tensorx = safe_load(f'{args.source_data_dir}/{BATTERY_TYPE}/{VEHICLE_ID}/vin_3.pkl')
+        
+        if SKIP_CHARGE_READY:
+            charge_idx = 224 if BATTERY_TYPE == "QAS" else 174
+            start_idx = last_index_of(combined_tensor, feature_idx=charge_idx, value=-500, operator='<') # -500 means minimum current during charge ready
+            combined_tensor = combined_tensor[start_idx:, :]
+            combined_tensorx = combined_tensorx[start_idx:, :]
+        
+        if PREPROCESSING:
+            start_idx = 0
+            start_idx = np.max([start_idx,last_index_of(combined_tensor, feature_idx=0, value=0, operator='<=')]) # 0 means minimum voltage
+            start_idx = np.max([start_idx,last_index_of(combined_tensor, feature_idx=0, value=5, operator='>')]) # 5 means maximum voltage
+            cell_div_idxes = list(range(dim_x + dim_y, dim_x + dim_y + dim_z))
+            combined_tensor = normalize_columns_0_to_1(combined_tensor[start_idx:, :], exclude_cols=cell_div_idxes)
+            combined_tensorx = normalize_columns_0_to_1(combined_tensorx[start_idx:, :], exclude_cols=cell_div_idxes)
+            if args.normalize_dx:
+                combined_tensor[:,range(dim_x + dim_y, dim_x + dim_y + dim_z)] = combined_tensor[:,range(dim_x + dim_y, dim_x + dim_y + dim_z)].div(args.normalize_val)
+                # tensorx[:,range(dim_x2 + dim_y2, dim_x2 + dim_y2 + dim_z2)] = tensorx[:,range(dim_x2 + dim_y2, dim_x2 + dim_y2 + dim_z2)].div(0.1)
+        
+        # Use indexing to separate
+        x_recovered = combined_tensor[:, :dim_x]
+        y_recovered = combined_tensor[:, dim_x:dim_x + dim_y]
+        z_recovered = combined_tensor[:, dim_x + dim_y: dim_x + dim_y + dim_z]
+        q_recovered = combined_tensor[:, dim_x + dim_y + dim_z:]
+        net_loaded = net_loaded.double()
+        recon_imtest = net_loaded(x_recovered, z_recovered, q_recovered)
 
-    if SKIP_CHARGE_READY:
-        charge_idx = 224 if BATTERY_TYPE == "QAS" else 174
-        start_idx = last_index_of(combined_tensor, feature_idx=charge_idx, value=-500, operator='<') # -500 means minimum current during charge ready
-        combined_tensor = combined_tensor[start_idx:, :]
-        combined_tensorx = combined_tensorx[start_idx:, :]
-    
-    # Use indexing to separate
-    x_recovered = combined_tensor[:, :dim_x]
-    y_recovered = combined_tensor[:, dim_x:dim_x + dim_y]
-    z_recovered = combined_tensor[:, dim_x + dim_y: dim_x + dim_y + dim_z]
-    q_recovered = combined_tensor[:, dim_x + dim_y + dim_z:]
-    net_loaded = net_loaded.double()
-    recon_imtest = net_loaded(x_recovered, z_recovered, q_recovered)
+        # Use indexing to separate
+        x_recovered2 = combined_tensorx[:, :dim_x2]
+        y_recovered2 = combined_tensorx[:, dim_x2:dim_x2 + dim_y2]
+        z_recovered2 = combined_tensorx[:, dim_x2 + dim_y2: dim_x2 + dim_y2 + dim_z2]
+        q_recovered2 = combined_tensorx[:, dim_x2 + dim_y2 + dim_z2:]
+        netx_loaded = netx_loaded.double()
+        reconx_imtest = netx_loaded(x_recovered2, z_recovered2, q_recovered2)
 
-    # Use indexing to separate
-    x_recovered2 = combined_tensorx[:, :dim_x2]
-    y_recovered2 = combined_tensorx[:, dim_x2:dim_x2 + dim_y2]
-    z_recovered2 = combined_tensorx[:, dim_x2 + dim_y2: dim_x2 + dim_y2 + dim_z2]
-    q_recovered2 = combined_tensorx[:, dim_x2 + dim_y2 + dim_z2:]
-    netx_loaded = netx_loaded.double()
-    reconx_imtest = netx_loaded(x_recovered2, z_recovered2, q_recovered2)
+        AA = recon_imtest[0].cpu().detach().numpy()
+        yTrainU = y_recovered.cpu().detach().numpy()
+        ERRORU = AA - yTrainU
 
-    AA = recon_imtest[0].cpu().detach().numpy()
-    yTrainU = y_recovered.cpu().detach().numpy()
-    ERRORU = AA - yTrainU
+        BB = reconx_imtest[0].cpu().detach().numpy()
+        yTrainX = y_recovered2.cpu().detach().numpy()
+        ERRORX = BB - yTrainX
 
-    BB = reconx_imtest[0].cpu().detach().numpy()
-    yTrainX = y_recovered2.cpu().detach().numpy()
-    ERRORX = BB - yTrainX
+        df_data = DiagnosisFeature(ERRORU,ERRORX)
+        # results = PCA(df_data,0.99,0.99)
+        loads = load_pca_results(args.models_dir)
+        (v_I, v, v_ratio, p_k, data_mean, data_std,
+            T_95_limit, T_99_limit, SPE_95_limit, SPE_99_limit,
+            P, k, P_t, X, data_nor) = loads
+        
+        sigma_levels = [float(s.strip()) for s in args.sigma_levels.split(',') if s.strip()]
+        pi, g, h = chi_square_dist_components(p_k, v_I, X, SPE_95_limit, T_95_limit)
+        thresholds = diagnosis_thresholds(g, h, sigma_levels=sigma_levels, show_plot=False)
+        
+        ## =================== Training Diagnosis =================== ##
+        # training_data = (data_nor * data_std) + data_mean
+        # t2_array_train = T2_array(training_data, data_mean, data_std, p_k, v_I)
+        # spe_array_train = SPE_array(training_data, data_mean, data_std, p_k)
+        # CI_array_train = spe_array_train / SPE_95_limit + t2_array_train / T_95_limit
+        
+        
+        # plot_diagnostics_triplet(t2_array_train,
+        #                          spe_array_train,
+        #                          CI_array_train,
+        #                          thresholds,
+        #                          sigma_levels=sigma_levels,
+        #                          title="Training",
+        #                          x_label="Time",
+        #                          y_labels=("T²", "SPE", "CI"),
+        #                          figsize=(12, 10),
+        #                          save_path=f"{args.models_dir}/results/{VEHICLE_ID}_testing_diagnostics_case{learning_case}.png",
+        #                          show=False,
+        #                          x_start=args.x_start,
+        #                          x_tick_step=args.x_tick_step)
+        
+        ## =================== Testing Diagnosis =================== ##
+        # data_mean = np.mean(df_data, 0)
+        # data_std = np.std(df_data, 0)
+        t2_array = T2_array(df_data, data_mean, data_std, p_k, v_I)
+        spe_array = SPE_array(df_data, data_mean, data_std, p_k)
+        CI_array = spe_array / SPE_95_limit + t2_array / T_95_limit
+        
+        plot_diagnostics_triplet(t2_array,
+                                spe_array,
+                                CI_array,
+                                thresholds,
+                                sigma_levels=sigma_levels,
+                                title="Test",
+                                x_label="Time",
+                                y_labels=("T²", "SPE", "CI"),
+                                figsize=(12, 10),
+                                save_path=f"{args.models_dir}/results/{VEHICLE_ID}_testing_diagnostics_case{learning_case}.png",
+                                show=False,
+                                x_start=args.x_start,
+                                x_tick_step=args.x_tick_step)
+        
+        print("Done")    
 
-    df_data = DiagnosisFeature(ERRORU,ERRORX)
-    # results = PCA(df_data,0.99,0.99)
-    loads = load_pca_results(args.models_dir)
-    (v_I, v, v_ratio, p_k, data_mean, data_std,
-        T_95_limit, T_99_limit, SPE_95_limit, SPE_99_limit,
-        P, k, P_t, X, data_nor) = loads
-    
-    sigma_levels = [float(s.strip()) for s in args.sigma_levels.split(',') if s.strip()]
-    pi, g, h = chi_square_dist_components(p_k, v_I, X, SPE_95_limit, T_95_limit)
-    thresholds = diagnosis_thresholds(g, h, sigma_levels=sigma_levels, show_plot=False)
-    
-    ## =================== Training Diagnosis =================== ##
-    # training_data = (data_nor * data_std) + data_mean
-    # t2_array_train = T2_array(training_data, data_mean, data_std, p_k, v_I)
-    # spe_array_train = SPE_array(training_data, data_mean, data_std, p_k)
-    # CI_array_train = spe_array_train / SPE_95_limit + t2_array_train / T_95_limit
-    
-    
-    # plot_diagnostics_triplet(t2_array_train,
-    #                          spe_array_train,
-    #                          CI_array_train,
-    #                          thresholds,
-    #                          sigma_levels=sigma_levels,
-    #                          title="Training",
-    #                          x_label="Time",
-    #                          y_labels=("T²", "SPE", "CI"),
-    #                          figsize=(12, 10),
-    #                          save_path=f"{args.results_dir}/{VEHICLE_ID}_training_diagnostics_case{learning_case}.png",
-    #                          show=False,
-    #                          x_start=args.x_start,
-    #                          x_tick_step=args.x_tick_step)
-    
-    ## =================== Testing Diagnosis =================== ##
-    data_mean = np.mean(df_data, 0)
-    data_std = np.std(df_data, 0)
-    t2_array = T2_array(df_data, data_mean, data_std, p_k, v_I)
-    spe_array = SPE_array(df_data, data_mean, data_std, p_k)
-    CI_array = spe_array / SPE_95_limit + t2_array / T_95_limit
-    
-    plot_diagnostics_triplet(t2_array,
-                             spe_array,
-                             CI_array,
-                             thresholds,
-                             sigma_levels=sigma_levels,
-                             title="Test",
-                             x_label="Time",
-                             y_labels=("T²", "SPE", "CI"),
-                             figsize=(12, 10),
-                             save_path=f"{args.results_dir}/{VEHICLE_ID}_testing_diagnostics_case{learning_case}.png",
-                             show=False,
-                             x_start=args.x_start,
-                             x_tick_step=args.x_tick_step)
-    
-    print("Done")    
-
-    # lamda, CONTN, t_total, q_total, S, FAI, g, h, kesi, fai,  f_time, level, maxlevel, contTT, contQ, X_ratio, CContn, data_mean, data_std = chi_square_dist_components(
-    #     df_data.values, data_mean, data_std, v.reshape(len(v),1), p_k, v_I, T_99_limit, SPE_99_limit, X, time)
-    #
-    # nm = 3000
-    # mm = len(fai)
-    #
-    # threshold1 = np.mean(fai[nm:mm]) + 3*np.std(fai[nm:mm])
-    # threshold2 = np.mean(fai[nm:mm]) + 4.5*np.std(fai[nm:mm])
-    # threshold3 = np.mean(fai[nm:mm]) + 6*np.std(fai[nm:mm])
+        # lamda, CONTN, t_total, q_total, S, FAI, g, h, kesi, fai,  f_time, level, maxlevel, contTT, contQ, X_ratio, CContn, data_mean, data_std = chi_square_dist_components(
+        #     df_data.values, data_mean, data_std, v.reshape(len(v),1), p_k, v_I, T_99_limit, SPE_99_limit, X, time)
+        #
+        # nm = 3000
+        # mm = len(fai)
+        #
+        # threshold1 = np.mean(fai[nm:mm]) + 3*np.std(fai[nm:mm])
+        # threshold2 = np.mean(fai[nm:mm]) + 4.5*np.std(fai[nm:mm])
+        # threshold3 = np.mean(fai[nm:mm]) + 6*np.std(fai[nm:mm])
 
 
 

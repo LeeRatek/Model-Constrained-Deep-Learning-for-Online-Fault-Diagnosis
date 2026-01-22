@@ -1094,7 +1094,7 @@ def get_start_index(tensor, feature_idx):
 
 def is_abnormal(tensor):
     abnormal_data = False
-    if last_index_of(tensor, 0, operator='<') != 0 or last_index_of(tensor, 5, operator='>') != 0:
+    if last_index_of(tensor, 0, 0, operator='<') != 0 or last_index_of(tensor, 5, operator='>') != 0:
         abnormal_data = True
     return abnormal_data
 
@@ -1186,6 +1186,195 @@ def normalize_columns_0_to_1(X, eps=1e-12, exclude_cols=None, exclude_ranges=Non
         out = A.copy()
         out[:, mask] = (A_sel - col_min) / denom
         return out
+
+
+def normalize_columns_by_mean_var(X, eps=1e-12, exclude_cols=None, exclude_ranges=None, return_var: bool = False):
+    """입력 행렬의 각 열을 (y - mu_y) / var_y 로 정규화합니다.
+
+    - torch.Tensor와 numpy.ndarray 모두 지원합니다.
+    - var_y(분산)가 0인 열은 eps로 치환합니다.
+    - 특정 열(또는 열 구간)을 정규화에서 제외할 수 있습니다.
+
+    Args:
+        X: (n×m) 배열/텐서
+        eps: 분모(var)가 0일 때 사용할 작은 값
+        exclude_cols: 정규화에서 제외할 컬럼 인덱스들(0-based). 예: [0, 1, 2]
+        exclude_ranges: 정규화에서 제외할 컬럼 구간들(0-based, inclusive).
+            예: [(110, 220)]  -> 110~220 컬럼은 정규화하지 않음
+
+    Returns:
+        return_var=False: 동일 타입(torch.Tensor 또는 np.ndarray)의 정규화된 행렬
+        return_var=True : (정규화된 행렬, 정규화 이전 var 벡터)
+    """
+
+    def _build_normalize_mask(n_cols: int):
+        mask = np.ones(n_cols, dtype=bool)
+
+        if exclude_cols is not None:
+            for c in exclude_cols:
+                try:
+                    ci = int(c)
+                except Exception:
+                    continue
+                if 0 <= ci < n_cols:
+                    mask[ci] = False
+
+        if exclude_ranges is not None:
+            for r in exclude_ranges:
+                if r is None:
+                    continue
+                try:
+                    start, end = r
+                except Exception:
+                    continue
+                try:
+                    start_i = int(start)
+                    end_i = int(end)
+                except Exception:
+                    continue
+                if end_i < start_i:
+                    start_i, end_i = end_i, start_i
+                start_i = max(start_i, 0)
+                end_i = min(end_i, n_cols - 1)
+                if start_i <= end_i:
+                    mask[start_i : end_i + 1] = False
+
+        return mask
+
+    if isinstance(X, torch.Tensor):
+        Xf = X.to(dtype=torch.float64)
+        if Xf.ndim != 2:
+            raise ValueError(f"Expected 2D tensor (n×m), got shape {tuple(Xf.shape)}")
+
+        # 정규화 이전(원본 기준) 전체 열 분산
+        var_before = Xf.var(dim=0, unbiased=False)
+
+        n_cols = int(Xf.shape[1])
+        np_mask = _build_normalize_mask(n_cols)
+        if not np.any(np_mask):
+            return (Xf, var_before) if return_var else Xf
+
+        col_mask = torch.as_tensor(np_mask, dtype=torch.bool, device=Xf.device)
+        X_sel = Xf[:, col_mask]
+        mu = X_sel.mean(dim=0, keepdim=True)
+        var = X_sel.var(dim=0, keepdim=True, unbiased=False)
+        denom = torch.clamp(var, min=eps)
+
+        out = Xf.clone()
+        out[:, col_mask] = (X_sel - mu) / denom
+        return (out, var_before) if return_var else out
+
+    A = np.asarray(X, dtype=float)
+    if A.ndim != 2:
+        raise ValueError(f"Expected 2D array (n×m), got shape {A.shape}")
+
+    # 정규화 이전(원본 기준) 전체 열 분산
+    var_before = np.var(A, axis=0)
+
+    n_cols = int(A.shape[1])
+    mask = _build_normalize_mask(n_cols)
+    if not np.any(mask):
+        return (A, var_before) if return_var else A
+
+    A_sel = A[:, mask]
+    mu = np.mean(A_sel, axis=0, keepdims=True)
+    var = np.var(A_sel, axis=0, keepdims=True)
+    denom = np.maximum(var, eps)
+
+    out = A.copy()
+    out[:, mask] = (A_sel - mu) / denom
+    return (out, var_before) if return_var else out
+
+
+def normalize_columns_by_mean_std(X, eps=1e-12, exclude_cols=None, exclude_ranges=None):
+    """입력 행렬의 각 열을 (y - mu_y) / sigma_y 로 정규화합니다.
+
+    - torch.Tensor와 numpy.ndarray 모두 지원합니다.
+    - sigma_y(표준편차)가 0인 열은 eps로 치환합니다.
+    - 특정 열(또는 열 구간)을 정규화에서 제외할 수 있습니다.
+
+    Args:
+        X: (n×m) 배열/텐서
+        eps: 분모(std)가 0일 때 사용할 작은 값
+        exclude_cols: 정규화에서 제외할 컬럼 인덱스들(0-based). 예: [0, 1, 2]
+        exclude_ranges: 정규화에서 제외할 컬럼 구간들(0-based, inclusive).
+            예: [(110, 220)]  -> 110~220 컬럼은 정규화하지 않음
+
+    Returns:
+        동일 타입(torch.Tensor 또는 np.ndarray)의 정규화된 행렬
+    """
+
+    def _build_normalize_mask(n_cols: int):
+        mask = np.ones(n_cols, dtype=bool)
+
+        if exclude_cols is not None:
+            for c in exclude_cols:
+                try:
+                    ci = int(c)
+                except Exception:
+                    continue
+                if 0 <= ci < n_cols:
+                    mask[ci] = False
+
+        if exclude_ranges is not None:
+            for r in exclude_ranges:
+                if r is None:
+                    continue
+                try:
+                    start, end = r
+                except Exception:
+                    continue
+                try:
+                    start_i = int(start)
+                    end_i = int(end)
+                except Exception:
+                    continue
+                if end_i < start_i:
+                    start_i, end_i = end_i, start_i
+                start_i = max(start_i, 0)
+                end_i = min(end_i, n_cols - 1)
+                if start_i <= end_i:
+                    mask[start_i : end_i + 1] = False
+
+        return mask
+
+    if isinstance(X, torch.Tensor):
+        Xf = X.to(dtype=torch.float64)
+        if Xf.ndim != 2:
+            raise ValueError(f"Expected 2D tensor (n×m), got shape {tuple(Xf.shape)}")
+
+        n_cols = int(Xf.shape[1])
+        np_mask = _build_normalize_mask(n_cols)
+        if not np.any(np_mask):
+            return Xf
+
+        col_mask = torch.as_tensor(np_mask, dtype=torch.bool, device=Xf.device)
+        X_sel = Xf[:, col_mask]
+        mu = X_sel.mean(dim=0, keepdim=True)
+        std = X_sel.std(dim=0, keepdim=True, unbiased=False)
+        denom = torch.clamp(std, min=eps)
+
+        out = Xf.clone()
+        out[:, col_mask] = (X_sel - mu) / denom
+        return out
+
+    A = np.asarray(X, dtype=float)
+    if A.ndim != 2:
+        raise ValueError(f"Expected 2D array (n×m), got shape {A.shape}")
+
+    n_cols = int(A.shape[1])
+    mask = _build_normalize_mask(n_cols)
+    if not np.any(mask):
+        return A
+
+    A_sel = A[:, mask]
+    mu = np.mean(A_sel, axis=0, keepdims=True)
+    std = np.std(A_sel, axis=0, keepdims=True)
+    denom = np.maximum(std, eps)
+
+    out = A.copy()
+    out[:, mask] = (A_sel - mu) / denom
+    return out
     
 def _as_mapping(config: Any) -> dict:
     """Namespace/dict/dataclass/object 모두 dict 비슷하게 변환."""
