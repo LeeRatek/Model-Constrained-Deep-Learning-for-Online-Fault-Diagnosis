@@ -23,94 +23,58 @@ class MODE(IntEnum):
     FILTER_MODE = 2
     ANALYSIS_MODE = 3
 
-mode = MODE.ANALYSIS_MODE
+mode = MODE.PLOT_MODE
 LSTM_LOAD = False
 FIRST_LOAD = True
 BATTERY_TYPE = "QAS" # 'DTI' or 'QAS'
-PREPROCESSING = True
 SKIP_CHARGE_READY = True
-
-dim_x = 2 # [estimated pack voltage 1, estimated pack volatage 2]
-dim_y = 110 if BATTERY_TYPE == 'QAS' else 85 # DTI 일경우 85 이고 QAS일 경우 110인듯 [각 셀의 voltage]
-dim_z = 110 if BATTERY_TYPE == 'QAS' else 85 # DTI 일경우 85 이고 QAS일 경우 110인듯 [각 셀의 estimated voltage diviation]
-dim_q = 3 # [Board Temperature, Board-end SOC, Current]
-
-dim_x2 = 2 # [estimated pack SOC 1, estimated pack SOC 2]
-dim_y2 = 110 if BATTERY_TYPE == 'QAS' else 85 # DTI 일경우 85 이고 QAS일 경우 110인듯 [각 셀의 SOC]
-dim_z2 = 110 if BATTERY_TYPE == 'QAS' else 85 # DTI 일경우 85 이고 QAS일 경우 110인듯 [각 셀의 estimated SOC diviation]
-dim_q2= 4 # [Board Temperature, Board-end SOC, Velocity, Current]
+PREPROCESSING = False
+dim_dict = get_input_dimensions(BATTERY_TYPE)
 
 max_idx = 392 if BATTERY_TYPE == "QAS" else 79
 fault_idx = 335 if BATTERY_TYPE == "QAS" else 77
 # "QAS" = [0~392], "DTI" = [0~79]
 filtered_vehicle_ids = np.array([])
-(vin1_start, vin2_start, vin3_start) = (200, 200, 200)
+(vin1_start, vin2_start, vin3_start) = (0, 0, 0)
 
 start_idxes = []
-# for i in range(0, max_idx + 1):
-for i in [369]:
+# vehicle_ids = range(0, max_idx + 1) if mode is not MODE.FILTER_MODE else []
+for i in range(0, max_idx + 1):
     VEHICLE_ID = f'{i}'
-    PATH = f"./data/data_analysis_start_at_{vin2_start}/{BATTERY_TYPE}-{VEHICLE_ID}"   
+    PATH = f"./data/data_analysis_at_charge_{vin2_start}/{BATTERY_TYPE}-{VEHICLE_ID}"   
 
     #----------------------------------------Data loading for LSTM (customized) ------------------------------
     if LSTM_LOAD:
-        test_X = safe_load(f'./data/{BATTERY_TYPE}/{VEHICLE_ID}/vin_1.pkl')
+        test_X = safe_load(f'./data/{BATTERY_TYPE}/{VEHICLE_ID}/vin_1.pkl', verbose=False)
 
     #----------------------------------------Data loading for MC-AE (customized) ------------------------------
-    tensor = safe_load(f'./data/{BATTERY_TYPE}/{VEHICLE_ID}/vin_2.pkl')
-    tensorx= safe_load(f'./data/{BATTERY_TYPE}/{VEHICLE_ID}/vin_3.pkl')
+    tensor = safe_load(f'./data/{BATTERY_TYPE}/{VEHICLE_ID}/vin_2.pkl', verbose=False)
+    tensorx= safe_load(f'./data/{BATTERY_TYPE}/{VEHICLE_ID}/vin_3.pkl', verbose=False)
     
     
-    volt_all = pd.DataFrame(tensor[:,dim_x:dim_x+dim_y])
-    volt_modepi, volt_di = calculate_volt_modepi(pd.DataFrame(tensor[:,dim_x:dim_x+dim_y]))
-    Temperature = pd.DataFrame(tensor[:,dim_x + dim_y + dim_z])
-    soc_all = pd.DataFrame(tensorx[:,dim_x + dim_y + dim_z + 1])
-    current = pd.DataFrame(tensor[:,dim_x + dim_y + dim_z + 2])
+    volt_all = pd.DataFrame(tensor[:,dim_dict["x"]:dim_dict["x"]+dim_dict["y"]])
+    volt_modepi, volt_di = calculate_volt_modepi(pd.DataFrame(tensor[:,dim_dict["x"]:dim_dict["x"]+dim_dict["y"]]))
+    Temperature = pd.DataFrame(tensor[:,dim_dict["x"] + dim_dict["y"] + dim_dict["z"]])
+    soc_all = pd.DataFrame(tensorx[:,dim_dict["x"] + dim_dict["y"] + dim_dict["z"] + 1])
+    current = pd.DataFrame(tensor[:,dim_dict["x"] + dim_dict["y"] + dim_dict["z"] + 2])
     
-    if SKIP_CHARGE_READY:
-        charge_idx = 224 if BATTERY_TYPE == "QAS" else 174
-        start_idx = last_index_of(tensor, feature_idx=charge_idx, value=-500, operator='<') # -500 means minimum current during charge ready
-        tensor = tensor[start_idx:, :]
-        tensorx = tensorx[start_idx:, :]
-    
-    if PREPROCESSING:
-        start_idx = 0
-        start_idx = np.max([start_idx,last_index_of(tensor, feature_idx=0, value=0, operator='<=')]) # 0 means minimum voltage
-        start_idx = np.max([start_idx,last_index_of(tensor, feature_idx=0, value=5, operator='>')]) # 5 means maximum voltage
-        cell_div_idxes = list(range(dim_x + dim_y, dim_x + dim_y + dim_z))
-        # tensor = normalize_columns_0_to_1(tensor[start_idx:, :], exclude_cols=cell_div_idxes)
-        # tensorx = normalize_columns_0_to_1(tensorx[start_idx:, :], exclude_cols=cell_div_idxes)
-        # tensor = normalize_columns_by_mean_std(tensor[start_idx:, :], exclude_cols=cell_div_idxes)
-        # tensorx = normalize_columns_by_mean_std(tensorx[start_idx:, :], exclude_cols=cell_div_idxes)
-        tensor = normalize_columns_by_mean_std(tensor[start_idx:, :])
-        tensorx = normalize_columns_by_mean_std(tensorx[start_idx:, :])
-        # if np.min(np.array(tensor)[start_idx:,0]) < 0:
-        #     print(f"Vehicle ID {i} has negative voltage data, skipping.")
-        #     continue
-        # elif np.max(np.array(tensor)[start_idx:,0]) > 5:
-        #     print(f"Vehicle ID {i} has abnormally high voltage data, skipping.")
-        #     continue
-        # tensor = normalize_columns_0_to_1(tensor[start_idx:, :])
-        # tensorx = normalize_columns_0_to_1(tensorx[start_idx:, :])    
-        
-        # if is_abnormal(tensor):
-        #     print(f"Vehicle ID {i} has abnormal voltage data, skipping.")
-        #     continue
-        
-        start_idxes.append(start_idx)
-
-    filtered_vehicle_ids = np.append(filtered_vehicle_ids, i)
+    tensor, tensorx = preprocess_combined_tensor(tensor, tensorx, dim_dict, 
+                                                BATTERY_TYPE, PREPROCESSING, SKIP_CHARGE_READY)
+    if is_abnormal(tensor):
+        print(f"Vehicle ID {i} is filtered out due to abnormal data.")
+        continue
+    filtered_vehicle_ids = np.append(filtered_vehicle_ids, i) # TBD
     
     # ---------------------------------------- Data normalization ------------------------------
     if mode == MODE.PLOT_MODE:
         # plot_testX_timeseries(test_X, feature_names="Data for LSTM", title="vin1", figsize=(12, 6), save_path=f'{PATH}/vin1', show=False, seperate=True, start_idx=vin1_start)
-        plot_testX_timeseries(tensor, feature_names="Data for voltage estimation", title="vin2", figsize=(12, 6), save_path=f'{PATH}/vin2', show=False, seperate=True, start_idx=vin2_start, _range=[0,dim_x+2])
-        plot_testX_timeseries(tensor, feature_names="Data for voltage estimation", title="vin2", figsize=(12, 6), save_path=f'{PATH}/vin2', show=False, seperate=True, start_idx=vin2_start, _range=[dim_x + dim_y,dim_x + dim_y + 2])
-        plot_testX_timeseries(tensor, feature_names="Data for voltage estimation", title="vin2", figsize=(12, 6), save_path=f'{PATH}/vin2', show=False, seperate=True, start_idx=vin2_start, _range=[dim_x + dim_y + dim_z,dim_x + dim_y + dim_z + dim_q - 1])
+        plot_testX_timeseries(tensor, feature_names="Data for voltage estimation", title="vin2", figsize=(12, 6), save_path=f'{PATH}/vin2', show=False, seperate=True, start_idx=vin2_start, _range=[0,dim_dict["x"]+2])
+        plot_testX_timeseries(tensor, feature_names="Data for voltage estimation", title="vin2", figsize=(12, 6), save_path=f'{PATH}/vin2', show=False, seperate=True, start_idx=vin2_start, _range=[dim_dict["x"] + dim_dict["y"],dim_dict["x"] + dim_dict["y"] + 2])
+        plot_testX_timeseries(tensor, feature_names="Data for voltage estimation", title="vin2", figsize=(12, 6), save_path=f'{PATH}/vin2', show=False, seperate=True, start_idx=vin2_start, _range=[dim_dict["x"] + dim_dict["y"] + dim_dict["z"],dim_dict["x"] + dim_dict["y"] + dim_dict["z"] + dim_dict["q"] - 1])
         # plot_testX_timeseries(combined_tensor, feature_names="Data for voltage estimation", title="vin2", figsize=(12, 6), save_path=f'{PATH}/vin2', show=False, seperate=True, start_idx=1000, _range=[0,combined_tensor.shape[-1]])
-        plot_testX_timeseries(tensorx, feature_names="Data for SOC estimation", title="vin3", figsize=(12, 6), save_path=f'{PATH}/vin3', show=False, seperate=True, start_idx=vin3_start, _range=[0,dim_x2+2])
-        plot_testX_timeseries(tensorx, feature_names="Data for SOC estimation", title="vin3", figsize=(12, 6), save_path=f'{PATH}/vin3', show=False, seperate=True, start_idx=vin3_start, _range=[dim_x2 + dim_y2,dim_x2 + dim_y2 + 2])
-        plot_testX_timeseries(tensorx, feature_names="Data for SOC estimation", title="vin3", figsize=(12, 6), save_path=f'{PATH}/vin3', show=False, seperate=True, start_idx=vin3_start, _range=[dim_x2 + dim_y2 + dim_z2,dim_x2 + dim_y2 + dim_z2 + dim_q2 - 1])
+        plot_testX_timeseries(tensorx, feature_names="Data for SOC estimation", title="vin3", figsize=(12, 6), save_path=f'{PATH}/vin3', show=False, seperate=True, start_idx=vin3_start, _range=[0,dim_dict["x2"]+2])
+        plot_testX_timeseries(tensorx, feature_names="Data for SOC estimation", title="vin3", figsize=(12, 6), save_path=f'{PATH}/vin3', show=False, seperate=True, start_idx=vin3_start, _range=[dim_dict["x2"] + dim_dict["y2"],dim_dict["x2"] + dim_dict["y2"] + 2])
+        plot_testX_timeseries(tensorx, feature_names="Data for SOC estimation", title="vin3", figsize=(12, 6), save_path=f'{PATH}/vin3', show=False, seperate=True, start_idx=vin3_start, _range=[dim_dict["x2"] + dim_dict["y2"] + dim_dict["z2"],dim_dict["x2"] + dim_dict["y2"] + dim_dict["z2"] + dim_dict["q2"] - 1])
         
     elif mode == MODE.ANALYSIS_MODE:
         if FIRST_LOAD:
@@ -132,28 +96,35 @@ if mode == MODE.FILTER_MODE:
     normal_list = [i for i in filtered_vehicle_ids if i < fault_idx]
     np.save(f"./{BATTERY_TYPE}_filtered_vehicle_ids_normal.npy", np.array(normal_list))
     np.save(f"./{BATTERY_TYPE}_filtered_vehicle_ids_fault.npy", np.array(fault_list))
+    train_list = np.random.choice(normal_list, size=109, replace=False)
+    train_list.sort()
+    remain_list = [vid for vid in normal_list if vid not in set(train_list)]
+    validate_list = np.random.choice(remain_list, size=50, replace=False)
+    validate_list.sort()
+    test_list = [vid for vid in remain_list if vid not in set(validate_list)]
+    test_list.sort()
     exit()
 
 narray1 = np.array(combined_tensor)
 narray2 = np.array(combined_tensor)
 upre1 = narray1[:,0]
 upre2 = narray1[:,1]
-temp = narray1[:,dim_x + dim_y + dim_z]
-soc = narray1[:,dim_x + dim_y + dim_z + 1]
-current = narray1[:,dim_x + dim_y + dim_z + 2]
-u1 = narray1[:,dim_x]
-d_u1 = narray1[:,dim_x + dim_y]
-u2 = narray1[:,dim_x +1 ]
-d_u2 = narray1[:,dim_x + dim_y + 1]
-d_soc1 = narray2[:,dim_x2 + dim_y2]
-d_soc2 = narray2[:,dim_x2 + dim_y2 + 1]
-for i in range(dim_y):
+temp = narray1[:,dim_dict["x"] + dim_dict["y"] + dim_dict["z"]]
+soc = narray1[:,dim_dict["x"] + dim_dict["y"] + dim_dict["z"] + 1]
+current = narray1[:,dim_dict["x"] + dim_dict["y"] + dim_dict["z"] + 2]
+u1 = narray1[:,dim_dict["x"]]
+d_u1 = narray1[:,dim_dict["x"] + dim_dict["y"]]
+u2 = narray1[:,dim_dict["x"] +1 ]
+d_u2 = narray1[:,dim_dict["x"] + dim_dict["y"] + 1]
+d_soc1 = narray2[:,dim_dict["x2"] + dim_dict["y2"]]
+d_soc2 = narray2[:,dim_dict["x2"] + dim_dict["y2"] + 1]
+for i in range(dim_dict["y"]):
     if i == 0:
-        u = narray1[:,dim_x + i]
-        d_u = narray1[:,dim_x + dim_y + i]
+        u = narray1[:,dim_dict["x"] + i]
+        d_u = narray1[:,dim_dict["x"] + dim_dict["y"] + i]
     else:
-        u = np.vstack((u, narray1[:,dim_x + i]))
-        d_u = np.vstack((d_u, narray1[:,dim_x + dim_y + i]))
+        u = np.vstack((u, narray1[:,dim_dict["x"] + i]))
+        d_u = np.vstack((d_u, narray1[:,dim_dict["x"] + dim_dict["y"] + i]))
     
 
 

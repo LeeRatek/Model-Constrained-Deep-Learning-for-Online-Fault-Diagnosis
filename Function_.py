@@ -677,6 +677,101 @@ def plot_array(arr, title=None, x_label=None, y_label=None,
         plt.close()
 
 
+def load_loss_csv(loss_csv_path, *, delimiter=",", skiprows: int = 1):
+    """Train_.py에서 저장한 loss CSV(epoch,avg_loss)를 로드.
+
+    Returns:
+        (epochs, losses): np.ndarray, np.ndarray
+    """
+    data = np.loadtxt(loss_csv_path, delimiter=delimiter, skiprows=skiprows)
+    if data.ndim == 1:
+        data = data.reshape(1, -1)
+    if data.shape[1] < 2:
+        raise ValueError(f"loss CSV는 최소 2개 컬럼(epoch,loss)이 필요합니다: {loss_csv_path}")
+    epochs = data[:, 0].astype(np.int64, copy=False)
+    losses = data[:, 1].astype(np.float64, copy=False)
+    return epochs, losses
+
+
+def plot_loss_curve(
+    *,
+    loss_csv_path=None,
+    epochs=None,
+    losses=None,
+    title: str = "Loss Curve",
+    x_label: str = "Epoch",
+    y_label: str = "Average Loss",
+    figsize=(10, 4),
+    save_path=None,
+    show: bool = True,
+    dpi: int = 150,
+    tight_layout: bool = False,
+    downsample: int = 1,
+    yscale=None,
+    png_compress_level=1,
+):
+    """Loss curve를 플로팅.
+
+    입력은 (1) loss_csv_path 또는 (2) epochs/losses 배열 둘 중 하나.
+    속도를 위해 downsample, tight_layout 옵션을 제공.
+
+    Returns:
+        (epochs, losses): 플롯에 사용된 배열
+    """
+    if loss_csv_path is not None:
+        epochs, losses = load_loss_csv(loss_csv_path)
+    else:
+        if epochs is None or losses is None:
+            raise ValueError("loss_csv_path 또는 (epochs, losses) 중 하나는 반드시 제공해야 합니다.")
+        epochs = np.asarray(epochs)
+        losses = np.asarray(losses, dtype=np.float64)
+
+    if epochs.shape[0] != losses.shape[0]:
+        raise ValueError(f"epochs/losses 길이가 다릅니다: {epochs.shape[0]} vs {losses.shape[0]}")
+
+    ds = int(downsample) if downsample is not None else 1
+    if ds < 1:
+        ds = 1
+    if ds > 1:
+        epochs_p = epochs[::ds]
+        losses_p = losses[::ds]
+    else:
+        epochs_p = epochs
+        losses_p = losses
+
+    if save_path is not None:
+        os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
+
+    fig = plt.figure(figsize=figsize)
+    ax = fig.gca()
+    ax.plot(epochs_p, losses_p, color="tab:blue", lw=1.5)
+    ax.set_xlabel(x_label)
+    ax.set_ylabel(y_label)
+    ax.set_title(title)
+    ax.grid(True, alpha=0.3)
+    if yscale is not None:
+        ax.set_yscale(yscale)
+
+    if tight_layout:
+        fig.tight_layout()
+    else:
+        # tight_layout은 비용이 커서 기본은 빠른 여백으로
+        fig.subplots_adjust(left=0.08, right=0.98, top=0.88, bottom=0.15)
+
+    if save_path is not None:
+        if str(save_path).lower().endswith(".png") and png_compress_level is not None:
+            fig.savefig(save_path, dpi=dpi, pil_kwargs={"compress_level": int(png_compress_level)})
+        else:
+            fig.savefig(save_path, dpi=dpi)
+
+    if show:
+        plt.show()
+    else:
+        plt.close(fig)
+
+    return epochs, losses
+
+
 def plot_auc_roc_curve_from_threshold_matrix(
     y_true,
     predict_results,
@@ -687,19 +782,44 @@ def plot_auc_roc_curve_from_threshold_matrix(
     figsize=(6, 6),
     show: bool = True,
 ):
-    """threshold grid 기반 ROC/AUC 계산 및 플로팅.
+    """(호환용) threshold grid 기반 ROC/AUC 계산 + 최적점 계산 + 플로팅을 한 번에 수행."""
 
-    Args:
-        y_true: shape (N,)의 정답 라벨(0/1).
-        predict_results: shape (N, T)의 예측 결과(각 threshold에서의 True/False 또는 0/1).
-        predict_thresholds: 길이 T의 threshold 리스트/배열.
-        save_path: 저장 경로(디렉토리는 자동 생성). None이면 저장 안함.
-        title: 그래프 제목.
-        figsize: matplotlib figure size.
-        show: plt.show() 여부.
+    roc = compute_roc_auc_from_threshold_matrix(y_true, predict_results, predict_thresholds)
+    opt = compute_optimal_thresholds_from_roc(
+        roc["fpr"], roc["tpr"], roc["thresholds"], candidate_idx=roc["candidate_idx"]
+    )
+
+    print(f"AUC = {roc['auc']:.4f}")
+    print(
+        f"Best threshold (Youden J) ≈ {opt['best']['threshold']:.6g} @ (FPR={opt['best']['fpr']:.4f}, TPR={opt['best']['tpr']:.4f})"
+    )
+    print(
+        f"Closest to (0,1) ≈ {opt['closest_to_01']['threshold']:.6g} @ (FPR={opt['closest_to_01']['fpr']:.4f}, TPR={opt['closest_to_01']['tpr']:.4f}), dist={opt['closest_to_01']['distance']:.4f}"
+    )
+
+    plot_roc_curve(
+        roc["fpr"],
+        roc["tpr"],
+        roc["auc"],
+        best_point=opt["best"],
+        closest_to_01_point=opt["closest_to_01"],
+        save_path=save_path,
+        title=title,
+        figsize=figsize,
+        show=show,
+    )
+
+    if save_path is not None:
+        print(f"ROC curve saved to: {save_path}")
+
+    return {**roc, **opt}
+
+
+def compute_roc_auc_from_threshold_matrix(y_true, predict_results, predict_thresholds):
+    """threshold grid 기반 ROC point들과 AUC를 계산.
 
     Returns:
-        dict: auc, best(Youden J), closest_to_01 정보를 포함.
+        dict: fpr, tpr, thresholds(thr_arr), auc, candidate_idx(finite threshold index), pos_count, neg_count
     """
     from sklearn import metrics as sk_metrics
 
@@ -743,43 +863,86 @@ def plot_auc_roc_curve_from_threshold_matrix(
     fpr = np.asarray(fpr_list, dtype=float)
     tpr = np.asarray(tpr_list, dtype=float)
     thr_arr = np.asarray(thr_list, dtype=float)
-
     auc_val = float(sk_metrics.auc(fpr, tpr))
 
-    # thr_list에는 inf/-inf가 포함되어 있어 그대로 argmax/argmin를 쓰면 끝점이 선택될 수 있음
     finite_mask = np.isfinite(thr_arr)
     candidate_idx = np.where(finite_mask)[0]
 
-    # best threshold (Youden's J)
+    return {
+        "fpr": fpr,
+        "tpr": tpr,
+        "thresholds": thr_arr,
+        "auc": auc_val,
+        "candidate_idx": candidate_idx,
+        "pos_count": pos_count,
+        "neg_count": neg_count,
+    }
+
+
+def compute_optimal_thresholds_from_roc(fpr, tpr, thresholds, *, candidate_idx=None):
+    """ROC curve 상에서 최적 임계값(Youden J, (0,1) 최소거리)을 계산."""
+    fpr = np.asarray(fpr, dtype=float)
+    tpr = np.asarray(tpr, dtype=float)
+    thr_arr = np.asarray(thresholds, dtype=float)
+    if fpr.shape != tpr.shape or fpr.shape != thr_arr.shape:
+        raise ValueError("fpr/tpr/thresholds는 같은 shape 여야 합니다.")
+
+    if candidate_idx is None:
+        candidate_idx = np.where(np.isfinite(thr_arr))[0]
+    else:
+        candidate_idx = np.asarray(candidate_idx, dtype=int)
+
     j_scores = tpr - fpr
     if candidate_idx.size > 0:
         best_idx = int(candidate_idx[np.argmax(j_scores[candidate_idx])])
     else:
         best_idx = int(np.argmax(j_scores))
 
-    best_thr = float(thr_arr[best_idx])
-    best_fpr = float(fpr[best_idx])
-    best_tpr = float(tpr[best_idx])
-
-    # (0,1)과의 거리 최소 지점 (Upper-left에 가장 가까운 operating point)
     dist2 = (fpr**2) + ((1.0 - tpr) ** 2)
     if candidate_idx.size > 0:
         closest_idx = int(candidate_idx[np.argmin(dist2[candidate_idx])])
     else:
         closest_idx = int(np.argmin(dist2))
 
-    closest_thr = float(thr_arr[closest_idx])
-    closest_fpr = float(fpr[closest_idx])
-    closest_tpr = float(tpr[closest_idx])
-    closest_dist = float(np.sqrt(dist2[closest_idx]))
+    ## ================ Youden J 기준 최적점 ================
+    best = {
+        "threshold": float(thr_arr[best_idx]),
+        "fpr": float(fpr[best_idx]),
+        "tpr": float(tpr[best_idx]),
+        "index": best_idx,
+        "youden_j": float(j_scores[best_idx]),
+    }
 
-    print(f"AUC = {auc_val:.4f}")
-    print(
-        f"Best threshold (Youden J) ≈ {best_thr:.6g} @ (FPR={best_fpr:.4f}, TPR={best_tpr:.4f})"
-    )
-    print(
-        f"Closest to (0,1) ≈ {closest_thr:.6g} @ (FPR={closest_fpr:.4f}, TPR={closest_tpr:.4f}), dist={closest_dist:.4f}"
-    )
+    ## ================ (0,1) 최소거리 기준 최적점 ================
+    closest_to_01 = {
+        "threshold": float(thr_arr[closest_idx]),
+        "fpr": float(fpr[closest_idx]),
+        "tpr": float(tpr[closest_idx]),
+        "index": closest_idx,
+        "distance": float(np.sqrt(dist2[closest_idx])),
+    }
+
+    return {"best": best, "closest_to_01": closest_to_01}
+
+
+def plot_roc_curve(
+    fpr,
+    tpr,
+    auc_val,
+    *,
+    best_point=None,
+    closest_to_01_point=None,
+    save_path=None,
+    title: str = "AUC-ROC Curve",
+    figsize=(6, 6),
+    show: bool = True,
+    dpi: int = 200,
+):
+    """ROC 커브를 플로팅하고(옵션으로) 최적점들을 표시."""
+
+    fpr = np.asarray(fpr, dtype=float)
+    tpr = np.asarray(tpr, dtype=float)
+    auc_val = float(auc_val)
 
     if save_path is not None:
         os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
@@ -788,43 +951,49 @@ def plot_auc_roc_curve_from_threshold_matrix(
     plt.plot(fpr, tpr, label=f"ROC (AUC={auc_val:.3f})")
     plt.plot([0, 1], [0, 1], linestyle="--", color="gray", label="Random")
 
-    # Youden J 지점 표시
-    dx = 0.05 if best_fpr <= 0.7 else -0.25
-    dy = 0.05 if best_tpr <= 0.7 else -0.25
-    plt.scatter([best_fpr], [best_tpr], color="red", s=60, zorder=5, label=f"Best thr={best_thr:.3g}")
-    plt.annotate(
-        f"thr={best_thr:.3g}\nFPR={best_fpr:.2f}, TPR={best_tpr:.2f}",
-        xy=(best_fpr, best_tpr),
-        xytext=(min(max(best_fpr + dx, 0.0), 1.0), min(max(best_tpr + dy, 0.0), 1.0)),
-        textcoords="data",
-        arrowprops=dict(arrowstyle="->", color="red", lw=1.0),
-        fontsize=9,
-        color="red",
-    )
+    if best_point is not None:
+        best_fpr = float(best_point.get("fpr"))
+        best_tpr = float(best_point.get("tpr"))
+        best_thr = float(best_point.get("threshold"))
+        dx = 0.05 if best_fpr <= 0.7 else -0.25
+        dy = 0.05 if best_tpr <= 0.7 else -0.25
+        plt.scatter([best_fpr], [best_tpr], color="red", s=60, zorder=5, label=f"Best thr={best_thr:.3g}")
+        plt.annotate(
+            f"thr={best_thr:.3g}\nFPR={best_fpr:.2f}, TPR={best_tpr:.2f}",
+            xy=(best_fpr, best_tpr),
+            xytext=(min(max(best_fpr + dx, 0.0), 1.0), min(max(best_tpr + dy, 0.0), 1.0)),
+            textcoords="data",
+            arrowprops=dict(arrowstyle="->", color="red", lw=1.0),
+            fontsize=9,
+            color="red",
+        )
 
-    # (0,1) 최소거리 지점 표시
-    dx2 = 0.05 if closest_fpr <= 0.7 else -0.25
-    dy2 = -0.12 if closest_tpr >= 0.5 else 0.08
-    plt.scatter(
-        [closest_fpr],
-        [closest_tpr],
-        color="blue",
-        s=60,
-        zorder=5,
-        label=f"Closest(0,1) thr={closest_thr:.3g}",
-    )
-    plt.annotate(
-        f"thr={closest_thr:.3g}\nFPR={closest_fpr:.2f}, TPR={closest_tpr:.2f}",
-        xy=(closest_fpr, closest_tpr),
-        xytext=(
-            min(max(closest_fpr + dx2, 0.0), 1.0),
-            min(max(closest_tpr + dy2, 0.0), 1.0),
-        ),
-        textcoords="data",
-        arrowprops=dict(arrowstyle="->", color="blue", lw=1.0),
-        fontsize=9,
-        color="blue",
-    )
+    if closest_to_01_point is not None:
+        closest_fpr = float(closest_to_01_point.get("fpr"))
+        closest_tpr = float(closest_to_01_point.get("tpr"))
+        closest_thr = float(closest_to_01_point.get("threshold"))
+        dx2 = 0.05 if closest_fpr <= 0.7 else -0.25
+        dy2 = -0.12 if closest_tpr >= 0.5 else 0.08
+        plt.scatter(
+            [closest_fpr],
+            [closest_tpr],
+            color="blue",
+            s=60,
+            zorder=5,
+            label=f"Closest(0,1) thr={closest_thr:.3g}",
+        )
+        plt.annotate(
+            f"thr={closest_thr:.3g}\nFPR={closest_fpr:.2f}, TPR={closest_tpr:.2f}",
+            xy=(closest_fpr, closest_tpr),
+            xytext=(
+                min(max(closest_fpr + dx2, 0.0), 1.0),
+                min(max(closest_tpr + dy2, 0.0), 1.0),
+            ),
+            textcoords="data",
+            arrowprops=dict(arrowstyle="->", color="blue", lw=1.0),
+            fontsize=9,
+            color="blue",
+        )
 
     plt.xlabel("False Positive Rate")
     plt.ylabel("True Positive Rate")
@@ -834,26 +1003,12 @@ def plot_auc_roc_curve_from_threshold_matrix(
     plt.tight_layout()
 
     if save_path is not None:
-        plt.savefig(save_path, dpi=200)
+        plt.savefig(save_path, dpi=dpi)
 
     if show:
         plt.show()
     else:
         plt.close()
-
-    if save_path is not None:
-        print(f"ROC curve saved to: {save_path}")
-
-    return {
-        "auc": auc_val,
-        "best": {"threshold": best_thr, "fpr": best_fpr, "tpr": best_tpr},
-        "closest_to_01": {
-            "threshold": closest_thr,
-            "fpr": closest_fpr,
-            "tpr": closest_tpr,
-            "distance": closest_dist,
-        },
-    }
 
 def cont(X_col, data_mean, data_std, X_test, P, num_pc, lamda, T2UCL1):
     X_test = ((X_test - data_mean) / data_std)
@@ -1462,7 +1617,7 @@ def get_start_index(tensor, feature_idx):
 
 def is_abnormal(tensor):
     abnormal_data = False
-    if last_index_of(tensor, 0, 0, operator='<') != 0 or last_index_of(tensor, 5, operator='>') != 0:
+    if last_index_of(tensor, 0, 0, operator='<') != 0 or last_index_of(tensor, 0, 5, operator='>') != 0:
         abnormal_data = True
     return abnormal_data
 
@@ -1839,6 +1994,20 @@ def preprocess_combined_tensor(tensor, tensorx, dim_dict, BATTERY_TYPE, PREPROCE
         tensor = normalize_columns_0_to_1(tensor[start_idx:, :], exclude_ranges=[cell_div_range])
         tensorx = normalize_columns_0_to_1(tensorx[start_idx:, :], exclude_ranges=[cell_div_range])
         if normalize_dx:
-            tensor[:,range(dim_dict["x"] + dim_dict["y"], dim_dict["x"] + dim_dict["y"] + dim_dict["z"])] = tensor[:,range(dim_dict["x"] + dim_dict["y"], dim_dict["x"] + dim_dict["y"] + dim_dict["z"])].div(normalize_val)
-            tensorx[:,range(dim_dict["x2"] + dim_dict["y2"], dim_dict["x2"] + dim_dict["y2"] + dim_dict["z2"])] = tensorx[:,range(dim_dict["x2"] + dim_dict["y2"], dim_dict["x2"] + dim_dict["y2"] + dim_dict["z2"])].div(normalize_val)
+            dx_s = int(dim_dict["x"] + dim_dict["y"])
+            dx_e = int(dx_s + dim_dict["z"])
+            dx2_s = int(dim_dict["x2"] + dim_dict["y2"])
+            dx2_e = int(dx2_s + dim_dict["z2"])
+
+            # range 기반 advanced indexing은 불필요한 복사/할당이 발생할 수 있어 슬라이스로 교체
+            # torch.Tensor면 in-place 연산으로 추가 할당을 줄임
+            if isinstance(tensor, torch.Tensor):
+                tensor[:, dx_s:dx_e].div_(normalize_val)
+            else:
+                tensor[:, dx_s:dx_e] = np.asarray(tensor[:, dx_s:dx_e]) / normalize_val
+
+            if isinstance(tensorx, torch.Tensor):
+                tensorx[:, dx2_s:dx2_e].div_(normalize_val)
+            else:
+                tensorx[:, dx2_s:dx2_e] = np.asarray(tensorx[:, dx2_s:dx2_e]) / normalize_val
     return tensor, tensorx

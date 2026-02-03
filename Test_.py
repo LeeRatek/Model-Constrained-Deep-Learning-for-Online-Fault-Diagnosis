@@ -43,7 +43,7 @@ os.makedirs(f"{args.models_dir}/results", exist_ok=True)
 BATTERY_TYPE = args.battery_type # 'DTI' or 'QAS'
 PREPROCESSING, SKIP_CHARGE_READY = get_preprocessing_and_skip_charge_ready(learning_case)
 dim_dict = get_input_dimensions(BATTERY_TYPE)
-AUC_ANALYSIS = False
+AUC_ANALYSIS = True
 if not AUC_ANALYSIS:
     thresholds = [40, 50]
     
@@ -65,9 +65,12 @@ train_vehicle_ids = load_vehicle_ids_used_for_training(sim_config_path)
 print(f"Vehicle IDs used for training: {train_vehicle_ids}")
 
 first_fault_vehicle_id = 335 if BATTERY_TYPE == "QAS" else 77
-all_normal_vehicle_ids = list(range(0, first_fault_vehicle_id))
-normal_list = [vid for vid in all_normal_vehicle_ids if vid not in set(train_vehicle_ids)]
+# all_normal_vehicle_ids = list(range(0, first_fault_vehicle_id))
+# all_normal_vehicle_ids = np.load(f"./{BATTERY_TYPE}_filtered_vehicle_ids_normal.npy").astype(np.int64).tolist()
+# normal_list = [vid for vid in all_normal_vehicle_ids if vid not in set(train_vehicle_ids)]
+normal_list = np.load(f"./{BATTERY_TYPE}_filtered_vehicle_ids_test.npy").astype(np.int64).tolist()
 fault_list = np.load(f"./{BATTERY_TYPE}_filtered_vehicle_ids_fault.npy").astype(np.int64).tolist()
+# fault_list = np.arange(335, 393)
 test_list = [normal_list, fault_list]
 
 total_test_vehicles = len(normal_list) + len(fault_list)
@@ -223,15 +226,32 @@ print(f"{int(h)}시간 {int(m)}분 {s:.3f}초")
 if AUC_ANALYSIS:
     # =================== ROC / AUC ===================
     roc_save_path = f"{args.models_dir}/results/AUC_ROC{learning_case}.png"
-    plot_auc_roc_curve_from_threshold_matrix(
-        y_true,
-        predict_results,
-        predict_thresholds,
+    roc = compute_roc_auc_from_threshold_matrix(y_true, predict_results, predict_thresholds)
+    opt = compute_optimal_thresholds_from_roc(
+        roc["fpr"], roc["tpr"], roc["thresholds"], candidate_idx=roc["candidate_idx"]
+    )
+
+    print(f"AUC = {roc['auc']:.4f}")
+    print(
+        f"Best threshold (Youden J) ≈ {opt['best']['threshold']:.6g} @ (FPR={opt['best']['fpr']:.4f}, TPR={opt['best']['tpr']:.4f})"
+    )
+    print(
+        f"Closest to (0,1) ≈ {opt['closest_to_01']['threshold']:.6g} @ (FPR={opt['closest_to_01']['fpr']:.4f}, TPR={opt['closest_to_01']['tpr']:.4f}), dist={opt['closest_to_01']['distance']:.4f}"
+    )
+
+    plot_roc_curve(
+        roc["fpr"],
+        roc["tpr"],
+        roc["auc"],
+        best_point=opt["best"],
+        closest_to_01_point=opt["closest_to_01"],
         save_path=roc_save_path,
         title="AUC-ROC Curve",
         figsize=(6, 6),
         show=True,
+        dpi=200,
     )
+    print(f"ROC curve saved to: {roc_save_path}")
 
 
 
