@@ -52,28 +52,8 @@ args = parser.parse_args()
 LSTM_TRAINING = args.lstm_training
 LSTM_LOAD = args.lstm_load if args.lstm_training else args.lstm_load
 BATTERY_TYPE = args.battery_type # 'DTI' or 'QAS'
-if args.learning_case == 1:
-    PREPROCESSING = False
-    SKIP_CHARGE_READY = True
-elif args.learning_case == 2:
-    PREPROCESSING = True
-    SKIP_CHARGE_READY = True
-elif args.learning_case == 3:
-    PREPROCESSING = True
-    SKIP_CHARGE_READY = False
-elif args.learning_case == 4:
-    PREPROCESSING = False
-    SKIP_CHARGE_READY = False
-
-dim_x = 2 # [estimated pack voltage 1, estimated pack volatage 2]
-dim_y = 110 if BATTERY_TYPE == 'QAS' else 85 # DTI 일경우 85 이고 QAS일 경우 110인듯 [각 셀의 voltage]
-dim_z = 110 if BATTERY_TYPE == 'QAS' else 85 # DTI 일경우 85 이고 QAS일 경우 110인듯 [각 셀의 estimated voltage diviation]
-dim_q = 3 # [Board Temperature, Board-end SOC, Current]
-
-dim_x2 = 2 # [estimated pack SOC 1, estimated pack SOC 2]
-dim_y2 = 110 if BATTERY_TYPE == 'QAS' else 85 # DTI 일경우 85 이고 QAS일 경우 110인듯 [각 셀의 SOC]
-dim_z2 = 110 if BATTERY_TYPE == 'QAS' else 85 # DTI 일경우 85 이고 QAS일 경우 110인듯 [각 셀의 estimated SOC diviation]
-dim_q2= 4 # [Board Temperature, Board-end SOC, Velocity, Current]
+PREPROCESSING, SKIP_CHARGE_READY = get_preprocessing_and_skip_charge_ready(args.learning_case)
+dim_dict = get_input_dimensions(BATTERY_TYPE)
 
 # 모델 저장 경로 설정
 
@@ -131,22 +111,9 @@ for i in normal_list[args.vehicle_start:args.vehicle_end+1]:
     
     #----------------------------------------Preprocessing ------------------------------#
     
-    if SKIP_CHARGE_READY:
-        charge_idx = 224 if BATTERY_TYPE == "QAS" else 174
-        start_idx = last_index_of(tensor, feature_idx=charge_idx, value=-500, operator='<') # -500 means minimum current during charge ready
-        tensor = tensor[start_idx:, :]
-        tensorx = tensorx[start_idx:, :]
-    
-    if PREPROCESSING:
-        start_idx = 0
-        start_idx = np.max([start_idx,last_index_of(tensor, feature_idx=0, value=0, operator='<=')]) # 0 means minimum voltage
-        start_idx = np.max([start_idx,last_index_of(tensor, feature_idx=0, value=5, operator='>')]) # 5 means maximum voltage
-        cell_div_idxes = list(range(dim_x + dim_y, dim_x + dim_y + dim_z))
-        tensor = normalize_columns_0_to_1(tensor[start_idx:, :], exclude_cols=cell_div_idxes)
-        tensorx = normalize_columns_0_to_1(tensorx[start_idx:, :], exclude_cols=cell_div_idxes)
-        if args.normalize_dx:
-            tensor[:,range(dim_x + dim_y, dim_x + dim_y + dim_z)] = tensor[:,range(dim_x + dim_y, dim_x + dim_y + dim_z)].div(args.normalize_val)
-            # tensorx[:,range(dim_x2 + dim_y2, dim_x2 + dim_y2 + dim_z2)] = tensorx[:,range(dim_x2 + dim_y2, dim_x2 + dim_y2 + dim_z2)].div(0.1)
+    tensor, tensorx = preprocess_combined_tensor(tensor, tensorx, dim_dict, 
+                                                BATTERY_TYPE, PREPROCESSING, SKIP_CHARGE_READY, 
+                                                normalize_dx=args.normalize_dx, normalize_val=args.normalize_val)
     
     if FIRST_LOAD:
         FIRST_LOAD = False
@@ -177,15 +144,15 @@ os.makedirs(model_path, exist_ok=True)
 with open(f"{model_path}/sim_config.txt", "w", encoding="utf-8") as f:
     f.write(text)    # 파일 저장
 #----------------------------------------Training for MC-AE--------------------------
-x_recovered = combined_tensor[:, :dim_x] # 0~1
-y_recovered = combined_tensor[:, dim_x:dim_x + dim_y] # 2~111
-z_recovered = combined_tensor[:, dim_x + dim_y: dim_x + dim_y + dim_z] # 112~221
-q_recovered = combined_tensor[:, dim_x + dim_y + dim_z:] # 222~
+x_recovered = combined_tensor[:, :dim_dict["x"]] # 0~1
+y_recovered = combined_tensor[:, dim_dict["x"]:dim_dict["x"] + dim_dict["y"]] # 2~111
+z_recovered = combined_tensor[:, dim_dict["x"] + dim_dict["y"]: dim_dict["x"] + dim_dict["y"] + dim_dict["z"]] # 112~221
+q_recovered = combined_tensor[:, dim_dict["x"] + dim_dict["y"] + dim_dict["z"]:] # 222~
 
-x_recovered2 = combined_tensorx[:, :dim_x2]
-y_recovered2 = combined_tensorx[:, dim_x2:dim_x2 + dim_y2]
-z_recovered2 = combined_tensorx[:, dim_x2 + dim_y2: dim_x2 + dim_y2 + dim_z2]
-q_recovered2 = combined_tensorx[:, dim_x2 + dim_y2 + dim_z2:]
+x_recovered2 = combined_tensorx[:, :dim_dict["x2"]]
+y_recovered2 = combined_tensorx[:, dim_dict["x2"]:dim_dict["x2"] + dim_dict["y2"]]
+z_recovered2 = combined_tensorx[:, dim_dict["x2"] + dim_dict["y2"]: dim_dict["x2"] + dim_dict["y2"] + dim_dict["z2"]]
+q_recovered2 = combined_tensorx[:, dim_dict["x2"] + dim_dict["y2"] + dim_dict["z2"]:]
 
 AE_EPOCH = args.ae_epochs
 AE_LR = args.ae_lr

@@ -48,7 +48,7 @@ filtered_vehicle_ids = np.array([])
 
 start_idxes = []
 # for i in range(0, max_idx + 1):
-for i in [0]:
+for i in [369]:
     VEHICLE_ID = f'{i}'
     PATH = f"./data/data_analysis_start_at_{vin2_start}/{BATTERY_TYPE}-{VEHICLE_ID}"   
 
@@ -59,6 +59,13 @@ for i in [0]:
     #----------------------------------------Data loading for MC-AE (customized) ------------------------------
     tensor = safe_load(f'./data/{BATTERY_TYPE}/{VEHICLE_ID}/vin_2.pkl')
     tensorx= safe_load(f'./data/{BATTERY_TYPE}/{VEHICLE_ID}/vin_3.pkl')
+    
+    
+    volt_all = pd.DataFrame(tensor[:,dim_x:dim_x+dim_y])
+    volt_modepi, volt_di = calculate_volt_modepi(pd.DataFrame(tensor[:,dim_x:dim_x+dim_y]))
+    Temperature = pd.DataFrame(tensor[:,dim_x + dim_y + dim_z])
+    soc_all = pd.DataFrame(tensorx[:,dim_x + dim_y + dim_z + 1])
+    current = pd.DataFrame(tensor[:,dim_x + dim_y + dim_z + 2])
     
     if SKIP_CHARGE_READY:
         charge_idx = 224 if BATTERY_TYPE == "QAS" else 174
@@ -73,8 +80,10 @@ for i in [0]:
         cell_div_idxes = list(range(dim_x + dim_y, dim_x + dim_y + dim_z))
         # tensor = normalize_columns_0_to_1(tensor[start_idx:, :], exclude_cols=cell_div_idxes)
         # tensorx = normalize_columns_0_to_1(tensorx[start_idx:, :], exclude_cols=cell_div_idxes)
-        tensor = normalize_columns_by_mean_std(tensor[start_idx:, :], exclude_cols=cell_div_idxes)
-        tensorx = normalize_columns_by_mean_std(tensorx[start_idx:, :], exclude_cols=cell_div_idxes)
+        # tensor = normalize_columns_by_mean_std(tensor[start_idx:, :], exclude_cols=cell_div_idxes)
+        # tensorx = normalize_columns_by_mean_std(tensorx[start_idx:, :], exclude_cols=cell_div_idxes)
+        tensor = normalize_columns_by_mean_std(tensor[start_idx:, :])
+        tensorx = normalize_columns_by_mean_std(tensorx[start_idx:, :])
         # if np.min(np.array(tensor)[start_idx:,0]) < 0:
         #     print(f"Vehicle ID {i} has negative voltage data, skipping.")
         #     continue
@@ -82,13 +91,7 @@ for i in [0]:
         #     print(f"Vehicle ID {i} has abnormally high voltage data, skipping.")
         #     continue
         # tensor = normalize_columns_0_to_1(tensor[start_idx:, :])
-        # tensorx = normalize_columns_0_to_1(tensorx[start_idx:, :])
-    
-    # volt_all = pd.DataFrame(tensor[:,dim_x:dim_x+dim_y])
-    # volt_modepi, volt_di = calculate_volt_modepi(pd.DataFrame(tensor[:,dim_x:dim_x+dim_y]))
-    # Temperature = pd.DataFrame(tensor[:,dim_x + dim_y + dim_z])
-    # soc_all = pd.DataFrame(tensorx[:,dim_x + dim_y + dim_z + 1])
-    # current = pd.DataFrame(tensor[:,dim_x + dim_y + dim_z + 2])
+        # tensorx = normalize_columns_0_to_1(tensorx[start_idx:, :])    
         
         # if is_abnormal(tensor):
         #     print(f"Vehicle ID {i} has abnormal voltage data, skipping.")
@@ -132,6 +135,7 @@ if mode == MODE.FILTER_MODE:
     exit()
 
 narray1 = np.array(combined_tensor)
+narray2 = np.array(combined_tensor)
 upre1 = narray1[:,0]
 upre2 = narray1[:,1]
 temp = narray1[:,dim_x + dim_y + dim_z]
@@ -141,6 +145,8 @@ u1 = narray1[:,dim_x]
 d_u1 = narray1[:,dim_x + dim_y]
 u2 = narray1[:,dim_x +1 ]
 d_u2 = narray1[:,dim_x + dim_y + 1]
+d_soc1 = narray2[:,dim_x2 + dim_y2]
+d_soc2 = narray2[:,dim_x2 + dim_y2 + 1]
 for i in range(dim_y):
     if i == 0:
         u = narray1[:,dim_x + i]
@@ -152,44 +158,54 @@ for i in range(dim_y):
 
 
 plot_distribution_with_stats(upre1,
-                                     bins=60, kde=True, normal_fit=True,
+                                     bins=60, kde=True, normal_fit=False,
                                      title="upre1 Sample Distribution",
                                      save_path=None, show=True)
 plot_distribution_with_stats(upre2,
-                                     bins=60, kde=True, normal_fit=True,
+                                     bins=60, kde=True, normal_fit=False,
                                      title="upre2 Sample Distribution",
                                      save_path=None, show=True)
 plot_distribution_with_stats(temp,
-                                     bins=60, kde=True, normal_fit=True,
+                                     bins=60, kde=True, normal_fit=False,
                                      title="Temperature Sample Distribution",
                                      save_path=None, show=True)
 plot_distribution_with_stats(soc,
-                                     bins=60, kde=True, normal_fit=True,
+                                     bins=60, kde=True, normal_fit=False,
                                      title="SOC Sample Distribution",
                                      save_path=None, show=True)
 plot_distribution_with_stats(current,
-                                     bins=60, kde=True, normal_fit=True,
+                                     bins=60, kde=True, normal_fit=False,
                                      title="Current Sample Distribution",
                                      save_path=None, show=True)
 
 plot_distribution_with_stats(u1,
-                                     bins=60, kde=True, normal_fit=True,
+                                     bins=60, kde=True, normal_fit=False,
                                      title="True Voltage 1 Sample Distribution",
                                      save_path=None, show=True)
 
 plot_distribution_with_stats(u2,
-                                     bins=60, kde=True, normal_fit=True,
+                                     bins=60, kde=True, normal_fit=False,
                                      title="True Voltage 2 Sample Distribution",
                                      save_path=None, show=True)
 
 plot_distribution_with_stats(d_u1,
-                                     bins=60, kde=True, normal_fit=True,
+                                     bins=60, kde=True, normal_fit=False,
                                      title="Volatage divation 1 Sample Distribution",
                                      save_path=None, show=True)
 
 plot_distribution_with_stats(d_u2,
-                                     bins=60, kde=True, normal_fit=True,
+                                     bins=60, kde=True, normal_fit=False,
                                      title="Volatage divation 2 Sample Distribution",
+                                     save_path=None, show=True)
+
+plot_distribution_with_stats(d_soc1,
+                                     bins=60, kde=True, normal_fit=False,
+                                     title="SOC divation 1 Sample Distribution",
+                                     save_path=None, show=True)
+
+plot_distribution_with_stats(d_soc2,
+                                     bins=60, kde=True, normal_fit=False,
+                                     title="SOC divation 2 Sample Distribution",
                                      save_path=None, show=True)
 
 print("Amount of data used for training:", combined_tensor.shape[0])

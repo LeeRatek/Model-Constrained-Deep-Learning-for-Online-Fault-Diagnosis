@@ -24,41 +24,84 @@ from typing import Mapping, Sequence
 from dataclasses import asdict, is_dataclass
 import platform
 import sys
+import ast
 
 # Function to safely load a PyTorch model (serialized by GPU) or any pickled object to CPU
-def _to_cpu(obj: Any):
+def _to_cpu(obj: Any, *, verbose: bool = True):
+    def log(message: str) -> None:
+        if verbose:
+            print(message)
+
     if torch.is_tensor(obj):
-        print( "Its a tensor, moved to CPU")
+        log("Its a tensor, moved to CPU")
         return obj.detach().cpu()
     if isinstance(obj, (list, tuple)):
-        print( "Its a list or tuple, moved to CPU")
-        return type(obj)(_to_cpu(x) for x in obj)
+        log("Its a list or tuple, moved to CPU")
+        return type(obj)(_to_cpu(x, verbose=verbose) for x in obj)
     if isinstance(obj, dict):
-        print( "Its a dict, moved to CPU")
-        return {k: _to_cpu(v) for k, v in obj.items()}
+        log("Its a dict, moved to CPU")
+        return {k: _to_cpu(v, verbose=verbose) for k, v in obj.items()}
     return obj
 
-def safe_load(path: str):
-    try:
-        print( "Trying torch.load")
-        return _to_cpu(torch.load(path, map_location=torch.device('cpu'), weights_only=False))
-    except Exception:
-        print( "Trying pickle.load")
-        class CPUUnpickler(pickle.Unpickler):
-            def find_class(self, module, name):
-                if module == 'torch.storage' and name == '_load_from_bytes':
-                    return lambda b: torch.load(io.BytesIO(b), map_location=torch.device('cpu'), weights_only=False)
-                return super().find_class(module, name)
+def safe_load(path: str, *, verbose: bool = True):
+    """Load a file based on its extension, with optional verbose logging.
+
+    - .pkl/.pickle: pickle (CPU-safe, including torch storages)
+    - .pt/.pth/.ckpt: torch.load (CPU)
+    - .npy/.npz: numpy.load
+
+    For unknown extensions, tries pickle first then torch.
+    """
+
+    def log(message: str) -> None:
+        if verbose:
+            print(message)
+
+    ext = os.path.splitext(path)[1].lower()
+
+    class CPUUnpickler(pickle.Unpickler):
+        def find_class(self, module, name):
+            if module == 'torch.storage' and name == '_load_from_bytes':
+                return lambda b: torch.load(io.BytesIO(b), map_location=torch.device('cpu'), weights_only=False)
+            return super().find_class(module, name)
+
+    def load_pickle():
         try:
-            print( "Trying CPUUnpickler")
+            log("Loading with CPUUnpickler...")
             with open(path, 'rb') as f:
                 obj = CPUUnpickler(f).load()
-            return _to_cpu(obj)
-        except Exception:
-            print( "Trying normal pickle.load")
+            return _to_cpu(obj, verbose=verbose)
+        except Exception as e:
+            log(f"CPUUnpickler failed ({type(e).__name__}). Falling back to pickle.load...")
             with open(path, 'rb') as f:
                 obj = pickle.load(f)
-            return _to_cpu(obj)
+            return _to_cpu(obj, verbose=verbose)
+
+    def load_torch():
+        log("Loading with torch.load...")
+        return _to_cpu(torch.load(path, map_location=torch.device('cpu'), weights_only=False), verbose=verbose)
+
+    def load_numpy():
+        log("Loading with numpy.load...")
+        return np.load(path, allow_pickle=True)
+
+    if ext in ('.pkl', '.pickle'):
+        return load_pickle()
+    if ext in ('.pt', '.pth', '.ckpt'):
+        try:
+            return load_torch()
+        except Exception as e:
+            log(f"torch.load failed ({type(e).__name__}). Falling back to pickle...")
+            return load_pickle()
+    if ext in ('.npy', '.npz'):
+        return load_numpy()
+
+    log(f"Unknown extension '{ext}'. Trying pickle then torch...")
+    try:
+        return load_pickle()
+    except Exception as e:
+        log(f"pickle failed ({type(e).__name__}). Trying torch.load...")
+        return load_torch()
 
 def calculate_volt_modepi(volt_all):
     """
@@ -258,6 +301,24 @@ def PCA(data, l1, l2):
                          O1 + 1 + O2 * h0 * (h0 - 1) / (O1 ** 2)) ** (1 / h0))
     return v_I, v, v_ratio, p_k, data_mean, data_std, T_95_limit, T_99_limit, SPE_95_limit, SPE_99_limit, P, k, P_t, X, data_nor
 
+# def Calculate_confidence_limits(data, k, v, l1=0.99, l2=0.99):
+#     coe = k[0] * (np.shape(data)[0] - 1) * (np.shape(data)[0] + 1) / \
+#         ((np.shape(data)[0] - k[0]) * np.shape(data)[0])
+#     T_95_limit = coe * stats.f.ppf(0.95, k[0], (np.shape(data)[0] - k[0]))
+#     T_99_limit = coe * stats.f.ppf(l1, k[0], (np.shape(data)[0] - k[0]))
+#     # SPE statistic threshold calculation
+#     O1 = np.sum((v[k[0]:]) ** 1)
+#     O2 = np.sum((v[k[0]:]) ** 2)
+#     O3 = np.sum((v[k[0]:]) ** 3)
+#     h0 = 1 - (2 * O1 * O3) / (3 * (O2 ** 2))
+#     c_95 = norm.ppf(0.95)
+#     c_99 = norm.ppf(l2)
+#     SPE_95_limit = O1 * ((h0 * c_95 * ((2 * O2) ** 0.5) /
+#                          O1 + 1 + O2 * h0 * (h0 - 1) / (O1 ** 2)) ** (1 / h0))
+#     SPE_99_limit = O1 * ((h0 * c_99 * ((2 * O2) ** 0.5) /
+#                          O1 + 1 + O2 * h0 * (h0 - 1) / (O1 ** 2)) ** (1 / h0))
+#     return T_95_limit, T_99_limit, SPE_95_limit, SPE_99_limit
+
 def T2(data_in, data_mean, data_std, p_k, v_I):
     data_nor = np.array((data_in - data_mean) / data_std)
     D = p_k @ v_I @ p_k.T
@@ -302,7 +363,7 @@ def SPE(data_in, data_mean, data_std, p_k):
     return Q_count # Squared prediction error
 
 def chi_square_dist_components(p_k, v_I, X, SPE_limit, T_limit):
-    Pi = (p_k @ v_I @ p_k.T / SPE_limit) + ((np.eye(p_k.shape[0]) - p_k @ p_k.T) / T_limit)
+    Pi = ((p_k @ v_I @ p_k.T) / T_limit) + ((np.eye(p_k.shape[0]) - p_k @ p_k.T) / SPE_limit)
     M = np.dot(X, Pi)
     tr_M = np.trace(M)
     tr_M2 = np.trace(np.dot(M, M))
@@ -311,15 +372,15 @@ def chi_square_dist_components(p_k, v_I, X, SPE_limit, T_limit):
     return Pi, g, h
 
 def diagnosis_thresholds(g, h, sigma_levels=[2, 3, 4.5, 6], show_plot=True):
-    mean = h
-    sigma = np.sqrt(2 * h)
+    mean = h * g
+    sigma = g * np.sqrt(2 * h)
     
-    x = np.linspace(0, 30, 10000)
-    pdf = chi2.pdf(x, h)
+    x = np.linspace(0, 30*g, 10000)
+    pdf = (1/g) * chi2.pdf(x/g, h)
     
     thresholds = list()
     for k in sigma_levels:
-        thresholds.append(g * (mean + k * sigma))
+        thresholds.append(mean + k * sigma)
     
     # -----------------------------
     # Numerical output
@@ -331,7 +392,9 @@ def diagnosis_thresholds(g, h, sigma_levels=[2, 3, 4.5, 6], show_plot=True):
     print('-' * 50)
 
     for i in range(len(sigma_levels)):
-        area = chi2.cdf(thresholds[i], h)
+        lower = max(0, mean - sigma_levels[i]*sigma)
+        upper = mean + sigma_levels[i]*sigma
+        area = chi2.cdf(upper/g, h) - chi2.cdf(lower/g, h)
         print(f'{sigma_levels[i]:6.1f} {thresholds[i]:12.4f} {area:12.6f}')
     
     if not show_plot:
@@ -341,7 +404,7 @@ def diagnosis_thresholds(g, h, sigma_levels=[2, 3, 4.5, 6], show_plot=True):
     # Plot PDF
     # -----------------------------    
     plt.figure()
-    plt.plot(g * x, pdf, linewidth=2)
+    plt.plot(x, pdf, linewidth=2)
     plt.grid(True)
 
     # Plot mean
@@ -451,7 +514,7 @@ def save_pca_results(output_dir, pca_outputs):
     with open(manifest_path, "w", encoding="utf-8") as f:
         json.dump(manifest, f, ensure_ascii=False, indent=2)
 
-def load_pca_results(output_dir):
+def load_pca_results(output_dir, load_data_nor: bool = True, validate_shapes: bool = True):
     """
     Load PCA function outputs and validate type/shape consistency.
 
@@ -487,38 +550,44 @@ def load_pca_results(output_dir):
     P_t = arrays["P_t"]
     X = arrays["X"]
 
-    # Load data_nor according to stored type
-    dn_type = manifest["types"]["data_nor"]
-    
-    dn_path = os.path.join(output_dir, "pca_data_nor.csv")
-    # dn_path = manifest["paths"]["data_nor"]
-    if dn_type == "DataFrame":
-        # Read back CSV with index preserved
-        data_nor = pd.read_csv(dn_path, index_col=0)
-    elif dn_type == "ndarray":
-        dn = np.load(dn_path, allow_pickle=False)
-        data_nor = dn["data_nor"]
-    else:
-        raise ValueError("Unknown data_nor type in manifest: " + str(dn_type))
+    data_nor = None
+    if load_data_nor:
+        # Load data_nor according to stored type
+        dn_type = manifest["types"]["data_nor"]
 
-    # Validate shapes
-    expected = manifest["shapes"]
-    def _chk(name, obj):
-        shp = list(np.asarray(obj).shape) if name != "data_nor" else list(obj.shape)
-        if shp != expected[name]:
-            raise ValueError(f"Shape mismatch for {name}: loaded {shp}, expected {expected[name]}")
+        # NOTE: 기존 코드에서는 CSV를 고정 경로로 읽고 있었음(호환 유지)
+        dn_path = os.path.join(output_dir, "pca_data_nor.csv")
+        # dn_path = manifest["paths"]["data_nor"]
+        if dn_type == "DataFrame":
+            # Read back CSV with index preserved
+            data_nor = pd.read_csv(dn_path, index_col=0)
+        elif dn_type == "ndarray":
+            dn = np.load(dn_path, allow_pickle=False)
+            data_nor = dn["data_nor"]
+        else:
+            raise ValueError("Unknown data_nor type in manifest: " + str(dn_type))
 
-    _chk("v_I", v_I)
-    _chk("v", v)
-    _chk("v_ratio", v_ratio)
-    _chk("p_k", p_k)
-    _chk("data_mean", data_mean)
-    _chk("data_std", data_std)
-    _chk("P", P)
-    _chk("k", k)
-    _chk("P_t", P_t)
-    _chk("X", X)
-    _chk("data_nor", data_nor)
+    if validate_shapes:
+        # Validate shapes
+        expected = manifest["shapes"]
+
+        def _chk(name, obj):
+            shp = list(np.asarray(obj).shape) if name != "data_nor" else list(obj.shape)
+            if shp != expected[name]:
+                raise ValueError(f"Shape mismatch for {name}: loaded {shp}, expected {expected[name]}")
+
+        _chk("v_I", v_I)
+        _chk("v", v)
+        _chk("v_ratio", v_ratio)
+        _chk("p_k", p_k)
+        _chk("data_mean", data_mean)
+        _chk("data_std", data_std)
+        _chk("P", P)
+        _chk("k", k)
+        _chk("P_t", P_t)
+        _chk("X", X)
+        if load_data_nor:
+            _chk("data_nor", data_nor)
 
     return (
         v_I, v, v_ratio, p_k, data_mean, data_std,
@@ -607,6 +676,185 @@ def plot_array(arr, title=None, x_label=None, y_label=None,
     else:
         plt.close()
 
+
+def plot_auc_roc_curve_from_threshold_matrix(
+    y_true,
+    predict_results,
+    predict_thresholds,
+    *,
+    save_path=None,
+    title: str = "AUC-ROC Curve",
+    figsize=(6, 6),
+    show: bool = True,
+):
+    """threshold grid 기반 ROC/AUC 계산 및 플로팅.
+
+    Args:
+        y_true: shape (N,)의 정답 라벨(0/1).
+        predict_results: shape (N, T)의 예측 결과(각 threshold에서의 True/False 또는 0/1).
+        predict_thresholds: 길이 T의 threshold 리스트/배열.
+        save_path: 저장 경로(디렉토리는 자동 생성). None이면 저장 안함.
+        title: 그래프 제목.
+        figsize: matplotlib figure size.
+        show: plt.show() 여부.
+
+    Returns:
+        dict: auc, best(Youden J), closest_to_01 정보를 포함.
+    """
+    from sklearn import metrics as sk_metrics
+
+    y_true = np.asarray(y_true)
+    if y_true.ndim != 1:
+        y_true = y_true.reshape(-1)
+
+    pos_count = int(np.sum(y_true == 1))
+    neg_count = int(np.sum(y_true == 0))
+    if pos_count == 0 or neg_count == 0:
+        raise ValueError(
+            f"ROC 계산을 위해 정상/고장 샘플이 모두 필요합니다. pos={pos_count}, neg={neg_count}"
+        )
+
+    predict_results = np.asarray(predict_results)
+    predict_thresholds = np.asarray(predict_thresholds, dtype=float)
+    if predict_results.ndim != 2:
+        raise ValueError(f"predict_results는 2D여야 합니다. got ndim={predict_results.ndim}")
+    if predict_results.shape[1] != predict_thresholds.shape[0]:
+        raise ValueError(
+            f"predict_results.shape[1]({predict_results.shape[1]}) != len(predict_thresholds)({predict_thresholds.shape[0]})"
+        )
+
+    # threshold를 큰 값 -> 작은 값으로 낮추면, 예측 Positive가 늘어나며 ROC가 (0,0) -> (1,1)로 진행
+    fpr_list = [0.0]
+    tpr_list = [0.0]
+    thr_list = [float("inf")]
+
+    for j in range(len(predict_thresholds) - 1, -1, -1):
+        y_pred = predict_results[:, j].astype(bool)
+        tp = int(np.sum(y_pred & (y_true == 1)))
+        fp = int(np.sum(y_pred & (y_true == 0)))
+        tpr_list.append(tp / pos_count)
+        fpr_list.append(fp / neg_count)
+        thr_list.append(float(predict_thresholds[j]))
+
+    fpr_list.append(1.0)
+    tpr_list.append(1.0)
+    thr_list.append(float("-inf"))
+
+    fpr = np.asarray(fpr_list, dtype=float)
+    tpr = np.asarray(tpr_list, dtype=float)
+    thr_arr = np.asarray(thr_list, dtype=float)
+
+    auc_val = float(sk_metrics.auc(fpr, tpr))
+
+    # thr_list에는 inf/-inf가 포함되어 있어 그대로 argmax/argmin를 쓰면 끝점이 선택될 수 있음
+    finite_mask = np.isfinite(thr_arr)
+    candidate_idx = np.where(finite_mask)[0]
+
+    # best threshold (Youden's J)
+    j_scores = tpr - fpr
+    if candidate_idx.size > 0:
+        best_idx = int(candidate_idx[np.argmax(j_scores[candidate_idx])])
+    else:
+        best_idx = int(np.argmax(j_scores))
+
+    best_thr = float(thr_arr[best_idx])
+    best_fpr = float(fpr[best_idx])
+    best_tpr = float(tpr[best_idx])
+
+    # (0,1)과의 거리 최소 지점 (Upper-left에 가장 가까운 operating point)
+    dist2 = (fpr**2) + ((1.0 - tpr) ** 2)
+    if candidate_idx.size > 0:
+        closest_idx = int(candidate_idx[np.argmin(dist2[candidate_idx])])
+    else:
+        closest_idx = int(np.argmin(dist2))
+
+    closest_thr = float(thr_arr[closest_idx])
+    closest_fpr = float(fpr[closest_idx])
+    closest_tpr = float(tpr[closest_idx])
+    closest_dist = float(np.sqrt(dist2[closest_idx]))
+
+    print(f"AUC = {auc_val:.4f}")
+    print(
+        f"Best threshold (Youden J) ≈ {best_thr:.6g} @ (FPR={best_fpr:.4f}, TPR={best_tpr:.4f})"
+    )
+    print(
+        f"Closest to (0,1) ≈ {closest_thr:.6g} @ (FPR={closest_fpr:.4f}, TPR={closest_tpr:.4f}), dist={closest_dist:.4f}"
+    )
+
+    if save_path is not None:
+        os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
+
+    plt.figure(figsize=figsize)
+    plt.plot(fpr, tpr, label=f"ROC (AUC={auc_val:.3f})")
+    plt.plot([0, 1], [0, 1], linestyle="--", color="gray", label="Random")
+
+    # Youden J 지점 표시
+    dx = 0.05 if best_fpr <= 0.7 else -0.25
+    dy = 0.05 if best_tpr <= 0.7 else -0.25
+    plt.scatter([best_fpr], [best_tpr], color="red", s=60, zorder=5, label=f"Best thr={best_thr:.3g}")
+    plt.annotate(
+        f"thr={best_thr:.3g}\nFPR={best_fpr:.2f}, TPR={best_tpr:.2f}",
+        xy=(best_fpr, best_tpr),
+        xytext=(min(max(best_fpr + dx, 0.0), 1.0), min(max(best_tpr + dy, 0.0), 1.0)),
+        textcoords="data",
+        arrowprops=dict(arrowstyle="->", color="red", lw=1.0),
+        fontsize=9,
+        color="red",
+    )
+
+    # (0,1) 최소거리 지점 표시
+    dx2 = 0.05 if closest_fpr <= 0.7 else -0.25
+    dy2 = -0.12 if closest_tpr >= 0.5 else 0.08
+    plt.scatter(
+        [closest_fpr],
+        [closest_tpr],
+        color="blue",
+        s=60,
+        zorder=5,
+        label=f"Closest(0,1) thr={closest_thr:.3g}",
+    )
+    plt.annotate(
+        f"thr={closest_thr:.3g}\nFPR={closest_fpr:.2f}, TPR={closest_tpr:.2f}",
+        xy=(closest_fpr, closest_tpr),
+        xytext=(
+            min(max(closest_fpr + dx2, 0.0), 1.0),
+            min(max(closest_tpr + dy2, 0.0), 1.0),
+        ),
+        textcoords="data",
+        arrowprops=dict(arrowstyle="->", color="blue", lw=1.0),
+        fontsize=9,
+        color="blue",
+    )
+
+    plt.xlabel("False Positive Rate")
+    plt.ylabel("True Positive Rate")
+    plt.title(title)
+    plt.grid(True, alpha=0.3)
+    plt.legend(loc="lower right")
+    plt.tight_layout()
+
+    if save_path is not None:
+        plt.savefig(save_path, dpi=200)
+
+    if show:
+        plt.show()
+    else:
+        plt.close()
+
+    if save_path is not None:
+        print(f"ROC curve saved to: {save_path}")
+
+    return {
+        "auc": auc_val,
+        "best": {"threshold": best_thr, "fpr": best_fpr, "tpr": best_tpr},
+        "closest_to_01": {
+            "threshold": closest_thr,
+            "fpr": closest_fpr,
+            "tpr": closest_tpr,
+            "distance": closest_dist,
+        },
+    }
+
 def cont(X_col, data_mean, data_std, X_test, P, num_pc, lamda, T2UCL1):
     X_test = ((X_test - data_mean) / data_std)
     S = np.dot(X_test, P[:, :num_pc])
@@ -661,23 +909,79 @@ def SlidingAverage(s, n):
     return mean
 
 def DiagnosisFeature(ERRORU,ERRORX):
-    ERRORUm = pd.DataFrame(ERRORU).max(axis=1)
-    ERRORXm = pd.DataFrame(ERRORX).max(axis=1)
-    meanu = ERRORU.mean(axis=1)
-    meanx = ERRORX.mean(axis=1)
-    Z_U = (pd.DataFrame(ERRORU).sub(meanu, axis=0).div(ERRORU.std(axis=1), axis=0)).max(axis=1)
-    Z_X = (pd.DataFrame(ERRORX).sub(meanx, axis=0).div(ERRORX.std(axis=1), axis=0)).max(axis=1)
-    second_largest_ERRORU = pd.Series(np.apply_along_axis(lambda row: np.partition(row, -2)[-2], axis=1, arr=ERRORU))
-    max_diff_ERRORU = (ERRORUm - second_largest_ERRORU).div(ERRORU.std(axis=1), axis=0)
-    second_largest_ERRORX = pd.Series(np.apply_along_axis(lambda row: np.partition(row, -2)[-2], axis=1, arr=ERRORX))
-    max_diff_ERRORX = (ERRORXm - second_largest_ERRORX).div(ERRORX.std(axis=1), axis=0)
+    # 성능 최적화 버전:
+    # - pandas DataFrame 반복 생성 제거
+    # - np.apply_along_axis(파이썬 루프) 제거
+    # - SlidingAverage_list(파이썬 루프) 대신 numpy 누적합 기반 계산
+
+    U = np.asarray(ERRORU, dtype=float)
+    X = np.asarray(ERRORX, dtype=float)
+    if U.ndim != 2 or X.ndim != 2:
+        raise ValueError(f"DiagnosisFeature expects 2D arrays, got {U.ndim}D and {X.ndim}D")
+
+    eps = 1e-12
+
+    U_max = U.max(axis=1)
+    X_max = X.max(axis=1)
+    U_mean = U.mean(axis=1)
+    X_mean = X.mean(axis=1)
+    U_std = np.maximum(U.std(axis=1), eps)
+    X_std = np.maximum(X.std(axis=1), eps)
+
+    Z_U = ((U - U_mean[:, None]) / U_std[:, None]).max(axis=1)
+    Z_X = ((X - X_mean[:, None]) / X_std[:, None]).max(axis=1)
+
+    # 두 번째로 큰 값(행별): np.partition을 axis=1로 벡터화
+    # (열 수가 1인 경우를 대비)
+    if U.shape[1] >= 2:
+        U_second = np.partition(U, -2, axis=1)[:, -2]
+    else:
+        U_second = U[:, 0]
+
+    if X.shape[1] >= 2:
+        X_second = np.partition(X, -2, axis=1)[:, -2]
+    else:
+        X_second = X[:, 0]
+
+    max_diff_ERRORU = (U_max - U_second) / U_std
+    max_diff_ERRORX = (X_max - X_second) / X_std
+
+    # pandas EWM(지수이동평균)은 그대로 사용(여기서의 비용은 작음)
     alpha = 0.2
+    ERRORUm = pd.Series(U_max)
+    ERRORXm = pd.Series(X_max)
     Z_U_smoothed = ERRORUm.ewm(alpha=alpha).mean()
     Z_X_smoothed = ERRORXm.ewm(alpha=alpha).mean()
-    max_diff_ERRORX = pd.Series(SlidingAverage_list(max_diff_ERRORX , 100))
-    Z_X = pd.Series(SlidingAverage_list(Z_X , 100))
-    Z_X_smoothed = pd.Series(SlidingAverage_list(Z_X_smoothed , 100))
-    df_data = pd.concat([max_diff_ERRORU,max_diff_ERRORX,Z_U,Z_X,Z_U_smoothed,Z_X_smoothed], axis=1) # zu_2, zx_2, zu_1, zx_1, emu, emx
+
+    def _sliding_average_prev_window_np(s, n: int):
+        a = np.asarray(s, dtype=float).reshape(-1)
+        L = int(a.shape[0])
+        n = int(n)
+        if L == 0:
+            return a
+        if L <= n or n <= 0:
+            return a
+        out = np.empty(L, dtype=float)
+        first_mean = float(np.mean(a[:n]))
+        out[:n] = first_mean
+        c = np.cumsum(a, dtype=float)
+        c = np.concatenate(([0.0], c))
+        window_sums = c[n:] - c[:-n]  # ends at n..L
+        out[n:] = (window_sums[:-1] / n)  # ends at n..L-1
+        return out
+
+    # 원래 로직 유지: X 관련 3개만 sliding average 적용
+    max_diff_ERRORX = pd.Series(_sliding_average_prev_window_np(max_diff_ERRORX, 100))
+    Z_X = pd.Series(_sliding_average_prev_window_np(Z_X, 100))
+    Z_X_smoothed = pd.Series(_sliding_average_prev_window_np(Z_X_smoothed.to_numpy(), 100))
+
+    max_diff_ERRORU = pd.Series(max_diff_ERRORU)
+    Z_U = pd.Series(Z_U)
+
+    df_data = pd.concat(
+        [max_diff_ERRORU, max_diff_ERRORX, Z_U, Z_X, Z_U_smoothed, Z_X_smoothed],
+        axis=1,
+    )
     return df_data
 
 def ClassifyFeature(temp_max,temp_avg,CONTN,insulation_resistance,threshold1,fai):
@@ -872,7 +1176,11 @@ def plot_diagnostics_triplet(t2_array,
                              save_path=None,
                              show=True,
                              x_start=None,
-                             x_tick_step=1000):
+                             x_tick_step=1000,
+                             downsample: int = 1,
+                             tight_layout: bool = True,
+                             dpi: int = 150,
+                             png_compress_level = 1):
     """
     세 개의 진단 시계열을 하나의 Figure에 3x1 서브플롯으로 그립니다.
 
@@ -912,6 +1220,14 @@ def plot_diagnostics_triplet(t2_array,
     else:
         x = np.arange(n)
 
+    # 다운샘플링(플롯 성능 개선용): 시각화 목적이라면 k=5~20 정도가 효과적
+    ds = int(downsample) if downsample is not None else 1
+    if ds > 1:
+        x = x[::ds]
+        t2 = t2[::ds]
+        spe = spe[::ds]
+        CI = CI[::ds]
+
     fig, axes = plt.subplots(nrows=3, ncols=1, figsize=figsize, sharex=True)
 
     # Top: T²
@@ -950,20 +1266,32 @@ def plot_diagnostics_triplet(t2_array,
         thr = list(thresholds)
         # 최대 3개까지만 표시(요청사항 대응)
         thr = thr[:3]
-        sigma_labels = [f"Threshold {i+1} ({sigma_levels[i]:.1f}\u03C3)" for i in range(len(thr))]
+        if sigma_levels is None:
+            sigma_labels = [f"Threshold-{i+1}" for i in thr]
+        else:
+            sigma_labels = [f"Threshold {i+1} ({sigma_levels[i]:.1f}\u03C3)" for i in range(len(thr))]
         for val, lab, col in zip(thr, sigma_labels, threshold_color):
             axes[2].axhline(val, color=col, linestyle='--', linewidth=1.2, label=lab)
         axes[2].legend(loc='best', fontsize=8)
 
     if title:
         fig.suptitle(title, y=0.98)
-    fig.tight_layout()
+
+    if tight_layout:
+        fig.tight_layout()
+    else:
+        # tight_layout은 비용이 큰 편이라, 고정 간격으로 빠르게 배치
+        fig.subplots_adjust(hspace=0.25, top=0.92)
 
     if save_path is not None:
         dir_ = os.path.dirname(save_path)
         if dir_:
             os.makedirs(dir_, exist_ok=True)
-        fig.savefig(save_path, dpi=150)
+        if str(save_path).lower().endswith(".png") and png_compress_level is not None:
+            # PNG 저장이 보통 가장 느림: 압축 레벨을 낮추면 저장 시간↓(대신 파일 크기↑)
+            fig.savefig(save_path, dpi=dpi, pil_kwargs={"compress_level": int(png_compress_level)})
+        else:
+            fig.savefig(save_path, dpi=dpi)
 
     if show:
         plt.show()
@@ -1066,24 +1394,64 @@ def make_model_path_based_timestamp(base="models", make:bool=False, prefix:str=N
     return path
 
 def last_index_of(tensor, feature_idx, value, operator='=='):
-    start_idx = 0
-    result = np.array([])
+    # NOTE: 반환값은 "조건을 만족하는 마지막 인덱스 + 1" 입니다. (없으면 0)
+    # 기존 구현은 torch.Tensor에 대해 np.array(tensor)로 전체 복사 변환이 발생해 매우 느릴 수 있어,
+    # torch 입력은 torch 연산으로만 처리합니다.
+
+    if isinstance(tensor, torch.Tensor):
+        if tensor.ndim < 2:
+            raise ValueError(f"last_index_of expects 2D tensor, got shape {tuple(tensor.shape)}")
+
+        col = tensor[:, feature_idx]
+        if operator == '==':
+            mask = col == value
+        elif operator == '<':
+            mask = col < value
+        elif operator == '<=':
+            mask = col <= value
+        elif operator == '>':
+            mask = col > value
+        elif operator == '>=':
+            mask = col >= value
+        elif operator == '!=':
+            mask = col != value
+        else:
+            raise ValueError(f"Unsupported operator: {operator}")
+
+        if not bool(mask.any()):
+            return 0
+
+        # 마지막 True 위치를 찾기 위해 뒤집어서 argmax 사용
+        # (nonzero로 전체 인덱스 배열을 만들지 않아 메모리/시간이 유리할 수 있음)
+        flipped = torch.flip(mask, dims=(0,))
+        last_true_from_end = int(torch.argmax(flipped.to(dtype=torch.int8)).item())
+        last_true = int(mask.shape[0] - 1 - last_true_from_end)
+        return last_true + 1
+
+    A = np.asarray(tensor)
+    if A.ndim < 2:
+        raise ValueError(f"last_index_of expects 2D array-like, got shape {getattr(A, 'shape', None)}")
+
+    col = A[:, feature_idx]
     if operator == '==':
-        result = np.where(np.array(tensor)[:,feature_idx] == value)[0]
+        mask = col == value
     elif operator == '<':
-        result = np.where(np.array(tensor)[:,feature_idx] < value)[0]
+        mask = col < value
     elif operator == '<=':
-        result = np.where(np.array(tensor)[:,feature_idx] <= value)[0]
+        mask = col <= value
     elif operator == '>':
-        result = np.where(np.array(tensor)[:,feature_idx] > value)[0]
+        mask = col > value
     elif operator == '>=':
-        result = np.where(np.array(tensor)[:,feature_idx] >= value)[0]
+        mask = col >= value
     elif operator == '!=':
-        result = np.where(np.array(tensor)[:,feature_idx] != value)[0]
-        
-    if result.size != 0:
-            start_idx = result[-1] + 1
-    return start_idx
+        mask = col != value
+    else:
+        raise ValueError(f"Unsupported operator: {operator}")
+
+    idx = np.flatnonzero(mask)
+    if idx.size == 0:
+        return 0
+    return int(idx[-1] + 1)
 
 def get_start_index(tensor, feature_idx):
     start_idx = 0
@@ -1119,13 +1487,30 @@ def normalize_columns_0_to_1(X, eps=1e-12, exclude_cols=None, exclude_ranges=Non
         mask = np.ones(n_cols, dtype=bool)
 
         if exclude_cols is not None:
-            for c in exclude_cols:
+            try:
+                cols = np.asarray(exclude_cols)
+            except Exception:
+                cols = None
+
+            if cols is None:
+                for c in exclude_cols:
+                    try:
+                        ci = int(c)
+                    except Exception:
+                        continue
+                    if 0 <= ci < n_cols:
+                        mask[ci] = False
+            else:
+                # 벡터화: 유효 범위 인덱스만 False 처리
                 try:
-                    ci = int(c)
+                    cols_i = cols.astype(np.int64, copy=False).ravel()
                 except Exception:
-                    continue
-                if 0 <= ci < n_cols:
-                    mask[ci] = False
+                    cols_i = np.array([int(x) for x in cols.ravel()], dtype=np.int64)
+
+                if cols_i.size:
+                    valid = (cols_i >= 0) & (cols_i < n_cols)
+                    if np.any(valid):
+                        mask[cols_i[valid]] = False
 
         if exclude_ranges is not None:
             for r in exclude_ranges:
@@ -1150,7 +1535,11 @@ def normalize_columns_0_to_1(X, eps=1e-12, exclude_cols=None, exclude_ranges=Non
         return mask
 
     if isinstance(X, torch.Tensor):
-        Xf = X.to(dtype=torch.float64)
+        # 불필요한 dtype 변환/복사 최소화
+        if torch.is_floating_point(X):
+            Xf = X
+        else:
+            Xf = X.to(dtype=torch.float64)
         if Xf.ndim != 2:
             raise ValueError(f"Expected 2D tensor (n×m), got shape {tuple(Xf.shape)}")
 
@@ -1163,9 +1552,9 @@ def normalize_columns_0_to_1(X, eps=1e-12, exclude_cols=None, exclude_ranges=Non
         X_sel = Xf[:, col_mask]
         col_min = X_sel.min(dim=0, keepdim=True).values
         col_max = X_sel.max(dim=0, keepdim=True).values
-        denom = torch.clamp(col_max - col_min, min=eps)
+        denom = torch.clamp(col_max - col_min, min=float(eps))
 
-        out = Xf.clone()
+        out = Xf.clone()  # 원본 보존(기존 동작 유지)
         out[:, col_mask] = (X_sel - col_min) / denom
         return out
     else:
@@ -1188,105 +1577,7 @@ def normalize_columns_0_to_1(X, eps=1e-12, exclude_cols=None, exclude_ranges=Non
         return out
 
 
-def normalize_columns_by_mean_var(X, eps=1e-12, exclude_cols=None, exclude_ranges=None, return_var: bool = False):
-    """입력 행렬의 각 열을 (y - mu_y) / var_y 로 정규화합니다.
-
-    - torch.Tensor와 numpy.ndarray 모두 지원합니다.
-    - var_y(분산)가 0인 열은 eps로 치환합니다.
-    - 특정 열(또는 열 구간)을 정규화에서 제외할 수 있습니다.
-
-    Args:
-        X: (n×m) 배열/텐서
-        eps: 분모(var)가 0일 때 사용할 작은 값
-        exclude_cols: 정규화에서 제외할 컬럼 인덱스들(0-based). 예: [0, 1, 2]
-        exclude_ranges: 정규화에서 제외할 컬럼 구간들(0-based, inclusive).
-            예: [(110, 220)]  -> 110~220 컬럼은 정규화하지 않음
-
-    Returns:
-        return_var=False: 동일 타입(torch.Tensor 또는 np.ndarray)의 정규화된 행렬
-        return_var=True : (정규화된 행렬, 정규화 이전 var 벡터)
-    """
-
-    def _build_normalize_mask(n_cols: int):
-        mask = np.ones(n_cols, dtype=bool)
-
-        if exclude_cols is not None:
-            for c in exclude_cols:
-                try:
-                    ci = int(c)
-                except Exception:
-                    continue
-                if 0 <= ci < n_cols:
-                    mask[ci] = False
-
-        if exclude_ranges is not None:
-            for r in exclude_ranges:
-                if r is None:
-                    continue
-                try:
-                    start, end = r
-                except Exception:
-                    continue
-                try:
-                    start_i = int(start)
-                    end_i = int(end)
-                except Exception:
-                    continue
-                if end_i < start_i:
-                    start_i, end_i = end_i, start_i
-                start_i = max(start_i, 0)
-                end_i = min(end_i, n_cols - 1)
-                if start_i <= end_i:
-                    mask[start_i : end_i + 1] = False
-
-        return mask
-
-    if isinstance(X, torch.Tensor):
-        Xf = X.to(dtype=torch.float64)
-        if Xf.ndim != 2:
-            raise ValueError(f"Expected 2D tensor (n×m), got shape {tuple(Xf.shape)}")
-
-        # 정규화 이전(원본 기준) 전체 열 분산
-        var_before = Xf.var(dim=0, unbiased=False)
-
-        n_cols = int(Xf.shape[1])
-        np_mask = _build_normalize_mask(n_cols)
-        if not np.any(np_mask):
-            return (Xf, var_before) if return_var else Xf
-
-        col_mask = torch.as_tensor(np_mask, dtype=torch.bool, device=Xf.device)
-        X_sel = Xf[:, col_mask]
-        mu = X_sel.mean(dim=0, keepdim=True)
-        var = X_sel.var(dim=0, keepdim=True, unbiased=False)
-        denom = torch.clamp(var, min=eps)
-
-        out = Xf.clone()
-        out[:, col_mask] = (X_sel - mu) / denom
-        return (out, var_before) if return_var else out
-
-    A = np.asarray(X, dtype=float)
-    if A.ndim != 2:
-        raise ValueError(f"Expected 2D array (n×m), got shape {A.shape}")
-
-    # 정규화 이전(원본 기준) 전체 열 분산
-    var_before = np.var(A, axis=0)
-
-    n_cols = int(A.shape[1])
-    mask = _build_normalize_mask(n_cols)
-    if not np.any(mask):
-        return (A, var_before) if return_var else A
-
-    A_sel = A[:, mask]
-    mu = np.mean(A_sel, axis=0, keepdims=True)
-    var = np.var(A_sel, axis=0, keepdims=True)
-    denom = np.maximum(var, eps)
-
-    out = A.copy()
-    out[:, mask] = (A_sel - mu) / denom
-    return (out, var_before) if return_var else out
-
-
-def normalize_columns_by_mean_std(X, eps=1e-12, exclude_cols=None, exclude_ranges=None):
+def normalize_columns_by_mean_std(X, exclude_cols=None, exclude_ranges=None):
     """입력 행렬의 각 열을 (y - mu_y) / sigma_y 로 정규화합니다.
 
     - torch.Tensor와 numpy.ndarray 모두 지원합니다.
@@ -1352,10 +1643,9 @@ def normalize_columns_by_mean_std(X, eps=1e-12, exclude_cols=None, exclude_range
         X_sel = Xf[:, col_mask]
         mu = X_sel.mean(dim=0, keepdim=True)
         std = X_sel.std(dim=0, keepdim=True, unbiased=False)
-        denom = torch.clamp(std, min=eps)
 
         out = Xf.clone()
-        out[:, col_mask] = (X_sel - mu) / denom
+        out[:, col_mask] = (X_sel - mu) / std
         return out
 
     A = np.asarray(X, dtype=float)
@@ -1370,10 +1660,9 @@ def normalize_columns_by_mean_std(X, eps=1e-12, exclude_cols=None, exclude_range
     A_sel = A[:, mask]
     mu = np.mean(A_sel, axis=0, keepdims=True)
     std = np.std(A_sel, axis=0, keepdims=True)
-    denom = np.maximum(std, eps)
 
     out = A.copy()
-    out[:, mask] = (A_sel - mu) / denom
+    out[:, mask] = (A_sel - mu) / std
     return out
     
 def _as_mapping(config: Any) -> dict:
@@ -1485,3 +1774,71 @@ def read_learning_case_from_sim_config(models_dir: str) -> int:
     if not m:
         raise ValueError(f"learning_case를 찾지 못했습니다: {sim_path}")
     return int(m.group(1))
+
+def get_preprocessing_and_skip_charge_ready(learning_case: int):
+    if learning_case == 1:
+        PREPROCESSING = False
+        SKIP_CHARGE_READY = True
+    elif learning_case == 2:
+        PREPROCESSING = True
+        SKIP_CHARGE_READY = True
+    elif learning_case == 3:
+        PREPROCESSING = True
+        SKIP_CHARGE_READY = False
+    elif learning_case == 4:
+        PREPROCESSING = False
+        SKIP_CHARGE_READY = False
+    else:
+        raise ValueError(f"지원하지 않는 learning_case 값입니다: {learning_case}")
+    return PREPROCESSING, SKIP_CHARGE_READY
+
+
+def load_vehicle_ids_used_for_training(sim_config_path: str) -> list[int]:
+    with open(sim_config_path, "r", encoding="utf-8") as f:
+        for line in f:
+            if "Vehicle IDs used for training" not in line:
+                continue
+            m = re.search(r":\s*(\[.*\])\s*$", line)
+            if not m:
+                raise ValueError(f"sim_config.txt에서 차량 ID 리스트를 찾았지만 파싱에 실패했습니다: {line.strip()}")
+            value = ast.literal_eval(m.group(1))
+            if isinstance(value, (list, tuple)):
+                return [int(x) for x in value]
+            raise ValueError(f"Vehicle IDs used for training 값이 list/tuple이 아닙니다: {type(value)}")
+
+    raise FileNotFoundError(
+        f"sim_config.txt에서 'Vehicle IDs used for training' 라인을 찾지 못했습니다: {sim_config_path}"
+    )
+
+def get_input_dimensions(BATTERY_TYPE: str):
+    dim_dict = dict()
+    dim_dict["x"] = 2 # [estimated pack voltage 1, estimated pack volatage 2]
+    dim_dict["y"] = 110 if BATTERY_TYPE == 'QAS' else 85 # DTI 일경우 85 이고 QAS일 경우 110인듯 [각 셀의 voltage]
+    dim_dict["z"] = 110 if BATTERY_TYPE == 'QAS' else 85 # DTI 일경우 85 이고 QAS일 경우 110인듯 [각 셀의 estimated voltage diviation]
+    dim_dict["q"] = 3 # [Board Temperature, Board-end SOC, Current]
+
+    dim_dict["x2"] = 2 # [estimated pack SOC 1, estimated pack SOC 2]
+    dim_dict["y2"] = 110 if BATTERY_TYPE == 'QAS' else 85 # DTI 일경우 85 이고 QAS일 경우 110인듯 [각 셀의 SOC]
+    dim_dict["z2"] = 110 if BATTERY_TYPE == 'QAS' else 85 # DTI 일경우 85 이고 QAS일 경우 110인듯 [각 셀의 estimated SOC diviation]
+    dim_dict["q2"]= 4 # [Board Temperature, Board-end SOC, Velocity, Current]
+    
+    return dim_dict
+
+
+def preprocess_combined_tensor(tensor, tensorx, dim_dict, BATTERY_TYPE, PREPROCESSING, SKIP_CHARGE_READY, normalize_dx: bool=False, normalize_val: float=1.0):
+    if SKIP_CHARGE_READY:
+        charge_idx = 224 if BATTERY_TYPE == "QAS" else 174
+        start_idx = last_index_of(tensor, feature_idx=charge_idx, value=-500, operator='<') # -500 means minimum current during charge ready
+        tensor = tensor[start_idx:, :]
+        tensorx = tensorx[start_idx:, :]
+        
+    if PREPROCESSING:
+        start_idx = np.max([0,last_index_of(tensor, feature_idx=0, value=0, operator='<=')]) # 0 means minimum voltage
+        start_idx = np.max([start_idx,last_index_of(tensor, feature_idx=0, value=5, operator='>')]) # 5 means maximum voltage
+        cell_div_range = (dim_dict["x"] + dim_dict["y"], dim_dict["x"] + dim_dict["y"] + dim_dict["z"] - 1)
+        tensor = normalize_columns_0_to_1(tensor[start_idx:, :], exclude_ranges=[cell_div_range])
+        tensorx = normalize_columns_0_to_1(tensorx[start_idx:, :], exclude_ranges=[cell_div_range])
+        if normalize_dx:
+            tensor[:,range(dim_dict["x"] + dim_dict["y"], dim_dict["x"] + dim_dict["y"] + dim_dict["z"])] = tensor[:,range(dim_dict["x"] + dim_dict["y"], dim_dict["x"] + dim_dict["y"] + dim_dict["z"])].div(normalize_val)
+            tensorx[:,range(dim_dict["x2"] + dim_dict["y2"], dim_dict["x2"] + dim_dict["y2"] + dim_dict["z2"])] = tensorx[:,range(dim_dict["x2"] + dim_dict["y2"], dim_dict["x2"] + dim_dict["y2"] + dim_dict["z2"])].div(normalize_val)
+    return tensor, tensorx
