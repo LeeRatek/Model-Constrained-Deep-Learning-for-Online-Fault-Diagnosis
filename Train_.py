@@ -62,7 +62,7 @@ model_path = data_path + "/artifact"
 
 start = time.perf_counter()
 
-normal_list = np.load(f"./{BATTERY_TYPE}_filtered_vehicle_ids_normal.npy").astype(np.int64).tolist()
+train_list = np.load(f"./{BATTERY_TYPE}_filtered_vehicle_ids_train.npy").astype(np.int64).tolist()
 validate_list = np.load(f"./{BATTERY_TYPE}_filtered_vehicle_ids_validate.npy").astype(np.int64).tolist()
 vehicle_idxes = []
 FIRST_LOAD = True
@@ -75,7 +75,7 @@ lr_decay_freq = 25
 EPOCH = args.lstm_epochs
 BATCH_SIZE = args.lstm_batchsize
 
-train_list = normal_list[args.vehicle_start:args.vehicle_end+1] if args.vehicle_end != -1 else normal_list[args.vehicle_start:]
+train_list = train_list[args.vehicle_start:args.vehicle_end+1] if args.vehicle_end != -1 else train_list[args.vehicle_start:]
 count = 0
 for i in train_list:
     count += 1
