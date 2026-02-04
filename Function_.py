@@ -262,11 +262,15 @@ def solvers(volt_modepi, volt_di, volt_all, soc, b, current, temp_avg):
     xipre[1:, :] = xi[:xi.shape[0] - 1, :]
     return xipre, xpre, Spre, Upre, Xipre, x, DUi, Xi
 
-
-def custom_activation(x):
-    return 2.5 + 1.8 * torch.sigmoid(x)
-    # return torch.sigmoid(x)
-
+class CustomSigmoidFunc():
+    # The authors use scale default = 1.8, shift default = 2.5
+    # We set scale = 1, shift = 0 as default values for general use.
+    def __init__(self, scale=1, shift=0):
+        self.scale = scale
+        self.shift = shift
+          
+    def forward(self, x):
+        return self.shift + self.scale * torch.sigmoid(x)
 
 def PCA(data, l1, l2):
     # Data standardization
@@ -300,24 +304,6 @@ def PCA(data, l1, l2):
     SPE_99_limit = O1 * ((h0 * c_99 * ((2 * O2) ** 0.5) /
                          O1 + 1 + O2 * h0 * (h0 - 1) / (O1 ** 2)) ** (1 / h0))
     return v_I, v, v_ratio, p_k, data_mean, data_std, T_95_limit, T_99_limit, SPE_95_limit, SPE_99_limit, P, k, P_t, X, data_nor
-
-# def Calculate_confidence_limits(data, k, v, l1=0.99, l2=0.99):
-#     coe = k[0] * (np.shape(data)[0] - 1) * (np.shape(data)[0] + 1) / \
-#         ((np.shape(data)[0] - k[0]) * np.shape(data)[0])
-#     T_95_limit = coe * stats.f.ppf(0.95, k[0], (np.shape(data)[0] - k[0]))
-#     T_99_limit = coe * stats.f.ppf(l1, k[0], (np.shape(data)[0] - k[0]))
-#     # SPE statistic threshold calculation
-#     O1 = np.sum((v[k[0]:]) ** 1)
-#     O2 = np.sum((v[k[0]:]) ** 2)
-#     O3 = np.sum((v[k[0]:]) ** 3)
-#     h0 = 1 - (2 * O1 * O3) / (3 * (O2 ** 2))
-#     c_95 = norm.ppf(0.95)
-#     c_99 = norm.ppf(l2)
-#     SPE_95_limit = O1 * ((h0 * c_95 * ((2 * O2) ** 0.5) /
-#                          O1 + 1 + O2 * h0 * (h0 - 1) / (O1 ** 2)) ** (1 / h0))
-#     SPE_99_limit = O1 * ((h0 * c_99 * ((2 * O2) ** 0.5) /
-#                          O1 + 1 + O2 * h0 * (h0 - 1) / (O1 ** 2)) ** (1 / h0))
-#     return T_95_limit, T_99_limit, SPE_95_limit, SPE_99_limit
 
 def T2(data_in, data_mean, data_std, p_k, v_I):
     data_nor = np.array((data_in - data_mean) / data_std)
@@ -771,6 +757,49 @@ def plot_loss_curve(
 
     return epochs, losses
 
+def plot_loss_curve_all(args):
+    plot_loss_curve(
+        loss_csv_path=f"{args.models_dir}/loss_net.csv",
+        title="Voltage train loss",
+        save_path=f"{args.models_dir}/loss_net.png",
+        show=False,          # 저장만 하고 창은 안 띄움
+        dpi=200,
+        downsample=1,        # 1이면 전체 epoch 표시
+        tight_layout=False,
+        png_compress_level=9,
+        # yscale="log",
+    )
+
+    plot_loss_curve(
+        loss_csv_path=f"{args.models_dir}/loss_netx.csv",
+        title="SoC train loss",
+        save_path=f"{args.models_dir}/loss_netx.png",
+        show=False,          # 저장만 하고 창은 안 띄움
+        dpi=200,
+        downsample=1,        # 1이면 전체 epoch 표시
+        tight_layout=False,
+        png_compress_level=9,
+        # yscale="log",
+    )
+        
+    plot_loss_curve(
+        loss_csv_path=f"{args.models_dir}/loss_net_val.csv",
+        title="Voltage validation loss (every 10 epochs)",
+        save_path=f"{args.models_dir}/loss_net_val.png",
+        show=False,
+        downsample=1,
+    )
+    
+    plot_loss_curve(
+        loss_csv_path=f"{args.models_dir}/loss_netx_val.csv",
+        title="SoC validation loss (every 10 epochs)",
+        save_path=f"{args.models_dir}/loss_netx_val.png",
+        show=False,
+        downsample=1,
+    )
+    
+    
+    
 
 def plot_auc_roc_curve_from_threshold_matrix(
     y_true,
@@ -1930,6 +1959,91 @@ def read_learning_case_from_sim_config(models_dir: str) -> int:
         raise ValueError(f"learning_case를 찾지 못했습니다: {sim_path}")
     return int(m.group(1))
 
+
+def _coerce_sim_config_value(raw: str):
+    s = str(raw).strip()
+    if s == "":
+        return ""
+
+    sl = s.lower()
+    if sl in ("true", "false"):
+        return sl == "true"
+
+    # int
+    if re.fullmatch(r"-?\d+", s):
+        try:
+            return int(s)
+        except Exception:
+            pass
+
+    # float
+    if re.fullmatch(r"-?\d+(?:\.\d+)?", s):
+        try:
+            return float(s)
+        except Exception:
+            pass
+
+    # list/tuple/dict literal (e.g., [1, 2, 3])
+    if (s.startswith("[") and s.endswith("]")) or (s.startswith("(") and s.endswith(")")) or (
+        s.startswith("{") and s.endswith("}")
+    ):
+        try:
+            return ast.literal_eval(s)
+        except Exception:
+            return s
+
+    return s
+
+
+def read_values_from_sim_config(models_dir: str, names_to_find, *, strict: bool = True) -> dict:
+    """models_dir/sim_config.txt에서 특정 키들의 값을 읽어 dict로 반환.
+
+    Args:
+        models_dir: sim_config.txt가 있는 디렉터리 (예: ./models/260203_163103)
+        names_to_find: 찾을 키 이름(문자열) 또는 키 이름 리스트/튜플
+        strict: True면 누락된 키가 있을 때 예외 발생, False면 누락 키는 None으로 반환
+
+    Returns:
+        dict[str, Any]: {key: value}
+        value는 bool/int/float/list/dict literal 등을 가능한 범위에서 자동 변환합니다.
+    """
+    sim_path = Path(models_dir) / "sim_config.txt"
+    text = sim_path.read_text(encoding="utf-8")
+
+    if isinstance(names_to_find, (str, bytes)):
+        keys = [names_to_find]
+    else:
+        keys = list(names_to_find)
+
+    # sim_config.txt는 보통 "key : value" 형태로 정렬되어 출력됨
+    parsed = {}
+    for line in text.splitlines():
+        if ":" not in line:
+            continue
+        # 구분선(====, ----) 등 제외
+        stripped = line.strip()
+        if not stripped or set(stripped) <= {"=", "-"}:
+            continue
+
+        k, v = line.split(":", 1)
+        k = k.strip()
+        v = v.strip()
+        if k:
+            parsed[k] = v
+
+    out = {}
+    missing = []
+    for k in keys:
+        if k in parsed:
+            out[k] = _coerce_sim_config_value(parsed[k])
+        else:
+            missing.append(k)
+            out[k] = None
+
+    if strict and missing:
+        raise ValueError(f"sim_config.txt에서 키를 찾지 못했습니다: {missing} (file={sim_path})")
+    return out
+
 def get_preprocessing_and_skip_charge_ready(learning_case: int):
     if learning_case == 1:
         PREPROCESSING = False
@@ -2011,3 +2125,41 @@ def preprocess_combined_tensor(tensor, tensorx, dim_dict, BATTERY_TYPE, PREPROCE
             else:
                 tensorx[:, dx2_s:dx2_e] = np.asarray(tensorx[:, dx2_s:dx2_e]) / normalize_val
     return tensor, tensorx
+
+
+def plot_ae_output_distribution(ERRORU, ERRORX, df_data, save_path=None, show=True, normal_fit=True, do_plot=False):
+    if not do_plot:
+        return
+    plot_distribution_with_stats(ERRORU,
+                                    bins=60, kde=True, normal_fit=normal_fit,
+                                    title="Cell voltage sample Distribution",
+                                    save_path=save_path, show=show)
+    plot_distribution_with_stats(ERRORX,
+                                    bins=60, kde=True, normal_fit=normal_fit,
+                                    title="Cell SoC sample Distribution",
+                                    save_path=save_path, show=show)
+    plot_distribution_with_stats(np.array(df_data.iloc[:,0]),
+                                    bins=60, kde=True, normal_fit=normal_fit,
+                                    title="Cell $zu_2$ sample Distribution",
+                                    save_path=save_path, show=show)
+    plot_distribution_with_stats(np.array(df_data.iloc[:,1]),
+                                    bins=60, kde=True, normal_fit=normal_fit,
+                                    title="Cell $zx_2$ sample Distribution",
+                                    save_path=save_path, show=show)
+    plot_distribution_with_stats(np.array(df_data.iloc[:,2]),
+                                    bins=60, kde=True, normal_fit=normal_fit,
+                                    title="Cell $zu_1$ sample Distribution",
+                                    save_path=save_path, show=show)
+    plot_distribution_with_stats(np.array(df_data.iloc[:,3]),
+                                    bins=60, kde=True, normal_fit=normal_fit,
+                                    title="Cell $zx_1$ sample Distribution",
+                                    save_path=save_path, show=show)
+    plot_distribution_with_stats(np.array(df_data.iloc[:,4]),
+                                    bins=60, kde=True, normal_fit=normal_fit,
+                                    title="Cell $ewu$ sample Distribution",
+                                    save_path=save_path, show=show)
+    plot_distribution_with_stats(np.array(df_data.iloc[:,5]),
+                                    bins=60, kde=True, normal_fit=normal_fit,
+                                    title="Cell $ewx$ sample Distribution",
+                                    save_path=save_path, show=show)
+        

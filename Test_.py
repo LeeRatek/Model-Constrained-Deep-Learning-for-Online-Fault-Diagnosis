@@ -25,7 +25,7 @@ warnings.filterwarnings('ignore')
 
 parser = argparse.ArgumentParser(description="Run diagnostics plotting with CLI options")
 parser.add_argument("--battery-type", choices=["QAS","DTI"], default="QAS", help="배터리 유형 선택 (DTI fault index range = [77~79], QAS fault index range = [335~392])")
-parser.add_argument("--models-dir", type=str, default="./models/260123_082222") # 260123_082222 & 260126_100030
+parser.add_argument("--models-dir", type=str, default="./models/260203_163103") # 260123_082222 & 260126_100030
 # parser.add_argument("--results-dir", type=str, default="./results" if os.environ.get("RESULT_DIR") is None else os.environ.get("RESULT_DIR"))
 parser.add_argument("--source-data-dir", type=str, default="./data" if os.environ.get("SOURCE_DIR") is None else os.environ.get("SOURCE_DIR"))
 parser.add_argument("--x-start", type=int, default=20)
@@ -35,7 +35,18 @@ parser.add_argument("--normalize-dx", action="store_true")
 parser.add_argument("--normalize-val", type=int, default=4)
 args = parser.parse_args()
 
-learning_case = read_learning_case_from_sim_config(args.models_dir)
+vals = read_values_from_sim_config(
+    args.models_dir,
+    names_to_find=["learning_case", "ae_u_scale", "ae_u_shift", "ae_x_scale", "ae_x_shift"],
+    strict=False, # True: 키가 하나라도 없을 시 예외, False: 없는 키는 None
+)
+learning_case = vals["learning_case"]
+
+## ================== For backward compatibility =================== ##
+ae_u_scale = vals["ae_u_scale"] if vals["ae_u_scale"] is not None else 1.8
+ae_u_shift = vals["ae_u_shift"] if vals["ae_u_shift"] is not None else 2.5
+ae_x_scale = vals["ae_x_scale"] if vals["ae_x_scale"] is not None else 1.0
+ae_x_shift = vals["ae_x_shift"] if vals["ae_x_shift"] is not None else 0
 
 # 플롯 결과 저장 폴더는 한 번만 생성
 os.makedirs(f"{args.models_dir}/results", exist_ok=True)
@@ -58,14 +69,18 @@ print_sim_config(
         },
     )
 
-# DTI fault index range = [77~79]
-# QAS fault index range = [335~392]
-sim_config_path = os.path.join(args.models_dir, "sim_config.txt")
-train_vehicle_ids = load_vehicle_ids_used_for_training(sim_config_path)
-print(f"Vehicle IDs used for training: {train_vehicle_ids}")
 
-first_fault_vehicle_id = 335 if BATTERY_TYPE == "QAS" else 77
-# all_normal_vehicle_ids = list(range(0, first_fault_vehicle_id))
+try:
+    plot_loss_curve_all(args)
+except Exception as e:
+    print(f"Error plotting loss curve: {e}")
+
+
+## =================== DTI fault index range = [77~79] =================== 
+## =================== QAS fault index range = [335~392] ===================
+
+# sim_config_path = os.path.join(args.models_dir, "sim_config.txt")
+# train_vehicle_ids = load_vehicle_ids_used_for_training(sim_config_path)
 # all_normal_vehicle_ids = np.load(f"./{BATTERY_TYPE}_filtered_vehicle_ids_normal.npy").astype(np.int64).tolist()
 # normal_list = [vid for vid in all_normal_vehicle_ids if vid not in set(train_vehicle_ids)]
 normal_list = np.load(f"./{BATTERY_TYPE}_filtered_vehicle_ids_test.npy").astype(np.int64).tolist()
@@ -73,8 +88,9 @@ fault_list = np.load(f"./{BATTERY_TYPE}_filtered_vehicle_ids_fault.npy").astype(
 # fault_list = np.arange(335, 393)
 test_list = [normal_list, fault_list]
 
+
+## =================== Initilize params for AUROC curve  =================== ##
 total_test_vehicles = len(normal_list) + len(fault_list)
-    
 predict_threshold_array = range(0, 1000, 2)
 predict_thresholds = np.asarray(list(predict_threshold_array), dtype=float)
 predict_results = np.zeros((total_test_vehicles, len(predict_thresholds)), dtype=np.int8)
@@ -93,12 +109,12 @@ if PREPROCESSING:
                         activation_fn=torch.sigmoid, use_dx_in_forward=True).to(device)
 else:
     net_loaded = CombinedAE(input_size=dim_dict["x"], encode2_input_size=dim_dict["q"], output_size=dim_dict["y"],
-                        activation_fn=custom_activation, use_dx_in_forward=True).to(device)
-netx_loaded = CombinedAE(input_size=dim_dict["x2"], encode2_input_size=dim_dict["q2"], output_size=dim_dict["y2"], activation_fn=torch.sigmoid,
+                        activation_fn=CustomSigmoidFunc(scale=ae_u_scale, shift=ae_u_shift), use_dx_in_forward=True).to(device)
+netx_loaded = CombinedAE(input_size=dim_dict["x2"], encode2_input_size=dim_dict["q2"], output_size=dim_dict["y2"], activation_fn=CustomSigmoidFunc(scale=ae_x_scale, shift=ae_x_shift),
                         use_dx_in_forward=True).to(device)
-net_state_dict = torch.load(os.path.join(args.models_dir, 'net.pth'))
+net_state_dict = torch.load(os.path.join(f"{args.models_dir}/artifact/", 'net.pth'))
 net_loaded.load_state_dict(net_state_dict)
-netx_state_dict = torch.load(os.path.join(args.models_dir, 'netx.pth'))
+netx_state_dict = torch.load(os.path.join(f"{args.models_dir}/artifact/", 'netx.pth'))
 netx_loaded.load_state_dict(netx_state_dict)
 
 start = time.perf_counter()
@@ -151,7 +167,7 @@ for label, vehicle_ids in enumerate(test_list):
             ERRORX = (reconx_imtest[0] - y_recovered2).cpu().numpy()
         
         df_data = DiagnosisFeature(ERRORU,ERRORX)
-        
+        plot_ae_output_distribution(ERRORU, ERRORX, df_data, do_plot=False)
         
         # ## =================== Calculate thresholds =================== ###        
         # sigma_levels = [float(s.strip()) for s in args.sigma_levels.split(',') if s.strip()]

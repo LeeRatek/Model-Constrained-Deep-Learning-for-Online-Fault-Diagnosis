@@ -29,7 +29,7 @@ warnings.filterwarnings('ignore')
 parser = argparse.ArgumentParser(description="Run MC-AE training with CLI options")
 parser.add_argument("--battery-type", choices=["QAS","DTI"], default="QAS")
 parser.add_argument("--vehicle-start", type=int, default=0, help="Filtered normal vehicle ID 시작 인덱스")
-parser.add_argument("--vehicle-end", type=int, default=-1, help="Filtered normal vehicle ID 끝 인덱스")
+parser.add_argument("--vehicle-end", type=int, default=0, help="Filtered normal vehicle ID 끝 인덱스")
 parser.add_argument("--lstm-training", action="store_true")
 parser.add_argument("--lstm-load", action="store_true")
 parser.add_argument("--models-dir", type=str, default="./models" if os.environ.get("MODEL_DIR") is None else os.environ.get("MODEL_DIR"))
@@ -37,9 +37,16 @@ parser.add_argument("--source-data-dir", type=str, default="./data" if os.enviro
 parser.add_argument("--vin1-start", type=int, default=0)
 parser.add_argument("--vin2-start", type=int, default=0)
 parser.add_argument("--vin3-start", type=int, default=0)
-parser.add_argument("--ae-epochs", type=int, default=300) # default 300
-parser.add_argument("--ae-lr", type=float, default=5e-4) # based on original manuscript
-parser.add_argument("--ae-batchsize", type=int, default=100)
+parser.add_argument("--ae-u-scale", type=float, default=1.8)
+parser.add_argument("--ae-u-shift", type=float, default=2.5) 
+parser.add_argument("--ae-u-epochs", type=int, default=10) # default 300
+parser.add_argument("--ae-u-lr", type=float, default=5e-4) # based on original manuscript
+parser.add_argument("--ae-u-batchsize", type=int, default=100)
+parser.add_argument("--ae-x-scale", type=float, default=1.2)
+parser.add_argument("--ae-x-shift", type=float, default=0)
+parser.add_argument("--ae-x-epochs", type=int, default=300) # default 300
+parser.add_argument("--ae-x-lr", type=float, default=5e-4) # based on original manuscript
+parser.add_argument("--ae-x-batchsize", type=int, default=100)
 parser.add_argument("--lstm-epochs", type=int, default=300)
 parser.add_argument("--lstm-lr", type=float, default=1e-4) # based on original manuscript
 parser.add_argument("--lstm-batchsize", type=int, default=100) # based on original manuscript
@@ -194,9 +201,9 @@ os.makedirs(data_path, exist_ok=True)
 with open(f"{data_path}/sim_config.txt", "w", encoding="utf-8") as f:
     f.write(text)    # 파일 저장
 
-AE_EPOCH = args.ae_epochs
-AE_LR = args.ae_lr
-AE_BATCHSIZE = args.ae_batchsize
+AE_U_EPOCH = args.ae_u_epochs
+AE_U_LR = args.ae_u_lr
+AE_U_BATCHSIZE = args.ae_u_batchsize
 class Dataset(Dataset):
     def __init__(self, x, y, z, q):
         self.x = x.to(torch.double)
@@ -207,9 +214,9 @@ class Dataset(Dataset):
         return len(self.x)
     def __getitem__(self, idx):
         return self.x[idx], self.y[idx], self.z[idx], self.q[idx]
-train_loader_u = DataLoader(Dataset(x_recovered, y_recovered, z_recovered, q_recovered), batch_size=AE_BATCHSIZE,
+train_loader_u = DataLoader(Dataset(x_recovered, y_recovered, z_recovered, q_recovered), batch_size=AE_U_BATCHSIZE,
                       shuffle=False)
-validate_loader_u = DataLoader(Dataset(v_x_recovered, v_y_recovered, v_z_recovered, v_q_recovered), batch_size=AE_BATCHSIZE,
+validate_loader_u = DataLoader(Dataset(v_x_recovered, v_y_recovered, v_z_recovered, v_q_recovered), batch_size=AE_U_BATCHSIZE,
                       shuffle=False)
 
 # Instantiate the networks
@@ -218,19 +225,19 @@ if PREPROCESSING:
                         activation_fn=torch.sigmoid, use_dx_in_forward=True).to(device)
 else:
     net = CombinedAE(input_size=2, encode2_input_size=3, output_size=110,
-                        activation_fn=custom_activation, use_dx_in_forward=True).to(device)
-netx = CombinedAE(input_size=2, encode2_input_size=4, output_size=110, activation_fn=torch.sigmoid, use_dx_in_forward=True).to(device)
+                        activation_fn=CustomSigmoidFunc(scale=args.ae_u_scale, shift=args.ae_u_shift), use_dx_in_forward=True).to(device)
+netx = CombinedAE(input_size=2, encode2_input_size=4, output_size=110, activation_fn=CustomSigmoidFunc(scale=args.ae_x_scale, shift=args.ae_x_shift), use_dx_in_forward=True).to(device)
 
 
 ## ================= Training MC-AE for voltage reconstruction ================= ##
-optimizer = torch.optim.Adam(net.parameters(), lr=AE_LR)
+optimizer = torch.optim.Adam(net.parameters(), lr=AE_U_LR)
 loss_f = nn.MSELoss()
 avg_loss_list_u = []
 val_loss_points_u = []  # list of (epoch, avg_val_loss)
 
 # double casting은 반복 호출할 필요가 없어 루프 밖에서 1회만 수행
 net = net.double()
-for epoch in range(AE_EPOCH):
+for epoch in range(AE_U_EPOCH):
     total_loss = 0
     num_batches = 0
     for iteration, (x, y, z, q) in enumerate(train_loader_u):
@@ -307,15 +314,18 @@ yTrainU = y_recovered.cpu().detach().numpy()
 ERRORU = AA - yTrainU
 
 ## ================= Training MC-AE for SOC reconstruction ================= ##
-train_loader_soc = DataLoader(Dataset(x_recovered2, y_recovered2, z_recovered2, q_recovered2), batch_size=AE_BATCHSIZE, shuffle=False)
-validate_loader_soc = DataLoader(Dataset(v_x_recovered2, v_y_recovered2, v_z_recovered2, v_q_recovered2), batch_size=AE_BATCHSIZE, shuffle=False)
-optimizer = torch.optim.Adam(netx.parameters(), lr=AE_LR)
+AE_X_EPOCH = args.ae_x_epochs
+AE_X_LR = args.ae_x_lr
+AE_X_BATCHSIZE = args.ae_x_batchsize
+train_loader_soc = DataLoader(Dataset(x_recovered2, y_recovered2, z_recovered2, q_recovered2), batch_size=AE_X_BATCHSIZE, shuffle=False)
+validate_loader_soc = DataLoader(Dataset(v_x_recovered2, v_y_recovered2, v_z_recovered2, v_q_recovered2), batch_size=AE_X_BATCHSIZE, shuffle=False)
+optimizer = torch.optim.Adam(netx.parameters(), lr=AE_X_LR)
 loss_f = nn.MSELoss()
 avg_loss_list_x = []
 val_loss_points_x = []  # list of (epoch, avg_val_loss)
 
 netx = netx.double()
-for epoch in range(AE_EPOCH):
+for epoch in range(AE_X_EPOCH):
     total_loss = 0
     num_batches = 0
     for iteration, (x, y, z, q) in enumerate(train_loader_soc):

@@ -12,6 +12,7 @@ from torch.utils.data import DataLoader
 import torch.nn.functional as F
 from torch import nn
 from torchvision import transforms as tfs
+from Function_ import CustomSigmoidFunc
 
 class MyDataset(Dataset):
     def __init__(self, data, target):
@@ -59,7 +60,7 @@ class Dataset(Dataset):
     
 
 class CombinedAE(nn.Module):
-    def __init__(self, input_size, encode2_input_size, output_size, activation_fn, use_dx_in_forward):
+    def __init__(self, input_size, encode2_input_size, output_size, use_dx_in_forward, activation_fn: CustomSigmoidFunc=None):
         super(CombinedAE, self).__init__()
         self.fc1 = nn.Linear(input_size, 1)
         self.fc2 = nn.Linear(encode2_input_size, 1)
@@ -74,7 +75,7 @@ class CombinedAE(nn.Module):
         return torch.sigmoid(self.fc2(x))
 
     def decode(self, z):
-        return self.activation_fn(self.fc3(z))
+        return self.activation_fn.forward(self.fc3(z))
 
     def forward(self, x, dx, q):
         z = self.encode(x) + self.encode2(q) + dx
