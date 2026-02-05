@@ -2119,6 +2119,9 @@ def get_input_dimensions(BATTERY_TYPE: str):
 
 
 def preprocess_combined_tensor(tensor, tensorx, dim_dict, BATTERY_TYPE, PREPROCESSING, SKIP_CHARGE_READY, normalize_dx: bool=False, normalize_val: float=1.0):
+    if BATTERY_TYPE == "QAS":
+        tensorx[:, dim_dict["x2"] + dim_dict["y2"] + dim_dict["z2"] + 2] = 0
+        
     if SKIP_CHARGE_READY:
         charge_idx = 224 if BATTERY_TYPE == "QAS" else 174
         start_idx = last_index_of(tensor, feature_idx=charge_idx, value=-500, operator='<') # -500 means minimum current during charge ready

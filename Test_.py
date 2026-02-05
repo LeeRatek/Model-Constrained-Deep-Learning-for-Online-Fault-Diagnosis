@@ -25,7 +25,7 @@ warnings.filterwarnings('ignore')
 
 parser = argparse.ArgumentParser(description="Run diagnostics plotting with CLI options")
 parser.add_argument("--battery-type", choices=["QAS","DTI"], default="QAS", help="배터리 유형 선택 (DTI fault index range = [77~79], QAS fault index range = [335~392])")
-parser.add_argument("--models-dir", type=str, default="./models/260203_163103") # 260123_082222 & 260126_100030
+parser.add_argument("--models-dir", type=str, default="./models/260205_153138") # 260123_082222 & 260126_100030
 # parser.add_argument("--results-dir", type=str, default="./results" if os.environ.get("RESULT_DIR") is None else os.environ.get("RESULT_DIR"))
 parser.add_argument("--source-data-dir", type=str, default="./data" if os.environ.get("SOURCE_DIR") is None else os.environ.get("SOURCE_DIR"))
 parser.add_argument("--x-start", type=int, default=20)
@@ -57,9 +57,8 @@ PREPROCESSING, SKIP_CHARGE_READY = get_preprocessing_and_skip_charge_ready(learn
 dim_dict = get_input_dimensions(BATTERY_TYPE)
 AUC_ANALYSIS = False
 if not AUC_ANALYSIS:
-    thresholds = [12, 12]
-    
-analyse_ae_output = False
+    thresholds = [18, 28]
+analyse_ae_output = True
     
 print_sim_config(
     title="Train Run",
@@ -124,6 +123,7 @@ start = time.perf_counter()
 test_idx = 0
 for label, vehicle_ids in enumerate(test_list):    
     for i in vehicle_ids:
+        i = 252
         print(f"Processing label={label} with vehicle ID={i}...")
         elapsed = time.perf_counter() - start
         h, rem = divmod(elapsed, 3600)
@@ -166,17 +166,17 @@ for label, vehicle_ids in enumerate(test_list):
             reconx_imtest = netx_loaded(x_recovered2, z_recovered2, q_recovered2, y_recovered2)
 
             # 출력/정답을 각각 numpy로 변환하지 말고 torch에서 error를 먼저 계산 후 1회만 변환
-            ERRORU = (recon_imtest[0] - y_recovered).cpu().numpy()
-            ERRORX = (reconx_imtest[0] - y_recovered2).cpu().numpy()
+            ERRORU = np.abs(recon_imtest[0] - y_recovered).cpu().numpy()
+            ERRORX = np.abs(reconx_imtest[0] - y_recovered2).cpu().numpy()
             
-        # plot_testX_timeseries(y_recovered, feature_names="U", title="True U", figsize=(6, 3), show=True, seperate=False, start_idx=0, _range=[0,0])
-        # plot_testX_timeseries(y_recovered2, feature_names="X", title="True X", figsize=(6, 3), show=True, seperate=False, start_idx=0, _range=[0,0])
-        # plot_testX_timeseries(ERRORU, feature_names="U - $\hat{U}$", title="U - $\hat{U}$", figsize=(6, 3), show=True, seperate=False, start_idx=0, _range=[0,0])
-        # plot_testX_timeseries(ERRORX, feature_names="X - $\hat{X}$", title="X - $\hat{X}$", figsize=(6, 3), show=True, seperate=False, start_idx=0, _range=[0,0])
-        # plot_testX_timeseries(recon_imtest[0], feature_names="$\hat{U}$", title="$\hat{U}$", figsize=(6, 3), show=True, seperate=False, start_idx=0, _range=[0,0])
-        # plot_testX_timeseries(reconx_imtest[0], feature_names="$\hat{X}$", title="$\hat{X}$", figsize=(6, 3), show=True, seperate=False, start_idx=0, _range=[0,0])
-        # plot_testX_timeseries(np.asarray(ERRORU, dtype=float).max(axis=1).reshape(ERRORU.shape[0],1), feature_names="max(U - $\hat{U}$)", title="max(U - $\hat{U}$)", figsize=(6, 3), show=True, seperate=False, start_idx=0, _range=[0,0])
-        # plot_testX_timeseries(np.asarray(ERRORX, dtype=float).max(axis=1).reshape(ERRORU.shape[0],1), feature_names="max(X - $\hat{X}$)", title="max(X - $\hat{X}$)", figsize=(6, 3), show=True, seperate=False, start_idx=0, _range=[0,0])
+        plot_testX_timeseries(y_recovered, feature_names="U", title="U", figsize=(6, 3), show=True, seperate=False, start_idx=0, _range=[0,0])
+        plot_testX_timeseries(y_recovered2, feature_names="X", title="X", figsize=(6, 3), show=True, seperate=False, start_idx=0, _range=[0,0])
+        plot_testX_timeseries(recon_imtest[0], feature_names="$\hat{U}$", title="$\hat{U}$", figsize=(6, 3), show=True, seperate=False, start_idx=0, _range=[0,0])
+        plot_testX_timeseries(reconx_imtest[0], feature_names="$\hat{X}$", title="$\hat{X}$", figsize=(6, 3), show=True, seperate=False, start_idx=0, _range=[0,0])
+        plot_testX_timeseries(ERRORU, feature_names="|U - $\hat{U}|$", title="|U - $\hat{U}|$", figsize=(6, 3), show=True, seperate=False, start_idx=0, _range=[0,0])
+        plot_testX_timeseries(ERRORX, feature_names="|X - $\hat{X}|$", title="|X - $\hat{X}|$", figsize=(6, 3), show=True, seperate=False, start_idx=0, _range=[0,0])
+        plot_testX_timeseries(np.asarray(ERRORU, dtype=float).max(axis=1).reshape(ERRORU.shape[0],1), feature_names="max(|U - $\hat{U}|$)", title="max(|U - $\hat{U}|$)", figsize=(6, 3), show=True, seperate=False, start_idx=0, _range=[0,0])
+        plot_testX_timeseries(np.asarray(ERRORX, dtype=float).max(axis=1).reshape(ERRORU.shape[0],1), feature_names="max(|X - $\hat{X}|$)", title="max(|X - $\hat{X}|$)", figsize=(6, 3), show=True, seperate=False, start_idx=0, _range=[0,0])
         
         # plot_testX_timeseries(np.asarray(np.abs(ERRORU), dtype=float).max(axis=1).reshape(ERRORU.shape[0],1), feature_names="|max(U - $\hat{U}$)|", title="|max(U - $\hat{U}$)|", figsize=(6, 3), show=True, seperate=False, start_idx=0, _range=[0,0])
         # plot_testX_timeseries(np.asarray(np.abs(ERRORX), dtype=float).max(axis=1).reshape(ERRORU.shape[0],1), feature_names="|max(X - $\hat{X}$)|", title="|max(X - $\hat{X}$)|", figsize=(6, 3), show=True, seperate=False, start_idx=0, _range=[0,0])
