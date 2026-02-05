@@ -94,7 +94,6 @@ for i in train_list:
         FIRST_LOAD = False
         combined_tensor = tensor
         combined_tensorx = tensorx
-        break
     else:
         combined_tensor = torch.cat((combined_tensor, tensor), dim=0)
         combined_tensorx = torch.cat((combined_tensorx, tensorx), dim=0)
