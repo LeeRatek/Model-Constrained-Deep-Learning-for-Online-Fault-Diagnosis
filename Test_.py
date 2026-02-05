@@ -53,10 +53,13 @@ os.makedirs(f"{args.models_dir}/results", exist_ok=True)
 
 BATTERY_TYPE = args.battery_type # 'DTI' or 'QAS'
 PREPROCESSING, SKIP_CHARGE_READY = get_preprocessing_and_skip_charge_ready(learning_case)
+# SKIP_CHARGE_READY = False
 dim_dict = get_input_dimensions(BATTERY_TYPE)
-AUC_ANALYSIS = True
+AUC_ANALYSIS = False
 if not AUC_ANALYSIS:
-    thresholds = [40, 50]
+    thresholds = [12, 12]
+    
+analyse_ae_output = False
     
 print_sim_config(
     title="Train Run",
@@ -150,7 +153,7 @@ for label, vehicle_ids in enumerate(test_list):
         net_loaded = net_loaded.double().eval()
 
         with torch.inference_mode():
-            recon_imtest = net_loaded(x_recovered, z_recovered, q_recovered)
+            recon_imtest = net_loaded(x_recovered, z_recovered, q_recovered, y_recovered)
 
         # Use indexing to separate
         x_recovered2 = combined_tensorx[:, :dim_dict["x2"]]
@@ -160,14 +163,33 @@ for label, vehicle_ids in enumerate(test_list):
         netx_loaded = netx_loaded.double().eval()
 
         with torch.inference_mode():
-            reconx_imtest = netx_loaded(x_recovered2, z_recovered2, q_recovered2)
+            reconx_imtest = netx_loaded(x_recovered2, z_recovered2, q_recovered2, y_recovered2)
 
             # 출력/정답을 각각 numpy로 변환하지 말고 torch에서 error를 먼저 계산 후 1회만 변환
             ERRORU = (recon_imtest[0] - y_recovered).cpu().numpy()
             ERRORX = (reconx_imtest[0] - y_recovered2).cpu().numpy()
+            
+        # plot_testX_timeseries(y_recovered, feature_names="U", title="True U", figsize=(6, 3), show=True, seperate=False, start_idx=0, _range=[0,0])
+        # plot_testX_timeseries(y_recovered2, feature_names="X", title="True X", figsize=(6, 3), show=True, seperate=False, start_idx=0, _range=[0,0])
+        # plot_testX_timeseries(ERRORU, feature_names="U - $\hat{U}$", title="U - $\hat{U}$", figsize=(6, 3), show=True, seperate=False, start_idx=0, _range=[0,0])
+        # plot_testX_timeseries(ERRORX, feature_names="X - $\hat{X}$", title="X - $\hat{X}$", figsize=(6, 3), show=True, seperate=False, start_idx=0, _range=[0,0])
+        # plot_testX_timeseries(recon_imtest[0], feature_names="$\hat{U}$", title="$\hat{U}$", figsize=(6, 3), show=True, seperate=False, start_idx=0, _range=[0,0])
+        # plot_testX_timeseries(reconx_imtest[0], feature_names="$\hat{X}$", title="$\hat{X}$", figsize=(6, 3), show=True, seperate=False, start_idx=0, _range=[0,0])
+        # plot_testX_timeseries(np.asarray(ERRORU, dtype=float).max(axis=1).reshape(ERRORU.shape[0],1), feature_names="max(U - $\hat{U}$)", title="max(U - $\hat{U}$)", figsize=(6, 3), show=True, seperate=False, start_idx=0, _range=[0,0])
+        # plot_testX_timeseries(np.asarray(ERRORX, dtype=float).max(axis=1).reshape(ERRORU.shape[0],1), feature_names="max(X - $\hat{X}$)", title="max(X - $\hat{X}$)", figsize=(6, 3), show=True, seperate=False, start_idx=0, _range=[0,0])
         
-        df_data = DiagnosisFeature(ERRORU,ERRORX)
-        plot_ae_output_distribution(ERRORU, ERRORX, df_data, do_plot=False)
+        # plot_testX_timeseries(np.asarray(np.abs(ERRORU), dtype=float).max(axis=1).reshape(ERRORU.shape[0],1), feature_names="|max(U - $\hat{U}$)|", title="|max(U - $\hat{U}$)|", figsize=(6, 3), show=True, seperate=False, start_idx=0, _range=[0,0])
+        # plot_testX_timeseries(np.asarray(np.abs(ERRORX), dtype=float).max(axis=1).reshape(ERRORU.shape[0],1), feature_names="|max(X - $\hat{X}$)|", title="|max(X - $\hat{X}$)|", figsize=(6, 3), show=True, seperate=False, start_idx=0, _range=[0,0])
+        
+        # plot_testX_timeseries(df_data.iloc[:,0].to_numpy().reshape(df_data.shape[0],1), feature_names="$zu_2$", title="$zu_2$", figsize=(6, 3), show=True, seperate=False, start_idx=0, _range=[0,0])
+        # plot_testX_timeseries(df_data.iloc[:,1].to_numpy().reshape(df_data.shape[0],1), feature_names="$zx_2$", title="$zx_2$", figsize=(6, 3), show=True, seperate=False, start_idx=0, _range=[0,0])
+        # plot_testX_timeseries(df_data.iloc[:,2].to_numpy().reshape(df_data.shape[0],1), feature_names="$zu_1$", title="$zu_1$", figsize=(6, 3), show=True, seperate=False, start_idx=0, _range=[0,0])
+        # plot_testX_timeseries(df_data.iloc[:,3].to_numpy().reshape(df_data.shape[0],1), feature_names="$zx_1$", title="$zx_1$", figsize=(6, 3), show=True, seperate=False, start_idx=0, _range=[0,0])
+        # plot_testX_timeseries(df_data.iloc[:,4].to_numpy().reshape(df_data.shape[0],1), feature_names="$ewu$", title="$ewu$", figsize=(6, 3), show=True, seperate=False, start_idx=0, _range=[0,0])
+        # plot_testX_timeseries(df_data.iloc[:,5].to_numpy().reshape(df_data.shape[0],1), feature_names="$ewx$", title="$ewx$", figsize=(6, 3), show=True, seperate=False, start_idx=0, _range=[0,0])
+        
+        df_data, df_data2 = DiagnosisFeature(ERRORU,ERRORX, get_true_feature=analyse_ae_output)
+        plot_ae_output_distribution(ERRORU, ERRORX, df_data2, do_plot=analyse_ae_output)
         
         # ## =================== Calculate thresholds =================== ###        
         # sigma_levels = [float(s.strip()) for s in args.sigma_levels.split(',') if s.strip()]

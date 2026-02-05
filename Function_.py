@@ -272,7 +272,7 @@ class CustomSigmoidFunc():
     def forward(self, x):
         return self.shift + self.scale * torch.sigmoid(x)
 
-def PCA(data, l1, l2):
+def Custom_PCA(data, l1, l2):
     # Data standardization
     data_mean = np.mean(data, 0)
     data_std = np.std(data, 0)
@@ -1092,7 +1092,7 @@ def SlidingAverage(s, n):
         mean = s.tolist()
     return mean
 
-def DiagnosisFeature(ERRORU,ERRORX):
+def DiagnosisFeature(ERRORU,ERRORX, get_true_feature=False):
     # 성능 최적화 버전:
     # - pandas DataFrame 반복 생성 제거
     # - np.apply_along_axis(파이썬 루프) 제거
@@ -1155,6 +1155,10 @@ def DiagnosisFeature(ERRORU,ERRORX):
         return out
 
     # 원래 로직 유지: X 관련 3개만 sliding average 적용
+    if get_true_feature:
+        original_max_diff_ERRORX = pd.Series(max_diff_ERRORX.copy())
+        origin_Z_X = pd.Series(Z_X.copy())
+        origin_Z_X_smoothed = pd.Series(Z_X_smoothed.copy())
     max_diff_ERRORX = pd.Series(_sliding_average_prev_window_np(max_diff_ERRORX, 100))
     Z_X = pd.Series(_sliding_average_prev_window_np(Z_X, 100))
     Z_X_smoothed = pd.Series(_sliding_average_prev_window_np(Z_X_smoothed.to_numpy(), 100))
@@ -1166,7 +1170,15 @@ def DiagnosisFeature(ERRORU,ERRORX):
         [max_diff_ERRORU, max_diff_ERRORX, Z_U, Z_X, Z_U_smoothed, Z_X_smoothed],
         axis=1,
     )
-    return df_data
+    
+    df_data2 = None
+    if get_true_feature:
+        df_data2 = pd.concat(
+            [max_diff_ERRORU, original_max_diff_ERRORX, Z_U, origin_Z_X, Z_U_smoothed, origin_Z_X_smoothed],
+            axis=1,
+        )
+        
+    return df_data, df_data2
 
 def ClassifyFeature(temp_max,temp_avg,CONTN,insulation_resistance,threshold1,fai):
     reversed_fai = np.flip(fai[:f_time])
@@ -1240,7 +1252,7 @@ def prepare_training_data(test_X, INPUT_SIZE, TIME_STEP, device):
     return train_X, train_y
 
 
-def plot_testX_timeseries(input, feature_names=None, title=None, figsize=(12, 6), save_path=None, show=True, seperate=False, _range: list = [-1], start_idx=0):
+def plot_testX_timeseries(input, feature_names=None, title=None, figsize=(12, 6), save_path=None, show=True, seperate=False, _range: list = [-1], start_idx=0, ax=None):
     """
     test_X 시계열 데이터(형상: [T, 1, 7] 또는 [T, 7])를 시간(x축) 대비 다중 라인(y축)으로 그립니다.
 
@@ -1282,7 +1294,8 @@ def plot_testX_timeseries(input, feature_names=None, title=None, figsize=(12, 6)
                 save_path_input = save_path + f"-{i}st.png"
             
             print(f"test_X shape for plotting: {test_X.shape}")
-            plot_timeseries(test_X, feature_names, title_input, figsize, save_path_input, show)
+            # seperate=True는 개별 figure를 전제로 하므로, 외부 ax가 있어도 전달하지 않음
+            plot_timeseries(test_X, feature_names, title_input, figsize, save_path_input, show, ax=None)
     else:
         if plot_all: # 모든 특성 그리기
             print("모든 특성을 한 번에 플롯으로 그립니다.")
@@ -1302,47 +1315,58 @@ def plot_testX_timeseries(input, feature_names=None, title=None, figsize=(12, 6)
             if save_path is not None:
                 save_path += f"-range({_range[0]}-{_range[1]}).png"
                 
-        plot_timeseries(test_X, feature_names, title, figsize, save_path, show)
-            
-def plot_timeseries(test_X, feature_names=None, title=None, figsize=(12, 6), save_path=None, show=True):
-        # 입력을 numpy 2D [T, F]로 변환
-        if isinstance(test_X, torch.Tensor):
-            arr = test_X.detach().cpu().numpy()
-        elif isinstance(test_X, pd.DataFrame):
-            arr = test_X.values
-        else:
-            arr = np.asarray(test_X)
+        plot_timeseries(test_X, feature_names, title, figsize, save_path, show, ax=ax)
 
-        # [T, 1, F] → [T, F]
-        if arr.ndim == 3 and arr.shape[1] == 1:
-            arr = arr[:, 0, :]
-        if arr.ndim != 2:
-            raise ValueError(f"Expected 2D array [T, F] or 3D [T,1,F], got shape {arr.shape}")
 
-        T, F = arr.shape
+def plot_timeseries(test_X, feature_names=None, title=None, figsize=(12, 6), save_path=None, show=True, ax=None):
+    # 입력을 numpy 2D [T, F]로 변환
+    if isinstance(test_X, torch.Tensor):
+        arr = test_X.detach().cpu().numpy()
+    elif isinstance(test_X, pd.DataFrame):
+        arr = test_X.values
+    else:
+        arr = np.asarray(test_X)
 
-        # 레전드 라벨 준비
-        if not feature_names or len(feature_names) != F:
-            feature_names = [f"var{i+1}" for i in range(F)]
+    # [T, 1, F] → [T, F]
+    if arr.ndim == 3 and arr.shape[1] == 1:
+        arr = arr[:, 0, :]
+    if arr.ndim != 2:
+        raise ValueError(f"Expected 2D array [T, F] or 3D [T,1,F], got shape {arr.shape}")
 
+    T, F = arr.shape
+
+    # 레전드 라벨 준비
+    if not feature_names or len(feature_names) != F:
+        feature_names = [f"var{i+1}" for i in range(F)]
+
+    fig = None
+    if ax is None:
         fig, ax = plt.subplots(figsize=figsize)
-        x = np.arange(T)
-        for i in range(F):
-            ax.plot(x, arr[:, i], label=feature_names[i])
+    else:
+        fig = ax.figure
 
-        ax.set_xlabel("Time")
-        ax.set_ylabel("Value")
-        ax.set_title(title if title is not None else f"Time Series ({F} features)")
-        ax.grid(True, alpha=0.3)
-        ax.legend(loc="best", ncol=2, fontsize=8)
+    x = np.arange(T)
+    for i in range(F):
+        ax.plot(x, arr[:, i], label=feature_names[i])
+
+    ax.set_xlabel("Time")
+    ax.set_ylabel("Value")
+    ax.set_title(title if title is not None else f"Time Series ({F} features)")
+    ax.grid(True, alpha=0.3)
+    ax.legend(loc="best", ncol=2, fontsize=8)
+
+    # 외부에서 subplot 레이아웃을 관리할 수 있도록 ax가 주어지면 tight_layout은 호출하지 않음
+    if ax is None and fig is not None:
         plt.tight_layout()
 
-        if save_path is not None:
-            dir_ = os.path.dirname(save_path)
-            if dir_:
-                os.makedirs(dir_, exist_ok=True)
-            fig.savefig(save_path, dpi=150)
+    if save_path is not None and fig is not None:
+        dir_ = os.path.dirname(save_path)
+        if dir_:
+            os.makedirs(dir_, exist_ok=True)
+        fig.savefig(save_path, dpi=150)
 
+    # 외부 축(ax)로 그린 경우 show/close는 호출자가 제어
+    if ax is None and fig is not None:
         if show:
             plt.show()
         else:

@@ -12,7 +12,7 @@ from torch.utils.data import DataLoader
 import torch.nn.functional as F
 from torch import nn
 from torchvision import transforms as tfs
-from Function_ import CustomSigmoidFunc
+from Function_ import CustomSigmoidFunc, plot_distribution_with_stats, plot_testX_timeseries
 
 class MyDataset(Dataset):
     def __init__(self, data, target):
@@ -77,10 +77,194 @@ class CombinedAE(nn.Module):
     def decode(self, z):
         return self.activation_fn.forward(self.fc3(z))
 
-    def forward(self, x, dx, q):
+    def forward(self, x, dx, q, y=None):
         z = self.encode(x) + self.encode2(q) + dx
         re = self.decode(z)
+        # self.analyze_outputs(x, dx, q, re, y, combine=True, ncols=3, fill="spiral")
         return re, z
+
+    def analyze_outputs(
+        self,
+        x,
+        dx,
+        q,
+        re,
+        y=None,
+        figsize=(6, 3),
+        *,
+        combine: bool = False,
+        layout: tuple[int, int] | None = None,
+        ncols: int = 1,
+        fill: str = "row",
+        save_path: str | None = None,
+        show: bool = True,
+    ):
+        """모델 내부 중간 결과 7개를 시각화합니다.
+
+        Args:
+            x, dx, q, re: forward 입력/중간/출력 텐서
+            figsize: 단일 플롯 기준 크기. combine=True이면 (width, height*7)로 확장합니다.
+            combine: True면 7개 결과를 하나의 figure(7x1)로 묶어 출력합니다.
+            layout: (rows, cols)로 그리드 레이아웃을 직접 지정합니다.
+            ncols: layout을 주지 않았을 때 사용할 열 개수입니다.
+            fill: combine=True일 때 축을 채우는 순서.
+                - 'row': 행 우선(기본) (1,1)->(1,2)->...
+                - 'col': 열 우선 (1,1)->(2,1)->...
+                - 'outside_in_columns': 열을 바깥→안쪽(0,last,1,...) 순으로 위→아래 채움
+                - 'spiral': 좌상단에서 시작해 아래→오른쪽→위→왼쪽으로 회전하며 안쪽으로 채움
+            save_path: combine=True일 때 figure 전체를 저장할 경로(예: "out.png").
+            show: True면 표시, False면 닫음.
+        """
+
+        if not combine:
+            plot_testX_timeseries(x, feature_names="Kalman prediction", title="Kalman prediction", figsize=figsize, show=show, seperate=False, start_idx=0, _range=[0,0])
+            plot_testX_timeseries(x, feature_names="LSTM prediction", title="LSTM prediction", figsize=figsize, show=show, seperate=False, start_idx=0, _range=[1,1])
+            plot_testX_timeseries(self.encode2(q), feature_names="Encode vechile information", title="Encode vechile information", figsize=figsize, show=show, seperate=False, start_idx=0, _range=[0,0])
+            plot_testX_timeseries(self.encode(x), feature_names="Encode Kalman + LSTM prediction", title="Encode Kalman + LSTM prediction", figsize=figsize, show=show, seperate=False, start_idx=0, _range=[0,0])
+            plot_testX_timeseries(self.encode(x) + self.encode2(q), feature_names="Sum of all system information", title="Sum of all system information", figsize=figsize, show=show, seperate=False, start_idx=0, _range=[0,0])
+            plot_testX_timeseries(self.encode(x) + self.encode2(q) + dx, feature_names="Sum of all system information", title="Latent information of 1th cell", figsize=figsize, show=show, seperate=False, start_idx=0, _range=[0,0])
+            plot_testX_timeseries(re, feature_names="Decoder's output of 1th cell", title="Decoder's output of 1th cell", figsize=figsize, show=show, seperate=False, start_idx=0, _range=[0,0])
+            if y is not None:
+                plot_testX_timeseries(y, feature_names="True value of 1th cell", title="True value of 1th cell", figsize=figsize, show=show, seperate=False, start_idx=0, _range=[0,0])
+            return
+
+        # combine=True: 하나의 figure에 7개 서브플롯로 묶기 (layout/ncols 지원)
+        import matplotlib.pyplot as plt
+        import math
+        import numpy as np
+
+        w, h = figsize
+
+        items = [
+            (x, "Kalman prediction", [0, 0]),
+            (x, "LSTM prediction", [1, 1]),
+            (self.encode2(q), "Encode vechile information", [0, 0]),
+            (self.encode(x), "Encode Kalman + LSTM prediction", [0, 0]),
+            (self.encode(x) + self.encode2(q), "Sum of all system information", [0, 0]),
+            (self.encode(x) + self.encode2(q) + dx, "Latent information of 1th cell", [0, 0]),
+            (re, "Decoder's output of 1th cell", [0, 0]),
+        ]
+        items += [] if y is None else [(y, "True value of 1th cell", [0, 0])]
+
+        nplots = len(items)
+        if layout is not None:
+            nrows, ncols2 = int(layout[0]), int(layout[1])
+            if nrows < 1 or ncols2 < 1:
+                raise ValueError(f"layout은 양의 정수 (rows, cols) 여야 합니다: {layout}")
+        else:
+            ncols2 = int(ncols) if ncols is not None else 1
+            if ncols2 < 1:
+                ncols2 = 1
+            nrows = int(math.ceil(nplots / ncols2))
+
+        fig, axes = plt.subplots(nrows, ncols2, figsize=(w * ncols2, h * nrows), sharex=True)
+
+        axes_arr = np.asarray(axes)
+        if axes_arr.ndim == 0:
+            axes_arr = axes_arr.reshape(1, 1)
+        elif axes_arr.ndim == 1:
+            if nrows == 1:
+                axes_arr = axes_arr.reshape(1, -1)
+            elif ncols2 == 1:
+                axes_arr = axes_arr.reshape(-1, 1)
+            else:
+                axes_arr = axes_arr.reshape(nrows, ncols2)
+
+        def _outside_in_col_order(num_cols: int) -> list[int]:
+            order = []
+            left = 0
+            right = num_cols - 1
+            while left <= right:
+                if left == right:
+                    order.append(left)
+                    break
+                order.append(left)
+                order.append(right)
+                left += 1
+                right -= 1
+            return order
+
+        def _spiral_positions(num_rows: int, num_cols: int) -> list[tuple[int, int]]:
+            """(0,0)에서 시작해 아래→오른쪽→위→왼쪽 순으로 테두리를 돌며 안쪽으로 채웁니다."""
+            if num_rows <= 0 or num_cols <= 0:
+                return []
+
+            top = 0
+            bottom = num_rows - 1
+            left = 0
+            right = num_cols - 1
+            pos: list[tuple[int, int]] = []
+
+            while left <= right and top <= bottom:
+                # down along left column
+                for r in range(top, bottom + 1):
+                    pos.append((r, left))
+                left += 1
+                if left > right:
+                    break
+
+                # right along bottom row
+                for c in range(left, right + 1):
+                    pos.append((bottom, c))
+                bottom -= 1
+                if top > bottom:
+                    break
+
+                # up along right column
+                for r in range(bottom, top - 1, -1):
+                    pos.append((r, right))
+                right -= 1
+                if left > right:
+                    break
+
+                # left along top row
+                for c in range(right, left - 1, -1):
+                    pos.append((top, c))
+                top += 1
+
+            return pos
+
+        fill_l = str(fill).strip().lower() if fill is not None else "row"
+        if fill_l == "row":
+            positions = [(r, c) for r in range(nrows) for c in range(ncols2)]
+        elif fill_l == "col":
+            positions = [(r, c) for c in range(ncols2) for r in range(nrows)]
+        elif fill_l in ("outside_in_columns", "outside-in-columns", "outside_in"):
+            col_order = _outside_in_col_order(ncols2)
+            positions = [(r, c) for c in col_order for r in range(nrows)]
+        elif fill_l in ("spiral", "spiral_down_right", "spiral-down-right"):
+            positions = _spiral_positions(nrows, ncols2)
+        else:
+            raise ValueError(f"지원하지 않는 fill 옵션입니다: {fill} (row|col|outside_in_columns|spiral)")
+
+        for i, (arr, t, r) in enumerate(items):
+            plot_testX_timeseries(
+                arr,
+                feature_names=t,
+                title=t,
+                figsize=figsize,
+                show=False,
+                seperate=False,
+                start_idx=0,
+                _range=r,
+                ax=axes_arr[positions[i][0], positions[i][1]],
+            )
+
+        # 남는 축은 숨김 (fill 순서에 따라 "빈 칸" 위치가 달라짐)
+        used = set(positions[:len(items)])
+        for (r, c) in positions:
+            if (r, c) not in used:
+                axes_arr[r, c].set_visible(False)
+
+        fig.tight_layout()
+        if save_path is not None:
+            fig.savefig(save_path, dpi=150)
+
+        if show:
+            plt.show()
+        else:
+            plt.close(fig)
+    
 
 class RMSELoss(nn.Module):
     def __init__(self):

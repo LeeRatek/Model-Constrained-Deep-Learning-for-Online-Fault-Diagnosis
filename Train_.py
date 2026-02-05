@@ -29,7 +29,7 @@ warnings.filterwarnings('ignore')
 parser = argparse.ArgumentParser(description="Run MC-AE training with CLI options")
 parser.add_argument("--battery-type", choices=["QAS","DTI"], default="QAS")
 parser.add_argument("--vehicle-start", type=int, default=0, help="Filtered normal vehicle ID 시작 인덱스")
-parser.add_argument("--vehicle-end", type=int, default=0, help="Filtered normal vehicle ID 끝 인덱스")
+parser.add_argument("--vehicle-end", type=int, default=-1, help="Filtered normal vehicle ID 끝 인덱스")
 parser.add_argument("--lstm-training", action="store_true")
 parser.add_argument("--lstm-load", action="store_true")
 parser.add_argument("--models-dir", type=str, default="./models" if os.environ.get("MODEL_DIR") is None else os.environ.get("MODEL_DIR"))
@@ -398,9 +398,9 @@ BB = recon_imtestx.cpu().detach().numpy()
 yTrainX = y_recovered2.cpu().detach().numpy()
 ERRORX = BB - yTrainX
 
-df_data = DiagnosisFeature(ERRORU,ERRORX)
+df_data, _ = DiagnosisFeature(ERRORU,ERRORX)
 
-results = PCA(df_data,0.99,0.99)
+results = Custom_PCA(df_data,0.99,0.99)
 
 elapsed = time.perf_counter() - start
 h, rem = divmod(elapsed, 3600)
