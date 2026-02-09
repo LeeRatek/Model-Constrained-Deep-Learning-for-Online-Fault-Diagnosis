@@ -60,7 +60,7 @@ class Dataset(Dataset):
     
 
 class CombinedAE(nn.Module):
-    def __init__(self, input_size, encode2_input_size, output_size, use_dx_in_forward, activation_fn: CustomSigmoidFunc=None):
+    def __init__(self, input_size, encode2_input_size, output_size, use_dx_in_forward: bool=True, activation_fn: CustomSigmoidFunc=None):
         super(CombinedAE, self).__init__()
         self.fc1 = nn.Linear(input_size, 1)
         self.fc2 = nn.Linear(encode2_input_size, 1)
@@ -78,6 +78,8 @@ class CombinedAE(nn.Module):
         return self.activation_fn.forward(self.fc3(z))
 
     def forward(self, x, dx, q, y=None):
+        if not self.use_dx_in_forward:
+            dx = dx * 0.0
         z = self.encode(x) + self.encode2(q) + dx
         re = self.decode(z)
         # self.analyze_outputs(x, dx, q, re, y, combine=True, ncols=3, fill="spiral")
@@ -90,6 +92,7 @@ class CombinedAE(nn.Module):
         q,
         re,
         y=None,
+        cell_idx: int = 0,
         figsize=(6, 3),
         *,
         combine: bool = False,
@@ -122,10 +125,10 @@ class CombinedAE(nn.Module):
             plot_testX_timeseries(self.encode2(q), feature_names="Encode vechile information", title="Encode vechile information", figsize=figsize, show=show, seperate=False, start_idx=0, _range=[0,0])
             plot_testX_timeseries(self.encode(x), feature_names="Encode Kalman + LSTM prediction", title="Encode Kalman + LSTM prediction", figsize=figsize, show=show, seperate=False, start_idx=0, _range=[0,0])
             plot_testX_timeseries(self.encode(x) + self.encode2(q), feature_names="Sum of all system information", title="Sum of all system information", figsize=figsize, show=show, seperate=False, start_idx=0, _range=[0,0])
-            plot_testX_timeseries(self.encode(x) + self.encode2(q) + dx, feature_names="Sum of all system information", title="Latent information of 1th cell", figsize=figsize, show=show, seperate=False, start_idx=0, _range=[0,0])
-            plot_testX_timeseries(re, feature_names="Decoder's output of 1th cell", title="Decoder's output of 1th cell", figsize=figsize, show=show, seperate=False, start_idx=0, _range=[0,0])
+            plot_testX_timeseries(self.encode(x) + self.encode2(q) + dx, feature_names=f"Latent information of {cell_idx+1}th cell", title=f"Latent information of {cell_idx+1}th cell", figsize=figsize, show=show, seperate=False, start_idx=0, _range=[cell_idx,cell_idx])
+            plot_testX_timeseries(re, feature_names=f"Decoder's output of {cell_idx+1}th cell", title=f"Decoder's output of {cell_idx+1}th cell", figsize=figsize, show=show, seperate=False, start_idx=0, _range=[cell_idx,cell_idx])
             if y is not None:
-                plot_testX_timeseries(y, feature_names="True value of 1th cell", title="True value of 1th cell", figsize=figsize, show=show, seperate=False, start_idx=0, _range=[0,0])
+                plot_testX_timeseries(y, feature_names=f"True value of {cell_idx+1}th cell", title=f"True value of {cell_idx+1}th cell", figsize=figsize, show=show, seperate=False, start_idx=0, _range=[cell_idx,cell_idx])
             return
 
         # combine=True: 하나의 figure에 7개 서브플롯로 묶기 (layout/ncols 지원)
@@ -141,10 +144,10 @@ class CombinedAE(nn.Module):
             (self.encode2(q), "Encode vechile information", [0, 0]),
             (self.encode(x), "Encode Kalman + LSTM prediction", [0, 0]),
             (self.encode(x) + self.encode2(q), "Sum of all system information", [0, 0]),
-            (self.encode(x) + self.encode2(q) + dx, "Latent information of 1th cell", [0, 0]),
-            (re, "Decoder's output of 1th cell", [0, 0]),
+            (self.encode(x) + self.encode2(q) + dx, f"Latent information of {cell_idx+1}th cell", [cell_idx, cell_idx]),
+            (re, f"Decoder's output of {cell_idx+1}th cell", [cell_idx, cell_idx]),
         ]
-        items += [] if y is None else [(y, "True value of 1th cell", [0, 0])]
+        items += [] if y is None else [(y, f"True value of {cell_idx+1}th cell", [cell_idx, cell_idx])]
 
         nplots = len(items)
         if layout is not None:

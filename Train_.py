@@ -53,6 +53,8 @@ parser.add_argument("--lstm-batchsize", type=int, default=100) # based on origin
 parser.add_argument("--normalize-dx", action="store_true")
 parser.add_argument("--normalize-val", type=int, default=4)
 parser.add_argument("--learning-case", type=int, default=1, help="1: Skip and no nomalization, 2: Skip but doing normalization, 3: No skip but doing normalization, 4: No skip and no normalization.")
+parser.add_argument("--no-use-dx", action="store_true")
+parser.add_argument("--no-abs-err", action="store_true")
 args = parser.parse_args()
 
 
@@ -60,6 +62,9 @@ LSTM_TRAINING = args.lstm_training
 LSTM_LOAD = args.lstm_load if args.lstm_training else args.lstm_load
 BATTERY_TYPE = args.battery_type # 'DTI' or 'QAS'
 PREPROCESSING, SKIP_CHARGE_READY = get_preprocessing_and_skip_charge_ready(args.learning_case)
+use_dx_in_forward = not args.no_use_dx
+use_abs_err = not args.no_abs_err
+# use_dx_in_forward = False
 dim_dict = get_input_dimensions(BATTERY_TYPE)
 
 # 모델 저장 경로 설정
@@ -83,6 +88,8 @@ EPOCH = args.lstm_epochs
 BATCH_SIZE = args.lstm_batchsize
 
 train_list = train_list[args.vehicle_start:args.vehicle_end+1] if args.vehicle_end != -1 else train_list[args.vehicle_start:]
+# train_list = [0]
+# validate_list = [0]
 count = 0
 for i in train_list:
     count += 1
@@ -222,12 +229,11 @@ validate_loader_u = DataLoader(Dataset(v_x_recovered, v_y_recovered, v_z_recover
 # Instantiate the networks
 if PREPROCESSING:
     net = CombinedAE(input_size=2, encode2_input_size=3, output_size=110,
-                        activation_fn=torch.sigmoid, use_dx_in_forward=True).to(device)
+                        activation_fn=torch.sigmoid, use_dx_in_forward=use_dx_in_forward).to(device)
 else:
     net = CombinedAE(input_size=2, encode2_input_size=3, output_size=110,
-                        activation_fn=CustomSigmoidFunc(scale=args.ae_u_scale, shift=args.ae_u_shift), use_dx_in_forward=True).to(device)
-netx = CombinedAE(input_size=2, encode2_input_size=4, output_size=110, activation_fn=CustomSigmoidFunc(scale=args.ae_x_scale, shift=args.ae_x_shift), use_dx_in_forward=True).to(device)
-
+                        activation_fn=CustomSigmoidFunc(scale=args.ae_u_scale, shift=args.ae_u_shift), use_dx_in_forward=use_dx_in_forward).to(device)
+netx = CombinedAE(input_size=2, encode2_input_size=4, output_size=110, activation_fn=CustomSigmoidFunc(scale=args.ae_x_scale, shift=args.ae_x_shift), use_dx_in_forward=use_dx_in_forward).to(device)
 
 ## ================= Training MC-AE for voltage reconstruction ================= ##
 optimizer = torch.optim.Adam(net.parameters(), lr=AE_U_LR)
@@ -311,7 +317,7 @@ for iteration, (x, y, z, q) in enumerate(train_loader2):
     recon_imtest, recon = net(x, z, q)
 AA = recon_imtest.cpu().detach().numpy()
 yTrainU = y_recovered.cpu().detach().numpy()
-ERRORU = AA - yTrainU
+ERRORU = np.abs(AA - yTrainU) if use_abs_err else AA - yTrainU
 
 ## ================= Training MC-AE for SOC reconstruction ================= ##
 AE_X_EPOCH = args.ae_x_epochs
@@ -396,7 +402,7 @@ for iteration, (x, y, z, q) in enumerate(train_loaderx2):
 
 BB = recon_imtestx.cpu().detach().numpy()
 yTrainX = y_recovered2.cpu().detach().numpy()
-ERRORX = BB - yTrainX
+ERRORX = np.abs(BB - yTrainX) if use_abs_err else BB - yTrainX
 
 df_data, _ = DiagnosisFeature(ERRORU,ERRORX)
 
