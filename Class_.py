@@ -60,13 +60,16 @@ class Dataset(Dataset):
     
 
 class CombinedAE(nn.Module):
-    def __init__(self, input_size, encode2_input_size, output_size, use_dx_in_forward: bool=True, activation_fn: CustomSigmoidFunc=None):
+    def __init__(self, input_size, encode2_input_size, output_size, use_dx_in_forward: bool=True, add_one_output_layer: bool=False, activation_fn: CustomSigmoidFunc=None):
         super(CombinedAE, self).__init__()
         self.fc1 = nn.Linear(input_size, 1)
         self.fc2 = nn.Linear(encode2_input_size, 1)
         self.fc3 = nn.Linear(output_size, output_size)
         self.activation_fn = activation_fn
         self.use_dx_in_forward = use_dx_in_forward
+        self.add_one_output_layer = add_one_output_layer
+        if self.add_one_output_layer:
+            self.fc4 = nn.Linear(output_size, output_size)
 
     def encode(self, x):
         return self.fc1(x)
@@ -80,7 +83,10 @@ class CombinedAE(nn.Module):
     def forward(self, x, dx, q, y=None):
         if not self.use_dx_in_forward:
             dx = dx * 0.0
+        
         z = self.encode(x) + self.encode2(q) + dx
+        if self.add_one_output_layer:
+            z = self.fc4(z)
         re = self.decode(z)
         # self.analyze_outputs(x, dx, q, re, y, combine=True, ncols=3, fill="spiral")
         return re, z
