@@ -55,6 +55,7 @@ parser.add_argument("--normalize-val", type=int, default=4)
 parser.add_argument("--learning-case", type=int, default=1, help="1: Skip and no nomalization, 2: Skip but doing normalization, 3: No skip but doing normalization, 4: No skip and no normalization.")
 parser.add_argument("--no-use-dx", action="store_true")
 parser.add_argument("--no-abs-err", action="store_true")
+parser.add_argument("--add-one-output-layer", action="store_true")
 args = parser.parse_args()
 
 
@@ -64,6 +65,7 @@ BATTERY_TYPE = args.battery_type # 'DTI' or 'QAS'
 PREPROCESSING, SKIP_CHARGE_READY = get_preprocessing_and_skip_charge_ready(args.learning_case)
 use_dx_in_forward = not args.no_use_dx
 use_abs_err = not args.no_abs_err
+add_one_output_layer = args.add_one_output_layer
 # use_dx_in_forward = False
 dim_dict = get_input_dimensions(BATTERY_TYPE)
 
@@ -229,12 +231,11 @@ validate_loader_u = DataLoader(Dataset(v_x_recovered, v_y_recovered, v_z_recover
 # Instantiate the networks
 if PREPROCESSING:
     net = CombinedAE(input_size=2, encode2_input_size=3, output_size=110,
-                        activation_fn=torch.sigmoid, use_dx_in_forward=use_dx_in_forward).to(device)
+                        activation_fn=torch.sigmoid, use_dx_in_forward=use_dx_in_forward, add_one_output_layer=add_one_output_layer).to(device)
 else:
     net = CombinedAE(input_size=2, encode2_input_size=3, output_size=110,
-                        activation_fn=CustomSigmoidFunc(scale=args.ae_u_scale, shift=args.ae_u_shift), use_dx_in_forward=use_dx_in_forward).to(device)
-netx = CombinedAE(input_size=2, encode2_input_size=4, output_size=110, activation_fn=CustomSigmoidFunc(scale=args.ae_x_scale, shift=args.ae_x_shift), use_dx_in_forward=use_dx_in_forward).to(device)
-
+                        activation_fn=CustomSigmoidFunc(scale=args.ae_u_scale, shift=args.ae_u_shift), use_dx_in_forward=use_dx_in_forward, add_one_output_layer=add_one_output_layer).to(device)
+netx = CombinedAE(input_size=2, encode2_input_size=4, output_size=110, activation_fn=CustomSigmoidFunc(scale=args.ae_x_scale, shift=args.ae_x_shift), use_dx_in_forward=use_dx_in_forward, add_one_output_layer=add_one_output_layer).to(device)
 ## ================= Training MC-AE for voltage reconstruction ================= ##
 optimizer = torch.optim.Adam(net.parameters(), lr=AE_U_LR)
 loss_f = nn.MSELoss()
