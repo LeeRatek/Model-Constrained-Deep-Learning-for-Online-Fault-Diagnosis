@@ -8,6 +8,7 @@ import pandas as pd
 import matplotlib.ticker as mtick
 import os
 import json
+
 # import warnings
 from pyparsing import Any
 import torch.nn as nn
@@ -26,6 +27,7 @@ import platform
 import sys
 import ast
 
+
 # Function to safely load a PyTorch model (serialized by GPU) or any pickled object to CPU
 def _to_cpu(obj: Any, *, verbose: bool = True):
     def log(message: str) -> None:
@@ -42,6 +44,7 @@ def _to_cpu(obj: Any, *, verbose: bool = True):
         log("Its a dict, moved to CPU")
         return {k: _to_cpu(v, verbose=verbose) for k, v in obj.items()}
     return obj
+
 
 def safe_load(path: str, *, verbose: bool = True):
     """Load a file based on its extension, with optional verbose logging.
@@ -61,39 +64,46 @@ def safe_load(path: str, *, verbose: bool = True):
 
     class CPUUnpickler(pickle.Unpickler):
         def find_class(self, module, name):
-            if module == 'torch.storage' and name == '_load_from_bytes':
-                return lambda b: torch.load(io.BytesIO(b), map_location=torch.device('cpu'), weights_only=False)
+            if module == "torch.storage" and name == "_load_from_bytes":
+                return lambda b: torch.load(
+                    io.BytesIO(b), map_location=torch.device("cpu"), weights_only=False
+                )
             return super().find_class(module, name)
 
     def load_pickle():
         try:
             log("Loading with CPUUnpickler...")
-            with open(path, 'rb') as f:
+            with open(path, "rb") as f:
                 obj = CPUUnpickler(f).load()
             return _to_cpu(obj, verbose=verbose)
         except Exception as e:
-            log(f"CPUUnpickler failed ({type(e).__name__}). Falling back to pickle.load...")
-            with open(path, 'rb') as f:
+            log(
+                f"CPUUnpickler failed ({type(e).__name__}). Falling back to pickle.load..."
+            )
+            with open(path, "rb") as f:
                 obj = pickle.load(f)
             return _to_cpu(obj, verbose=verbose)
 
     def load_torch():
         log("Loading with torch.load...")
-        return _to_cpu(torch.load(path, map_location=torch.device('cpu'), weights_only=False), verbose=verbose)
+        return _to_cpu(
+            torch.load(path, map_location=torch.device("cpu"), weights_only=False),
+            verbose=verbose,
+        )
 
     def load_numpy():
         log("Loading with numpy.load...")
         return np.load(path, allow_pickle=True)
 
-    if ext in ('.pkl', '.pickle'):
+    if ext in (".pkl", ".pickle"):
         return load_pickle()
-    if ext in ('.pt', '.pth', '.ckpt'):
+    if ext in (".pt", ".pth", ".ckpt"):
         try:
             return load_torch()
         except Exception as e:
             log(f"torch.load failed ({type(e).__name__}). Falling back to pickle...")
             return load_pickle()
-    if ext in ('.npy', '.npz'):
+    if ext in (".npy", ".npz"):
         return load_numpy()
 
     log(f"Unknown extension '{ext}'. Trying pickle then torch...")
@@ -102,6 +112,7 @@ def safe_load(path: str, *, verbose: bool = True):
     except Exception as e:
         log(f"pickle failed ({type(e).__name__}). Trying torch.load...")
         return load_torch()
+
 
 def calculate_volt_modepi(volt_all):
     """
@@ -112,7 +123,10 @@ def calculate_volt_modepi(volt_all):
     volt_lamda = 1 / volt_std
 
     volt_pi1 = (1 / (2 * np.pi * volt_all.pow(3))).mul(volt_lamda, axis=0).pow(0.5)
-    volt_pi2 = (((-1) * ((volt_all.sub(volt_mode, axis=0))).pow(2).mul(volt_lamda, axis=0)) / (2 * volt_all.mul(volt_mode.pow(2), axis=0))).apply(np.exp)
+    volt_pi2 = (
+        ((-1) * ((volt_all.sub(volt_mode, axis=0))).pow(2).mul(volt_lamda, axis=0))
+        / (2 * volt_all.mul(volt_mode.pow(2), axis=0))
+    ).apply(np.exp)
     volt_pi = volt_pi1 * volt_pi2
 
     volt_modepi = ((volt_pi * volt_all).sum(axis=1)) / (volt_pi.sum(axis=1))
@@ -181,22 +195,49 @@ def solvers(volt_modepi, volt_di, volt_all, soc, b, current, temp_avg):
         # print(temp.iloc[k])
         if x[1, k] > 1:
             x[1, k] = 1
-        OCV[k] = b[17] * x[1, k] ** 17 + b[16] * x[1, k] ** 16 + b[15] * x[1, k] ** 15 + b[14] * x[1, k] ** 14 + b[13] * \
-                 x[1, k] ** 13 + \
-                 b[12] * x[1, k] ** 12 + b[11] * x[1, k] ** 11 + b[10] * x[1, k] ** 10 + b[9] * x[1, k] ** 9 + b[8] * x[
-                     1, k] ** 8 + \
-                 b[7] * x[1, k] ** 7 + b[6] * x[1, k] ** 6 + b[5] * x[1, k] ** 5 + b[4] * x[1, k] ** 4 + b[3] * x[
-                     1, k] ** 3 + \
-                 b[2] * x[1, k] ** 2 + b[1] * x[1, k] + b[0] + b[18] * temp.iloc[k] + b[19] * temp.iloc[k] ** 2 + b[
-                     20] * temp.iloc[k] ** 3
-        C[k, :] = [-1, b[17] * x[1, k] ** 16 * 17 + b[16] * x[1, k] ** 15 * 16 + b[15] * x[1, k] ** 14 * 15 + b[14] * x[
-            1, k] ** 13 * 14 +
-                   b[13] * x[1, k] ** 12 * 13 + b[12] * x[1, k] ** 11 * 12 + b[11] * x[1, k] ** 10 * 11 + b[10] * x[
-                       1, k] ** 9 * 10 +
-                   b[9] * x[1, k] ** 8 * 9 + b[8] * x[1, k] ** 7 * 8 + b[7] * 7 * x[1, k] ** 6 + b[6] * 6 * x[
-                       1, k] ** 5 +
-                   b[5] * 5 * x[1, k] ** 4 + b[4] * 4 * x[1, k] ** 3 + 3 * b[3] * x[1, k] ** 2 + 2 * b[2] * x[1, k] + b[
-                       1]]
+        OCV[k] = (
+            b[17] * x[1, k] ** 17
+            + b[16] * x[1, k] ** 16
+            + b[15] * x[1, k] ** 15
+            + b[14] * x[1, k] ** 14
+            + b[13] * x[1, k] ** 13
+            + b[12] * x[1, k] ** 12
+            + b[11] * x[1, k] ** 11
+            + b[10] * x[1, k] ** 10
+            + b[9] * x[1, k] ** 9
+            + b[8] * x[1, k] ** 8
+            + b[7] * x[1, k] ** 7
+            + b[6] * x[1, k] ** 6
+            + b[5] * x[1, k] ** 5
+            + b[4] * x[1, k] ** 4
+            + b[3] * x[1, k] ** 3
+            + b[2] * x[1, k] ** 2
+            + b[1] * x[1, k]
+            + b[0]
+            + b[18] * temp.iloc[k]
+            + b[19] * temp.iloc[k] ** 2
+            + b[20] * temp.iloc[k] ** 3
+        )
+        C[k, :] = [
+            -1,
+            b[17] * x[1, k] ** 16 * 17
+            + b[16] * x[1, k] ** 15 * 16
+            + b[15] * x[1, k] ** 14 * 15
+            + b[14] * x[1, k] ** 13 * 14
+            + b[13] * x[1, k] ** 12 * 13
+            + b[12] * x[1, k] ** 11 * 12
+            + b[11] * x[1, k] ** 10 * 11
+            + b[10] * x[1, k] ** 9 * 10
+            + b[9] * x[1, k] ** 8 * 9
+            + b[8] * x[1, k] ** 7 * 8
+            + b[7] * 7 * x[1, k] ** 6
+            + b[6] * 6 * x[1, k] ** 5
+            + b[5] * 5 * x[1, k] ** 4
+            + b[4] * 4 * x[1, k] ** 3
+            + 3 * b[3] * x[1, k] ** 2
+            + 2 * b[2] * x[1, k]
+            + b[1],
+        ]
         U[k] = OCV[k] - x[0, k] - RO * I.iloc[k]
         e[k] = Ut.iloc[k] - U[k]
         rou = 1.2
@@ -226,26 +267,50 @@ def solvers(volt_modepi, volt_di, volt_all, soc, b, current, temp_avg):
         for j in range(volt_all.shape[1]):
             xi[k, j] = xi[k - 1, j]
             Pi[k, j] = Pi[k - 1, j] + Qi
-            OCVi[k, j] = b[17] * (xi[k, j] + x[1, k]) ** 17 + b[16] * (xi[k, j] + x[1, k]) ** 16 + b[15] * (
-                        xi[k, j] + x[1, k]) ** 15 + b[14] * (xi[k, j] + x[1, k]) ** 14 + b[13] * (
-                                     xi[k, j] + x[1, k]) ** 13 + b[12] * (xi[k, j] + x[1, k]) ** 12 + b[11] * (
-                                     xi[k, j] + x[1, k]) ** 11 + b[10] * (xi[k, j] + x[1, k]) ** 10 + b[9] * (
-                                     xi[k, j] + x[1, k]) ** 9 + b[8] * (xi[k, j] + x[1, k]) ** 8 + b[7] * (
-                                     xi[k, j] + x[1, k]) ** 7 + b[6] * (xi[k, j] + x[1, k]) ** 6 + b[5] * (
-                                     xi[k, j] + x[1, k]) ** 5 + b[4] * (xi[k, j] + x[1, k]) ** 4 + b[3] * (
-                                     xi[k, j] + x[1, k]) ** 3 + b[2] * (xi[k, j] + x[1, k]) ** 2 + b[1] * (
-                                     xi[k, j] + x[1, k]) + b[0] + b[18] * temp[k] + b[19] * temp[k] ** 2 + b[20] * temp[
-                             k] ** 3
+            OCVi[k, j] = (
+                b[17] * (xi[k, j] + x[1, k]) ** 17
+                + b[16] * (xi[k, j] + x[1, k]) ** 16
+                + b[15] * (xi[k, j] + x[1, k]) ** 15
+                + b[14] * (xi[k, j] + x[1, k]) ** 14
+                + b[13] * (xi[k, j] + x[1, k]) ** 13
+                + b[12] * (xi[k, j] + x[1, k]) ** 12
+                + b[11] * (xi[k, j] + x[1, k]) ** 11
+                + b[10] * (xi[k, j] + x[1, k]) ** 10
+                + b[9] * (xi[k, j] + x[1, k]) ** 9
+                + b[8] * (xi[k, j] + x[1, k]) ** 8
+                + b[7] * (xi[k, j] + x[1, k]) ** 7
+                + b[6] * (xi[k, j] + x[1, k]) ** 6
+                + b[5] * (xi[k, j] + x[1, k]) ** 5
+                + b[4] * (xi[k, j] + x[1, k]) ** 4
+                + b[3] * (xi[k, j] + x[1, k]) ** 3
+                + b[2] * (xi[k, j] + x[1, k]) ** 2
+                + b[1] * (xi[k, j] + x[1, k])
+                + b[0]
+                + b[18] * temp[k]
+                + b[19] * temp[k] ** 2
+                + b[20] * temp[k] ** 3
+            )
             if OCVi[k, j] > OCV[k] + 0.1:
                 OCVi[k, j] = OCV[k] + 0.1
-            Ci = b[17] * (xi[k, j] + x[1, k]) ** 16 * 17 + b[16] * (xi[k, j] + x[1, k]) ** 15 * 16 + b[15] * (
-                        xi[k, j] + x[1, k]) ** 14 * 15 + b[14] * (xi[k, j] + x[1, k]) ** 13 * 14 + b[13] * (
-                             xi[k, j] + x[1, k]) ** 12 * 13 + b[12] * (xi[k, j] + x[1, k]) ** 11 * 12 + b[11] * (
-                             xi[k, j] + x[1, k]) ** 10 * 11 + b[10] * (xi[k, j] + x[1, k]) ** 9 * 10 + b[9] * (
-                             xi[k, j] + x[1, k]) ** 8 * 9 + b[8] * (xi[k, j] + x[1, k]) ** 7 * 8 + b[7] * 7 * (
-                             xi[k, j] + x[1, k]) ** 6 + b[6] * 6 * (xi[k, j] + x[1, k]) ** 5 + b[5] * 5 * (
-                             xi[k, j] + x[1, k]) ** 4 + b[4] * 4 * (xi[k, j] + x[1, k]) ** 3 + 3 * b[3] * (
-                             xi[k, j] + x[1, k]) ** 2 + 2 * b[2] * (xi[k, j] + x[1, k]) + b[1]
+            Ci = (
+                b[17] * (xi[k, j] + x[1, k]) ** 16 * 17
+                + b[16] * (xi[k, j] + x[1, k]) ** 15 * 16
+                + b[15] * (xi[k, j] + x[1, k]) ** 14 * 15
+                + b[14] * (xi[k, j] + x[1, k]) ** 13 * 14
+                + b[13] * (xi[k, j] + x[1, k]) ** 12 * 13
+                + b[12] * (xi[k, j] + x[1, k]) ** 11 * 12
+                + b[11] * (xi[k, j] + x[1, k]) ** 10 * 11
+                + b[10] * (xi[k, j] + x[1, k]) ** 9 * 10
+                + b[9] * (xi[k, j] + x[1, k]) ** 8 * 9
+                + b[8] * (xi[k, j] + x[1, k]) ** 7 * 8
+                + b[7] * 7 * (xi[k, j] + x[1, k]) ** 6
+                + b[6] * 6 * (xi[k, j] + x[1, k]) ** 5
+                + b[5] * 5 * (xi[k, j] + x[1, k]) ** 4
+                + b[4] * 4 * (xi[k, j] + x[1, k]) ** 3
+                + 3 * b[3] * (xi[k, j] + x[1, k]) ** 2
+                + 2 * b[2] * (xi[k, j] + x[1, k])
+                + b[1]
+            )
             DUi[k, j] = OCVi[k, j] - OCV[k] - I[k] * DRi[j]
             Ui[k, j] = U[k] + DUi[k, j]
             Uipre[k + 1, j] = Upre[k + 1] + DUi[k, j]
@@ -259,18 +324,20 @@ def solvers(volt_modepi, volt_di, volt_all, soc, b, current, temp_avg):
             # deta1[k,j]=1000*(Ui[k,j]-Utt[k,j])
             # deta4[k,j]=100*(Xi[k,j]-SOCi[k,j])
     xipre = np.zeros((xi.shape[0], xi.shape[1]))
-    xipre[1:, :] = xi[:xi.shape[0] - 1, :]
+    xipre[1:, :] = xi[: xi.shape[0] - 1, :]
     return xipre, xpre, Spre, Upre, Xipre, x, DUi, Xi
 
-class CustomSigmoidFunc():
+
+class CustomSigmoidFunc:
     # The authors use scale default = 1.8, shift default = 2.5
     # We set scale = 1, shift = 0 as default values for general use.
     def __init__(self, scale=1, shift=0):
         self.scale = scale
         self.shift = shift
-          
+
     def forward(self, x):
         return self.shift + self.scale * torch.sigmoid(x)
+
 
 def Custom_PCA(data, l1, l2):
     # Data standardization
@@ -281,29 +348,56 @@ def Custom_PCA(data, l1, l2):
     X = np.cov(data_nor.T)
     # Calculate singular values for covariance matrix
     P, v, P_t = np.linalg.svd(X)  # This function returns three values u s v
-    v_ratio = np.cumsum(v) / np.sum(v) # Cumulative contribution rate of eigenvalues -> 이 중에서 상위 95%의 기여도를 차지하는 벡터들 선택.
+    v_ratio = np.cumsum(v) / np.sum(
+        v
+    )  # Cumulative contribution rate of eigenvalues -> 이 중에서 상위 95%의 기여도를 차지하는 벡터들 선택.
     # Find the index of eigenvalues with a cumulative ratio greater than 0.95
     k = np.where(v_ratio > 0.95)[0]
     # New principal components
-    p_k = P[:, :k[0]]
-    v_I = np.diag(1 / v[:k[0]])
+    p_k = P[:, : k[0]]
+    v_I = np.diag(1 / v[: k[0]])
     # T2 statistic threshold calculation
-    coe = k[0] * (np.shape(data)[0] - 1) * (np.shape(data)[0] + 1) / \
-        ((np.shape(data)[0] - k[0]) * np.shape(data)[0])
+    coe = (
+        k[0]
+        * (np.shape(data)[0] - 1)
+        * (np.shape(data)[0] + 1)
+        / ((np.shape(data)[0] - k[0]) * np.shape(data)[0])
+    )
     T_95_limit = coe * stats.f.ppf(0.95, k[0], (np.shape(data)[0] - k[0]))
     T_99_limit = coe * stats.f.ppf(l1, k[0], (np.shape(data)[0] - k[0]))
     # SPE statistic threshold calculation
-    O1 = np.sum((v[k[0]:]) ** 1)
-    O2 = np.sum((v[k[0]:]) ** 2)
-    O3 = np.sum((v[k[0]:]) ** 3)
-    h0 = 1 - (2 * O1 * O3) / (3 * (O2 ** 2))
+    O1 = np.sum((v[k[0] :]) ** 1)
+    O2 = np.sum((v[k[0] :]) ** 2)
+    O3 = np.sum((v[k[0] :]) ** 3)
+    h0 = 1 - (2 * O1 * O3) / (3 * (O2**2))
     c_95 = norm.ppf(0.95)
     c_99 = norm.ppf(l2)
-    SPE_95_limit = O1 * ((h0 * c_95 * ((2 * O2) ** 0.5) /
-                         O1 + 1 + O2 * h0 * (h0 - 1) / (O1 ** 2)) ** (1 / h0))
-    SPE_99_limit = O1 * ((h0 * c_99 * ((2 * O2) ** 0.5) /
-                         O1 + 1 + O2 * h0 * (h0 - 1) / (O1 ** 2)) ** (1 / h0))
-    return v_I, v, v_ratio, p_k, data_mean, data_std, T_95_limit, T_99_limit, SPE_95_limit, SPE_99_limit, P, k, P_t, X, data_nor
+    SPE_95_limit = O1 * (
+        (h0 * c_95 * ((2 * O2) ** 0.5) / O1 + 1 + O2 * h0 * (h0 - 1) / (O1**2))
+        ** (1 / h0)
+    )
+    SPE_99_limit = O1 * (
+        (h0 * c_99 * ((2 * O2) ** 0.5) / O1 + 1 + O2 * h0 * (h0 - 1) / (O1**2))
+        ** (1 / h0)
+    )
+    return (
+        v_I,
+        v,
+        v_ratio,
+        p_k,
+        data_mean,
+        data_std,
+        T_95_limit,
+        T_99_limit,
+        SPE_95_limit,
+        SPE_99_limit,
+        P,
+        k,
+        P_t,
+        X,
+        data_nor,
+    )
+
 
 def T2(data_in, data_mean, data_std, p_k, v_I):
     data_nor = np.array((data_in - data_mean) / data_std)
@@ -311,10 +405,13 @@ def T2(data_in, data_mean, data_std, p_k, v_I):
     t2 = np.dot(np.dot((data_nor).T, D), (data_nor))
     return t2  # T2 statistic
 
+
 def T2_array(data_in, data_mean, data_std, p_k, v_I):
-    D = p_k @ v_I @ p_k.T # (F×F)
-    X = np.asarray((data_in - data_mean) / data_std, dtype=float) # (N×F)
-    return np.sum((X @ D) * X, axis=1)
+    D = p_k @ v_I @ p_k.T  # (F×F)
+    X = np.asarray((data_in - data_mean) / data_std, dtype=float)  # (N×F)
+    contrib_array = (X @ D) * X
+    return np.sum(contrib_array, axis=1), contrib_array
+
 
 def SPE_array(data_in, data_mean, data_std, p_k):
     """
@@ -335,79 +432,92 @@ def SPE_array(data_in, data_mean, data_std, p_k):
     if X.ndim == 1:
         X = X[None, :]  # (1, F)
     F_dim = p_k.shape[0]
-    C = p_k @ p_k.T                     # (F, F)
-    M = np.eye(F_dim) - C               # residual projection
-    R = X @ M                           # (N, F)
-    return np.einsum('ij,ij->i', R, R)  # row-wise squared norm
+    C = p_k @ p_k.T  # (F, F)
+    M = np.eye(F_dim) - C  # residual projection
+    R = X @ M  # (N, F)
+    return np.einsum("ij,ij->i", R, R), R**2  # row-wise squared norm
+
 
 def SPE(data_in, data_mean, data_std, p_k):
     # test_data_nor = ((data_in - data_mean) / data_std).reshape(len(data_in), 1)
-    test_data_nor = np.array(((data_in - data_mean) / data_std)).reshape(6,1)
+    test_data_nor = np.array(((data_in - data_mean) / data_std)).reshape(6, 1)
     I = np.eye(len(data_in))
-    Q_count = np.dot(np.dot((I - np.dot(p_k, p_k.T)), test_data_nor).T,
-                     np.dot((I - np.dot(p_k, p_k.T)), test_data_nor))
-    return Q_count # Squared prediction error
+    Q_count = np.dot(
+        np.dot((I - np.dot(p_k, p_k.T)), test_data_nor).T,
+        np.dot((I - np.dot(p_k, p_k.T)), test_data_nor),
+    )
+    return Q_count  # Squared prediction error
+
 
 def chi_square_dist_components(p_k, v_I, X, SPE_limit, T_limit):
-    Pi = ((p_k @ v_I @ p_k.T) / T_limit) + ((np.eye(p_k.shape[0]) - p_k @ p_k.T) / SPE_limit)
+    Pi = ((p_k @ v_I @ p_k.T) / T_limit) + (
+        (np.eye(p_k.shape[0]) - p_k @ p_k.T) / SPE_limit
+    )
     M = np.dot(X, Pi)
     tr_M = np.trace(M)
     tr_M2 = np.trace(np.dot(M, M))
     g = tr_M2 / tr_M
-    h = (tr_M ** 2) / tr_M2
+    h = (tr_M**2) / tr_M2
     return Pi, g, h
+
 
 def diagnosis_thresholds(g, h, sigma_levels=[2, 3, 4.5, 6], show_plot=True):
     mean = h * g
     sigma = g * np.sqrt(2 * h)
-    
-    x = np.linspace(0, 30*g, 10000)
-    pdf = (1/g) * chi2.pdf(x/g, h)
-    
+
+    x = np.linspace(0, 30 * g, 10000)
+    pdf = (1 / g) * chi2.pdf(x / g, h)
+
     thresholds = list()
     for k in sigma_levels:
         thresholds.append(mean + k * sigma)
-    
+
     # -----------------------------
     # Numerical output
     # -----------------------------
-    print(f'Chi-square distribution (df = {h})')
-    print(f'Mean = {mean:.2f}, SD = {sigma:.2f}\n')
+    print(f"Chi-square distribution (df = {h})")
+    print(f"Mean = {mean:.2f}, SD = {sigma:.2f}\n")
 
     print(f'{"k(SD)":>6} {"Threshold":>12} {"Area":>12}')
-    print('-' * 50)
+    print("-" * 50)
 
     for i in range(len(sigma_levels)):
-        lower = max(0, mean - sigma_levels[i]*sigma)
-        upper = mean + sigma_levels[i]*sigma
-        area = chi2.cdf(upper/g, h) - chi2.cdf(lower/g, h)
-        print(f'{sigma_levels[i]:6.1f} {thresholds[i]:12.4f} {area:12.6f}')
-    
+        lower = max(0, mean - sigma_levels[i] * sigma)
+        upper = mean + sigma_levels[i] * sigma
+        area = chi2.cdf(upper / g, h) - chi2.cdf(lower / g, h)
+        print(f"{sigma_levels[i]:6.1f} {thresholds[i]:12.4f} {area:12.6f}")
+
     if not show_plot:
         return thresholds
-    
+
     # -----------------------------
     # Plot PDF
-    # -----------------------------    
+    # -----------------------------
     plt.figure()
     plt.plot(x, pdf, linewidth=2)
     plt.grid(True)
 
     # Plot mean
-    plt.axvline(mean, color='k', linewidth=2, label='Mean')
+    plt.axvline(mean, color="k", linewidth=2, label="Mean")
 
     # Plot SD ranges
     for i in range(len(sigma_levels)):
-        plt.axvline(thresholds[i], linestyle='--', linewidth=1.2)
-        plt.text(thresholds[i], max(pdf) * 0.9, f'{sigma_levels[i]} SD',
-                rotation=90, verticalalignment='bottom')
+        plt.axvline(thresholds[i], linestyle="--", linewidth=1.2)
+        plt.text(
+            thresholds[i],
+            max(pdf) * 0.9,
+            f"{sigma_levels[i]} SD",
+            rotation=90,
+            verticalalignment="bottom",
+        )
 
     # Labels and title
-    plt.xlabel('x')
-    plt.ylabel('Probability Density')
-    plt.title(f'Chi-square Distribution (df = {h}) with SD Ranges')
+    plt.xlabel("x")
+    plt.ylabel("Probability Density")
+    plt.title(f"Chi-square Distribution (df = {h}) with SD Ranges")
     plt.legend()
     plt.show()
+
 
 def save_pca_results(output_dir, pca_outputs):
     """
@@ -420,9 +530,23 @@ def save_pca_results(output_dir, pca_outputs):
              T_95_limit, T_99_limit, SPE_95_limit, SPE_99_limit,
              P, k, P_t, X, data_nor)
     """
-    (v_I, v, v_ratio, p_k, data_mean, data_std,
-     T_95_limit, T_99_limit, SPE_95_limit, SPE_99_limit,
-     P, k, P_t, X, data_nor) = pca_outputs
+    (
+        v_I,
+        v,
+        v_ratio,
+        p_k,
+        data_mean,
+        data_std,
+        T_95_limit,
+        T_99_limit,
+        SPE_95_limit,
+        SPE_99_limit,
+        P,
+        k,
+        P_t,
+        X,
+        data_nor,
+    ) = pca_outputs
 
     os.makedirs(output_dir, exist_ok=True)
 
@@ -446,7 +570,7 @@ def save_pca_results(output_dir, pca_outputs):
         P=np.asarray(P),
         k=np.asarray(k),
         P_t=np.asarray(P_t),
-        X=np.asarray(X)
+        X=np.asarray(X),
     )
 
     # Save data_nor: keep original type
@@ -457,7 +581,9 @@ def save_pca_results(output_dir, pca_outputs):
         df_shape = list(data_nor.shape)
     else:
         # Store ndarray into separate NPZ for clarity
-        np.savez_compressed(os.path.join(output_dir, "pca_data_nor.npz"), data_nor=np.asarray(data_nor))
+        np.savez_compressed(
+            os.path.join(output_dir, "pca_data_nor.npz"), data_nor=np.asarray(data_nor)
+        )
         df_path = os.path.join(output_dir, "pca_data_nor.npz")
         df_shape = list(np.asarray(data_nor).shape)
 
@@ -477,7 +603,7 @@ def save_pca_results(output_dir, pca_outputs):
             "k": "ndarray",
             "P_t": "ndarray",
             "X": "ndarray",
-            "data_nor": data_nor_type
+            "data_nor": data_nor_type,
         },
         "shapes": {
             "v_I": list(np.asarray(v_I).shape),
@@ -490,17 +616,17 @@ def save_pca_results(output_dir, pca_outputs):
             "k": list(np.asarray(k).shape),
             "P_t": list(np.asarray(P_t).shape),
             "X": list(np.asarray(X).shape),
-            "data_nor": df_shape
+            "data_nor": df_shape,
         },
-        "paths": {
-            "arrays": arrays_path,
-            "data_nor": df_path
-        }
+        "paths": {"arrays": arrays_path, "data_nor": df_path},
     }
     with open(manifest_path, "w", encoding="utf-8") as f:
         json.dump(manifest, f, ensure_ascii=False, indent=2)
 
-def load_pca_results(output_dir, load_data_nor: bool = True, validate_shapes: bool = True):
+
+def load_pca_results(
+    output_dir, load_data_nor: bool = True, validate_shapes: bool = True
+):
     """
     Load PCA function outputs and validate type/shape consistency.
 
@@ -560,7 +686,9 @@ def load_pca_results(output_dir, load_data_nor: bool = True, validate_shapes: bo
         def _chk(name, obj):
             shp = list(np.asarray(obj).shape) if name != "data_nor" else list(obj.shape)
             if shp != expected[name]:
-                raise ValueError(f"Shape mismatch for {name}: loaded {shp}, expected {expected[name]}")
+                raise ValueError(
+                    f"Shape mismatch for {name}: loaded {shp}, expected {expected[name]}"
+                )
 
         _chk("v_I", v_I)
         _chk("v", v)
@@ -576,10 +704,23 @@ def load_pca_results(output_dir, load_data_nor: bool = True, validate_shapes: bo
             _chk("data_nor", data_nor)
 
     return (
-        v_I, v, v_ratio, p_k, data_mean, data_std,
-        T_95_limit, T_99_limit, SPE_95_limit, SPE_99_limit,
-        P, k, P_t, X, data_nor
+        v_I,
+        v,
+        v_ratio,
+        p_k,
+        data_mean,
+        data_std,
+        T_95_limit,
+        T_99_limit,
+        SPE_95_limit,
+        SPE_99_limit,
+        P,
+        k,
+        P_t,
+        X,
+        data_nor,
     )
+
 
 def save_lstm_model(model, models_dir="./models", filename="lstm.pth"):
     """
@@ -593,6 +734,7 @@ def save_lstm_model(model, models_dir="./models", filename="lstm.pth"):
     os.makedirs(models_dir, exist_ok=True)
     path = os.path.join(models_dir, filename)
     torch.save(model.to(torch.device("cpu")), path)
+
 
 def load_lstm_model(models_dir="./models", filename="lstm.pth", device=None):
     """
@@ -612,6 +754,7 @@ def load_lstm_model(models_dir="./models", filename="lstm.pth", device=None):
         mdl = mdl.to(device)
     return mdl
 
+
 def save_net_state(model, models_dir="./models", filename="net_model.pth"):
     """
     net(CombinedAE)의 state_dict를 CPU 텐서로 저장합니다.
@@ -621,12 +764,14 @@ def save_net_state(model, models_dir="./models", filename="net_model.pth"):
     state = {k: v.detach().cpu() for k, v in model.state_dict().items()}
     torch.save(state, path)
 
+
 def load_net_state_dict(models_dir="./models", filename="net_model.pth"):
     """
     net(CombinedAE)의 state_dict를 CPU에서 로드해 반환합니다.
     """
     path = os.path.join(models_dir, filename)
     return torch.load(path, map_location=torch.device("cpu"), weights_only=False)
+
 
 def load_net_into(model, models_dir="./models", filename="net_model.pth", device=None):
     """
@@ -639,15 +784,22 @@ def load_net_into(model, models_dir="./models", filename="net_model.pth", device
     return model
 
 
-def plot_array(arr, title=None, x_label=None, y_label=None,
-            figsize=(12, 4), save_path=None, show=True):
-    
+def plot_array(
+    arr,
+    title=None,
+    x_label=None,
+    y_label=None,
+    figsize=(12, 4),
+    save_path=None,
+    show=True,
+):
+
     # x축 생성: 제공된 x가 없으면 DataFrame index 또는 0..N-1 사용
     x = np.arange(len(arr))
 
     # 플롯
     plt.figure(figsize=figsize)
-    plt.plot(x, arr, color='tab:blue', lw=1.5)
+    plt.plot(x, arr, color="tab:blue", lw=1.5)
     plt.xlabel(x_label)
     plt.ylabel(y_label)
     plt.title(title)
@@ -673,7 +825,9 @@ def load_loss_csv(loss_csv_path, *, delimiter=",", skiprows: int = 1):
     if data.ndim == 1:
         data = data.reshape(1, -1)
     if data.shape[1] < 2:
-        raise ValueError(f"loss CSV는 최소 2개 컬럼(epoch,loss)이 필요합니다: {loss_csv_path}")
+        raise ValueError(
+            f"loss CSV는 최소 2개 컬럼(epoch,loss)이 필요합니다: {loss_csv_path}"
+        )
     epochs = data[:, 0].astype(np.int64, copy=False)
     losses = data[:, 1].astype(np.float64, copy=False)
     return epochs, losses
@@ -708,12 +862,16 @@ def plot_loss_curve(
         epochs, losses = load_loss_csv(loss_csv_path)
     else:
         if epochs is None or losses is None:
-            raise ValueError("loss_csv_path 또는 (epochs, losses) 중 하나는 반드시 제공해야 합니다.")
+            raise ValueError(
+                "loss_csv_path 또는 (epochs, losses) 중 하나는 반드시 제공해야 합니다."
+            )
         epochs = np.asarray(epochs)
         losses = np.asarray(losses, dtype=np.float64)
 
     if epochs.shape[0] != losses.shape[0]:
-        raise ValueError(f"epochs/losses 길이가 다릅니다: {epochs.shape[0]} vs {losses.shape[0]}")
+        raise ValueError(
+            f"epochs/losses 길이가 다릅니다: {epochs.shape[0]} vs {losses.shape[0]}"
+        )
 
     ds = int(downsample) if downsample is not None else 1
     if ds < 1:
@@ -746,7 +904,11 @@ def plot_loss_curve(
 
     if save_path is not None:
         if str(save_path).lower().endswith(".png") and png_compress_level is not None:
-            fig.savefig(save_path, dpi=dpi, pil_kwargs={"compress_level": int(png_compress_level)})
+            fig.savefig(
+                save_path,
+                dpi=dpi,
+                pil_kwargs={"compress_level": int(png_compress_level)},
+            )
         else:
             fig.savefig(save_path, dpi=dpi)
 
@@ -757,14 +919,15 @@ def plot_loss_curve(
 
     return epochs, losses
 
+
 def plot_loss_curve_all(args):
     plot_loss_curve(
         loss_csv_path=f"{args.models_dir}/loss_net.csv",
         title="Voltage train loss",
         save_path=f"{args.models_dir}/loss_net.png",
-        show=False,          # 저장만 하고 창은 안 띄움
+        show=False,  # 저장만 하고 창은 안 띄움
         dpi=200,
-        downsample=1,        # 1이면 전체 epoch 표시
+        downsample=1,  # 1이면 전체 epoch 표시
         tight_layout=False,
         png_compress_level=9,
         # yscale="log",
@@ -774,14 +937,14 @@ def plot_loss_curve_all(args):
         loss_csv_path=f"{args.models_dir}/loss_netx.csv",
         title="SoC train loss",
         save_path=f"{args.models_dir}/loss_netx.png",
-        show=False,          # 저장만 하고 창은 안 띄움
+        show=False,  # 저장만 하고 창은 안 띄움
         dpi=200,
-        downsample=1,        # 1이면 전체 epoch 표시
+        downsample=1,  # 1이면 전체 epoch 표시
         tight_layout=False,
         png_compress_level=9,
         # yscale="log",
     )
-        
+
     plot_loss_curve(
         loss_csv_path=f"{args.models_dir}/loss_net_val.csv",
         title="Voltage validation loss (every 10 epochs)",
@@ -789,7 +952,7 @@ def plot_loss_curve_all(args):
         show=False,
         downsample=1,
     )
-    
+
     plot_loss_curve(
         loss_csv_path=f"{args.models_dir}/loss_netx_val.csv",
         title="SoC validation loss (every 10 epochs)",
@@ -797,9 +960,7 @@ def plot_loss_curve_all(args):
         show=False,
         downsample=1,
     )
-    
-    
-    
+
 
 def plot_auc_roc_curve_from_threshold_matrix(
     y_true,
@@ -813,7 +974,9 @@ def plot_auc_roc_curve_from_threshold_matrix(
 ):
     """(호환용) threshold grid 기반 ROC/AUC 계산 + 최적점 계산 + 플로팅을 한 번에 수행."""
 
-    roc = compute_roc_auc_from_threshold_matrix(y_true, predict_results, predict_thresholds)
+    roc = compute_roc_auc_from_threshold_matrix(
+        y_true, predict_results, predict_thresholds
+    )
     opt = compute_optimal_thresholds_from_roc(
         roc["fpr"], roc["tpr"], roc["thresholds"], candidate_idx=roc["candidate_idx"]
     )
@@ -866,7 +1029,9 @@ def compute_roc_auc_from_threshold_matrix(y_true, predict_results, predict_thres
     predict_results = np.asarray(predict_results)
     predict_thresholds = np.asarray(predict_thresholds, dtype=float)
     if predict_results.ndim != 2:
-        raise ValueError(f"predict_results는 2D여야 합니다. got ndim={predict_results.ndim}")
+        raise ValueError(
+            f"predict_results는 2D여야 합니다. got ndim={predict_results.ndim}"
+        )
     if predict_results.shape[1] != predict_thresholds.shape[0]:
         raise ValueError(
             f"predict_results.shape[1]({predict_results.shape[1]}) != len(predict_thresholds)({predict_thresholds.shape[0]})"
@@ -986,11 +1151,21 @@ def plot_roc_curve(
         best_thr = float(best_point.get("threshold"))
         dx = 0.05 if best_fpr <= 0.7 else -0.25
         dy = 0.05 if best_tpr <= 0.7 else -0.25
-        plt.scatter([best_fpr], [best_tpr], color="red", s=60, zorder=5, label=f"Best thr={best_thr:.3g}")
+        plt.scatter(
+            [best_fpr],
+            [best_tpr],
+            color="red",
+            s=60,
+            zorder=5,
+            label=f"Best thr={best_thr:.3g}",
+        )
         plt.annotate(
             f"thr={best_thr:.3g}\nFPR={best_fpr:.2f}, TPR={best_tpr:.2f}",
             xy=(best_fpr, best_tpr),
-            xytext=(min(max(best_fpr + dx, 0.0), 1.0), min(max(best_tpr + dy, 0.0), 1.0)),
+            xytext=(
+                min(max(best_fpr + dx, 0.0), 1.0),
+                min(max(best_tpr + dy, 0.0), 1.0),
+            ),
             textcoords="data",
             arrowprops=dict(arrowstyle="->", color="red", lw=1.0),
             fontsize=9,
@@ -1039,11 +1214,12 @@ def plot_roc_curve(
     else:
         plt.close()
 
+
 def cont(X_col, data_mean, data_std, X_test, P, num_pc, lamda, T2UCL1):
-    X_test = ((X_test - data_mean) / data_std)
+    X_test = (X_test - data_mean) / data_std
     S = np.dot(X_test, P[:, :num_pc])
     r = []
-    ee = (T2UCL1 / num_pc)
+    ee = T2UCL1 / num_pc
     for i in range(num_pc):
         aa = S[i] * S[i]
         a = aa / lamda[i, i]
@@ -1060,39 +1236,45 @@ def cont(X_col, data_mean, data_std, X_test, P, num_pc, lamda, T2UCL1):
     e = np.dot(X_test, (I - np.dot(P, P.T)))
     contQ = np.square(e)
     return contT, contQ
+
+
 def Ratio_cu(x):
     sum = np.sum(x)
     for i in range(x.shape[0]):
         x[i] = x[i] / sum
     return x
+
+
 def SlidingAverage_list(s, n):
     mean = []
     if len(s) > n:
-        for m in range (n):
+        for m in range(n):
             mean.append(np.mean(s[:n]))
         # mean = s[:n].tolist()
         for i in range(n, len(s)):
-            select_s = s[i - n: i ]
+            select_s = s[i - n : i]
             mean_s = np.mean(select_s)
             mean.append(mean_s)
     else:
         mean = s.tolist()
     return mean
+
 
 def SlidingAverage(s, n):
     mean = []
     if len(s) > n:
-        for m in range (n):
+        for m in range(n):
             mean.append(np.mean(s[:n]))
         for i in range(n, len(s)):
-            select_s = s[i - n: i ]
+            select_s = s[i - n : i]
             mean_s = np.mean(select_s)
             mean.append(mean_s)
     else:
         mean = s.tolist()
     return mean
 
-def DiagnosisFeature(ERRORU,ERRORX, get_true_feature=False):
+
+def DiagnosisFeature(ERRORU, ERRORX, get_true_feature=False):
     # 성능 최적화 버전:
     # - pandas DataFrame 반복 생성 제거
     # - np.apply_along_axis(파이썬 루프) 제거
@@ -1101,7 +1283,9 @@ def DiagnosisFeature(ERRORU,ERRORX, get_true_feature=False):
     U = np.asarray(ERRORU, dtype=float)
     X = np.asarray(ERRORX, dtype=float)
     if U.ndim != 2 or X.ndim != 2:
-        raise ValueError(f"DiagnosisFeature expects 2D arrays, got {U.ndim}D and {X.ndim}D")
+        raise ValueError(
+            f"DiagnosisFeature expects 2D arrays, got {U.ndim}D and {X.ndim}D"
+        )
 
     eps = 1e-12
 
@@ -1151,7 +1335,7 @@ def DiagnosisFeature(ERRORU,ERRORX, get_true_feature=False):
         c = np.cumsum(a, dtype=float)
         c = np.concatenate(([0.0], c))
         window_sums = c[n:] - c[:-n]  # ends at n..L
-        out[n:] = (window_sums[:-1] / n)  # ends at n..L-1
+        out[n:] = window_sums[:-1] / n  # ends at n..L-1
         return out
 
     # 원래 로직 유지: X 관련 3개만 sliding average 적용
@@ -1161,7 +1345,9 @@ def DiagnosisFeature(ERRORU,ERRORX, get_true_feature=False):
         origin_Z_X_smoothed = pd.Series(Z_X_smoothed.copy())
     max_diff_ERRORX = pd.Series(_sliding_average_prev_window_np(max_diff_ERRORX, 100))
     Z_X = pd.Series(_sliding_average_prev_window_np(Z_X, 100))
-    Z_X_smoothed = pd.Series(_sliding_average_prev_window_np(Z_X_smoothed.to_numpy(), 100))
+    Z_X_smoothed = pd.Series(
+        _sliding_average_prev_window_np(Z_X_smoothed.to_numpy(), 100)
+    )
 
     max_diff_ERRORU = pd.Series(max_diff_ERRORU)
     Z_U = pd.Series(Z_U)
@@ -1170,17 +1356,25 @@ def DiagnosisFeature(ERRORU,ERRORX, get_true_feature=False):
         [max_diff_ERRORU, max_diff_ERRORX, Z_U, Z_X, Z_U_smoothed, Z_X_smoothed],
         axis=1,
     )
-    
+
     df_data2 = None
     if get_true_feature:
         df_data2 = pd.concat(
-            [max_diff_ERRORU, original_max_diff_ERRORX, Z_U, origin_Z_X, Z_U_smoothed, origin_Z_X_smoothed],
+            [
+                max_diff_ERRORU,
+                original_max_diff_ERRORX,
+                Z_U,
+                origin_Z_X,
+                Z_U_smoothed,
+                origin_Z_X_smoothed,
+            ],
             axis=1,
         )
-        
+
     return df_data, df_data2
 
-def ClassifyFeature(temp_max,temp_avg,CONTN,insulation_resistance,threshold1,fai):
+
+def ClassifyFeature(temp_max, temp_avg, CONTN, insulation_resistance, threshold1, fai):
     reversed_fai = np.flip(fai[:f_time])
     index_array = np.where(reversed_fai < threshold1)[0]
     index = index_array[0] if index_array.size > 0 else None
@@ -1191,56 +1385,65 @@ def ClassifyFeature(temp_max,temp_avg,CONTN,insulation_resistance,threshold1,fai
         Feature1 = CONTN[ttime, :]
         f1 = max(fai)
         max_erroru_column = np.argmax(ERRORU[ttime, :])
-        max_count_U = np.sum(np.argmax(ERRORU[ttime - 3000:ttime, :], axis=1) == max_erroru_column)
+        max_count_U = np.sum(
+            np.argmax(ERRORU[ttime - 3000 : ttime, :], axis=1) == max_erroru_column
+        )
         f2 = max_count_U / 3000
-        f3 = temp_dif[f_time - 50:f_time].max()
-        f4 = insulation_resistance.iloc[ttime-1000:ttime].min()
-        f5 = volt_all.iloc[ttime-100:ttime,:].min().min()
-        new_features = np.concatenate((Feature1, np.array([f1, f2, f3, f4, f5])))  
-        features_array = np.vstack((features_array, new_features))  
+        f3 = temp_dif[f_time - 50 : f_time].max()
+        f4 = insulation_resistance.iloc[ttime - 1000 : ttime].min()
+        f5 = volt_all.iloc[ttime - 100 : ttime, :].min().min()
+        new_features = np.concatenate((Feature1, np.array([f1, f2, f3, f4, f5])))
+        features_array = np.vstack((features_array, new_features))
     vin_feature = pd.DataFrame(features_array)
     return vin_feature
 
+
 # Refer to https://machinelearningmastery.com/convert-time-series-supervised-learning-problem-python/
 def series_to_supervised(data, n_in=1, n_out=1, dropnan=True):
-	"""
-	Frame a time series as a supervised learning dataset.
-	Arguments:
-		data: Sequence of observations as a list or NumPy array.
-		n_in: Number of lag observations as input (X).
-		n_out: Number of observations as output (y).
-		dropnan: Boolean whether or not to drop rows with NaN values.
-	Returns:
-		Pandas DataFrame of series framed for supervised learning.
-	"""
-	n_vars = 1 if type(data) is list else data.shape[1]
-	df = DataFrame(data)
-	cols, names = list(), list()
-	# input sequence (t-n, ... t-1)
-	for i in range(n_in, 0, -1):
-		cols.append(df.shift(i))
-		names += [('var%d(t-%d)' % (j+1, i)) for j in range(n_vars)]
-	# forecast sequence (t, t+1, ... t+n)
-	for i in range(0, n_out):
-		cols.append(df.shift(-i))
-		if i == 0:
-			names += [('var%d(t)' % (j+1)) for j in range(n_vars)]
-		else:
-			names += [('var%d(t+%d)' % (j+1, i)) for j in range(n_vars)]
-	# put it all together
-	agg = concat(cols, axis=1)
-	agg.columns = names
-	# drop rows with NaN values
-	if dropnan:
-		agg.dropna(inplace=True)
-	return agg
+    """
+    Frame a time series as a supervised learning dataset.
+    Arguments:
+            data: Sequence of observations as a list or NumPy array.
+            n_in: Number of lag observations as input (X).
+            n_out: Number of observations as output (y).
+            dropnan: Boolean whether or not to drop rows with NaN values.
+    Returns:
+            Pandas DataFrame of series framed for supervised learning.
+    """
+    n_vars = 1 if type(data) is list else data.shape[1]
+    df = DataFrame(data)
+    cols, names = list(), list()
+    # input sequence (t-n, ... t-1)
+    for i in range(n_in, 0, -1):
+        cols.append(df.shift(i))
+        names += [("var%d(t-%d)" % (j + 1, i)) for j in range(n_vars)]
+    # forecast sequence (t, t+1, ... t+n)
+    for i in range(0, n_out):
+        cols.append(df.shift(-i))
+        if i == 0:
+            names += [("var%d(t)" % (j + 1)) for j in range(n_vars)]
+        else:
+            names += [("var%d(t+%d)" % (j + 1, i)) for j in range(n_vars)]
+    # put it all together
+    agg = concat(cols, axis=1)
+    agg.columns = names
+    # drop rows with NaN values
+    if dropnan:
+        agg.dropna(inplace=True)
+    return agg
+
 
 def prepare_training_data(test_X, INPUT_SIZE, TIME_STEP, device):
-    test_X_df = pd.DataFrame(test_X.cpu().detach().numpy()[:,0,:])
+    test_X_df = pd.DataFrame(test_X.cpu().detach().numpy()[:, 0, :])
     reframed = series_to_supervised(test_X_df, 1, 1)
-    reframed.drop(reframed.columns[INPUT_SIZE:INPUT_SIZE * 2 - 2], axis=1, inplace=True)
+    reframed.drop(
+        reframed.columns[INPUT_SIZE : INPUT_SIZE * 2 - 2], axis=1, inplace=True
+    )
     train = reframed.values
-    train_X, train_y = train[:, :-2], train[:, -2:] # Last two columns are the targets (volt_modepi and soc)
+    train_X, train_y = (
+        train[:, :-2],
+        train[:, -2:],
+    )  # Last two columns are the targets (volt_modepi and soc)
     train_y = train_y.reshape(-1, 2)
     batch_train = int(reframed.shape[0] / TIME_STEP)
 
@@ -1248,11 +1451,22 @@ def prepare_training_data(test_X, INPUT_SIZE, TIME_STEP, device):
     train_X = train_X.reshape(batch_train, TIME_STEP, INPUT_SIZE).to(device)
     train_y = torch.tensor(train_y)
     train_y = train_y.reshape(batch_train, TIME_STEP, 2).to(device)
-    
+
     return train_X, train_y
 
 
-def plot_testX_timeseries(input, feature_names=None, title=None, figsize=(12, 6), save_path=None, show=True, seperate=False, _range: list = [-1], start_idx=0, ax=None):
+def plot_testX_timeseries(
+    input,
+    feature_names=None,
+    title=None,
+    figsize=(12, 6),
+    save_path=None,
+    show=True,
+    seperate=False,
+    _range: list = [-1],
+    start_idx=0,
+    ax=None,
+):
     """
     test_X 시계열 데이터(형상: [T, 1, 7] 또는 [T, 7])를 시간(x축) 대비 다중 라인(y축)으로 그립니다.
 
@@ -1265,11 +1479,12 @@ def plot_testX_timeseries(input, feature_names=None, title=None, figsize=(12, 6)
         save_path: 저장 경로(확장자 포함). None이면 저장하지 않음.
         show: True면 화면에 표시, False면 닫음(서버/배치 환경용).
     """
-    
+
     if not (len(_range) == 1 and _range[0] == -1) and len(_range) != 2:
-        raise ValueError("Expected _range to be a 1D array with a single element -1 or a 2D array.")
-    
-    
+        raise ValueError(
+            "Expected _range to be a 1D array with a single element -1 or a 2D array."
+        )
+
     """ sperate가 True이면 for 문을 돌고 false 이면 한번에 그린다."""
     plot_all = True if _range == [-1] else False
     if seperate:
@@ -1277,48 +1492,68 @@ def plot_testX_timeseries(input, feature_names=None, title=None, figsize=(12, 6)
         for i in range(_range[0], _range[1] + 1):
             print(f"Plotting feature index: {i}")
             print(f"Input shape: {input.shape}")
-            if plot_all: # 모든 특성 그리기
+            if plot_all:  # 모든 특성 그리기
                 if input.shape[-1] > 10:
-                    raise Exception("특성 수가 너무 많아 개별 플롯으로 그릴 수 없습니다. 'seperate'를 False로 설정하세요.")
+                    raise Exception(
+                        "특성 수가 너무 많아 개별 플롯으로 그릴 수 없습니다. 'seperate'를 False로 설정하세요."
+                    )
 
             print(f"{i}번째 특성을 개별 플롯으로 그립니다.")
             if input.ndim == 2:
-                test_X = input[start_idx:, i].unsqueeze(1) 
+                test_X = input[start_idx:, i].unsqueeze(1)
             elif input.ndim == 3:
-                test_X = input[start_idx:, :, i].unsqueeze(1) 
+                test_X = input[start_idx:, :, i].unsqueeze(1)
             else:
                 raise ValueError(f"Expected 2D or 3D array, got shape {input.shape}")
-                
+
             title_input = title + f"-{i}st"
             if save_path is not None:
                 save_path_input = save_path + f"-{i}st.png"
-            
+
             print(f"test_X shape for plotting: {test_X.shape}")
             # seperate=True는 개별 figure를 전제로 하므로, 외부 ax가 있어도 전달하지 않음
-            plot_timeseries(test_X, feature_names, title_input, figsize, save_path_input, show, ax=None)
+            plot_timeseries(
+                test_X,
+                feature_names,
+                title_input,
+                figsize,
+                save_path_input,
+                show,
+                ax=None,
+            )
     else:
-        if plot_all: # 모든 특성 그리기
+        if plot_all:  # 모든 특성 그리기
             print("모든 특성을 한 번에 플롯으로 그립니다.")
             test_X = input[start_idx:]
             title += f"-all({test_X.shape[-1]})"
             if save_path is not None:
                 save_path += f"-all.png"
-        else: # 특정 범위의 특성 그리기
-            print(f"{_range[0]}부터 {_range[1]}까지의 특성을 한 번에 플롯으로 그립니다.")
+        else:  # 특정 범위의 특성 그리기
+            print(
+                f"{_range[0]}부터 {_range[1]}까지의 특성을 한 번에 플롯으로 그립니다."
+            )
             if input.ndim == 2:
-                test_X = input[start_idx:, _range[0]:_range[1]+1]
+                test_X = input[start_idx:, _range[0] : _range[1] + 1]
             elif input.ndim == 3:
-                test_X = input[start_idx:, :, _range[0]:_range[1]+1]
+                test_X = input[start_idx:, :, _range[0] : _range[1] + 1]
             else:
                 raise ValueError(f"Expected 2D or 3D array, got shape {input.shape}")
             title += f"-range({_range[0]}-{_range[1]})"
             if save_path is not None:
                 save_path += f"-range({_range[0]}-{_range[1]}).png"
-                
+
         plot_timeseries(test_X, feature_names, title, figsize, save_path, show, ax=ax)
 
 
-def plot_timeseries(test_X, feature_names=None, title=None, figsize=(12, 6), save_path=None, show=True, ax=None):
+def plot_timeseries(
+    test_X,
+    feature_names=None,
+    title=None,
+    figsize=(12, 6),
+    save_path=None,
+    show=True,
+    ax=None,
+):
     # 입력을 numpy 2D [T, F]로 변환
     if isinstance(test_X, torch.Tensor):
         arr = test_X.detach().cpu().numpy()
@@ -1331,7 +1566,9 @@ def plot_timeseries(test_X, feature_names=None, title=None, figsize=(12, 6), sav
     if arr.ndim == 3 and arr.shape[1] == 1:
         arr = arr[:, 0, :]
     if arr.ndim != 2:
-        raise ValueError(f"Expected 2D array [T, F] or 3D [T,1,F], got shape {arr.shape}")
+        raise ValueError(
+            f"Expected 2D array [T, F] or 3D [T,1,F], got shape {arr.shape}"
+        )
 
     T, F = arr.shape
 
@@ -1372,23 +1609,26 @@ def plot_timeseries(test_X, feature_names=None, title=None, figsize=(12, 6), sav
         else:
             plt.close(fig)
 
-def plot_diagnostics_triplet(t2_array,
-                             spe_array,
-                             CI_array,
-                             thresholds:list=None,
-                             sigma_levels=None,
-                             title=None,
-                             x_label="Time",
-                             y_labels=("T²", "SPE", "CI"),
-                             figsize=(12, 10),
-                             save_path=None,
-                             show=True,
-                             x_start=None,
-                             x_tick_step=1000,
-                             downsample: int = 1,
-                             tight_layout: bool = True,
-                             dpi: int = 150,
-                             png_compress_level = 1):
+
+def plot_diagnostics_triplet(
+    t2_array,
+    spe_array,
+    CI_array,
+    thresholds: list = None,
+    sigma_levels=None,
+    title=None,
+    x_label="Time",
+    y_labels=("T²", "SPE", "CI"),
+    figsize=(12, 10),
+    save_path=None,
+    show=True,
+    x_start=None,
+    x_tick_step=1000,
+    downsample: int = 1,
+    tight_layout: bool = True,
+    dpi: int = 150,
+    png_compress_level=1,
+):
     """
     세 개의 진단 시계열을 하나의 Figure에 3x1 서브플롯으로 그립니다.
 
@@ -1439,31 +1679,34 @@ def plot_diagnostics_triplet(t2_array,
     fig, axes = plt.subplots(nrows=3, ncols=1, figsize=figsize, sharex=True)
 
     # Top: T²
-    axes[0].plot(x, t2, color='tab:blue', lw=1.4)
+    axes[0].plot(x, t2, color="tab:blue", lw=1.4)
     axes[0].set_ylabel(y_labels[0])
     axes[0].set_title("Hostelling's T² Statistic")
     axes[0].grid(True, alpha=0.3)
     # x축 범위를 x_start부터 최대값까지 고정
-    axes[0].set_xlim(x[0], x[-1])
+    # axes[0].set_xlim(x[0], x[-1]+100)
 
     # Middle: SPE
-    axes[1].plot(x, spe, color='tab:blue', lw=1.4)
+    axes[1].plot(x, spe, color="tab:blue", lw=1.4)
     axes[1].set_ylabel(y_labels[1])
     axes[1].set_title("Squared Prediction Error (SPE)")
     axes[1].grid(True, alpha=0.3)
-    axes[1].set_xlim(x[0], x[-1])
+    # axes[1].set_xlim(x[0], x[-1]+100)
 
     # Bottom: CI (CI) + thresholds
-    axes[2].plot(x, CI, color='tab:blue', lw=1.4, label='CI')
+    axes[2].plot(x, CI, color="tab:blue", lw=1.4, label="CI")
     axes[2].set_ylabel(y_labels[2])
     axes[2].set_xlabel(x_label)
     axes[2].set_title("Comprehensive Index (CI)")
     axes[2].grid(True, alpha=0.3)
-    axes[2].set_xlim(x[0], x[-1])
+    # axes[2].set_xlim(x[0], x[-1]+100)
 
     # 시작 눈금을 포함시키기 위해 눈금 간격을 고정할 수 있는 옵션
     if x_tick_step is not None:
-        ticks = np.floor(np.arange(x[0], x[-1] + 1, x_tick_step)/x_tick_step)*x_tick_step
+        ticks = (
+            np.floor(np.arange(x[0], x[-1] + 1, x_tick_step) / x_tick_step)
+            * x_tick_step
+        )
         ticks[0] = x_start if x_start is not None else 0
         ticks = np.append(ticks, x[-1]) if ticks[-1] != x[-1] else ticks
         for ax in axes:
@@ -1475,12 +1718,14 @@ def plot_diagnostics_triplet(t2_array,
         # 최대 3개까지만 표시(요청사항 대응)
         thr = thr[:3]
         if sigma_levels is None:
-            sigma_labels = [f"Threshold-{i+1}" for i in thr]
+            sigma_labels = [f"Threshold-{i}" for i in thr]
         else:
-            sigma_labels = [f"Threshold {i+1} ({sigma_levels[i]:.1f}\u03C3)" for i in range(len(thr))]
+            sigma_labels = [
+                f"Threshold {i} ({sigma_levels[i]:.1f}\u03c3)" for i in range(len(thr))
+            ]
         for val, lab, col in zip(thr, sigma_labels, threshold_color):
-            axes[2].axhline(val, color=col, linestyle='--', linewidth=1.2, label=lab)
-        axes[2].legend(loc='best', fontsize=8)
+            axes[2].axhline(val, color=col, linestyle="--", linewidth=1.2, label=lab)
+        axes[2].legend(loc="best", fontsize=8)
 
     if title:
         fig.suptitle(title, y=0.98)
@@ -1497,7 +1742,11 @@ def plot_diagnostics_triplet(t2_array,
             os.makedirs(dir_, exist_ok=True)
         if str(save_path).lower().endswith(".png") and png_compress_level is not None:
             # PNG 저장이 보통 가장 느림: 압축 레벨을 낮추면 저장 시간↓(대신 파일 크기↑)
-            fig.savefig(save_path, dpi=dpi, pil_kwargs={"compress_level": int(png_compress_level)})
+            fig.savefig(
+                save_path,
+                dpi=dpi,
+                pil_kwargs={"compress_level": int(png_compress_level)},
+            )
         else:
             fig.savefig(save_path, dpi=dpi)
 
@@ -1505,6 +1754,7 @@ def plot_diagnostics_triplet(t2_array,
         plt.show()
     else:
         plt.close(fig)
+
 
 def plot_distribution_with_stats(
     data,
@@ -1521,6 +1771,7 @@ def plot_distribution_with_stats(
     # 1D 벡터로 변환
     try:
         import torch
+
         if isinstance(data, torch.Tensor):
             x = data.detach().cpu().numpy().ravel()
         else:
@@ -1540,7 +1791,10 @@ def plot_distribution_with_stats(
     if kde:
         try:
             import seaborn as sns
-            sns.histplot(x, bins=bins, kde=True, stat="density", color="tab:blue", ax=ax)
+
+            sns.histplot(
+                x, bins=bins, kde=True, stat="density", color="tab:blue", ax=ax
+            )
             used_seaborn = True
         except Exception:
             ax.hist(x, bins=bins, density=True, color="tab:blue", alpha=0.7)
@@ -1549,22 +1803,40 @@ def plot_distribution_with_stats(
 
     # 평균/±σ 라인
     ax.axvline(mu, color="red", lw=2, label=f"mean = {mu:.3f}")
-    ax.axvline(mu - std, color="purple", ls="--", lw=1.5, label=f"mean-σ = {mu - std:.3f}")
-    ax.axvline(mu + std, color="purple", ls="--", lw=1.5, label=f"mean+σ = {mu + std:.3f}")
+    ax.axvline(
+        mu - std, color="purple", ls="--", lw=1.5, label=f"mean-σ = {mu - std:.3f}"
+    )
+    ax.axvline(
+        mu + std, color="purple", ls="--", lw=1.5, label=f"mean+σ = {mu + std:.3f}"
+    )
 
     # 정규분포 피팅(선택)
     if normal_fit:
         try:
             from scipy.stats import norm
+
             xs = np.linspace(np.min(x), np.max(x), 500)
-            ax.plot(xs, norm.pdf(xs, loc=mu, scale=std), color="orange", lw=2, label="Normal fit (μ, σ)")
+            ax.plot(
+                xs,
+                norm.pdf(xs, loc=mu, scale=std),
+                color="orange",
+                lw=2,
+                label="Normal fit (μ, σ)",
+            )
         except Exception:
             pass
 
     # 텍스트 박스
     text = f"n = {n}\nmean = {mu:.3f}\nstd = {std:.3f}\nvar = {var:.3f}"
-    ax.text(0.02, 0.98, text, transform=ax.transAxes, va="top", ha="left",
-            bbox=dict(boxstyle="round", fc="white", ec="gray", alpha=0.8))
+    ax.text(
+        0.02,
+        0.98,
+        text,
+        transform=ax.transAxes,
+        va="top",
+        ha="left",
+        bbox=dict(boxstyle="round", fc="white", ec="gray", alpha=0.8),
+    )
 
     ax.set_xlabel("Value")
     ax.set_ylabel("Density" if used_seaborn or kde else "Frequency")
@@ -1582,13 +1854,18 @@ def plot_distribution_with_stats(
 
     return {"mean": mu, "std": std, "var": var, "count": n}
 
-def make_model_path_based_timestamp(base="models", make:bool=False, prefix:str=None, tz="Asia/Seoul"):
+
+def make_model_path_based_timestamp(
+    base="models", make: bool = False, prefix: str = None, tz="Asia/Seoul"
+):
     # tzinfo 설정: zoneinfo 우선, 실패 시 pytz로 폴백
     try:
         from zoneinfo import ZoneInfo  # Python 3.9+
+
         tzinfo = ZoneInfo(tz)
     except Exception:
         import pytz  # pip install pytz 필요
+
         tzinfo = pytz.timezone(tz)
 
     now = datetime.now(tzinfo)
@@ -1601,27 +1878,30 @@ def make_model_path_based_timestamp(base="models", make:bool=False, prefix:str=N
         os.makedirs(path, exist_ok=True)
     return path
 
-def last_index_of(tensor, feature_idx, value, operator='=='):
+
+def last_index_of(tensor, feature_idx, value, operator="=="):
     # NOTE: 반환값은 "조건을 만족하는 마지막 인덱스 + 1" 입니다. (없으면 0)
     # 기존 구현은 torch.Tensor에 대해 np.array(tensor)로 전체 복사 변환이 발생해 매우 느릴 수 있어,
     # torch 입력은 torch 연산으로만 처리합니다.
 
     if isinstance(tensor, torch.Tensor):
         if tensor.ndim < 2:
-            raise ValueError(f"last_index_of expects 2D tensor, got shape {tuple(tensor.shape)}")
+            raise ValueError(
+                f"last_index_of expects 2D tensor, got shape {tuple(tensor.shape)}"
+            )
 
         col = tensor[:, feature_idx]
-        if operator == '==':
+        if operator == "==":
             mask = col == value
-        elif operator == '<':
+        elif operator == "<":
             mask = col < value
-        elif operator == '<=':
+        elif operator == "<=":
             mask = col <= value
-        elif operator == '>':
+        elif operator == ">":
             mask = col > value
-        elif operator == '>=':
+        elif operator == ">=":
             mask = col >= value
-        elif operator == '!=':
+        elif operator == "!=":
             mask = col != value
         else:
             raise ValueError(f"Unsupported operator: {operator}")
@@ -1638,20 +1918,22 @@ def last_index_of(tensor, feature_idx, value, operator='=='):
 
     A = np.asarray(tensor)
     if A.ndim < 2:
-        raise ValueError(f"last_index_of expects 2D array-like, got shape {getattr(A, 'shape', None)}")
+        raise ValueError(
+            f"last_index_of expects 2D array-like, got shape {getattr(A, 'shape', None)}"
+        )
 
     col = A[:, feature_idx]
-    if operator == '==':
+    if operator == "==":
         mask = col == value
-    elif operator == '<':
+    elif operator == "<":
         mask = col < value
-    elif operator == '<=':
+    elif operator == "<=":
         mask = col <= value
-    elif operator == '>':
+    elif operator == ">":
         mask = col > value
-    elif operator == '>=':
+    elif operator == ">=":
         mask = col >= value
-    elif operator == '!=':
+    elif operator == "!=":
         mask = col != value
     else:
         raise ValueError(f"Unsupported operator: {operator}")
@@ -1661,18 +1943,30 @@ def last_index_of(tensor, feature_idx, value, operator='=='):
         return 0
     return int(idx[-1] + 1)
 
+
 def get_start_index(tensor, feature_idx):
     start_idx = 0
-    start_idx = np.max([start_idx,last_index_of(tensor, feature_idx, operator='<')]) # 0 means minimum voltage
-    start_idx = np.max([start_idx,last_index_of(tensor, feature_idx, operator='==')]) # 0 means minimum voltage
-    start_idx = np.max([start_idx,last_index_of(tensor, feature_idx, operator='>')]) # 5 means maximum voltage
+    start_idx = np.max(
+        [start_idx, last_index_of(tensor, feature_idx, operator="<")]
+    )  # 0 means minimum voltage
+    start_idx = np.max(
+        [start_idx, last_index_of(tensor, feature_idx, operator="==")]
+    )  # 0 means minimum voltage
+    start_idx = np.max(
+        [start_idx, last_index_of(tensor, feature_idx, operator=">")]
+    )  # 5 means maximum voltage
     return start_idx
+
 
 def is_abnormal(tensor):
     abnormal_data = False
-    if last_index_of(tensor, 0, 0, operator='<') != 0 or last_index_of(tensor, 0, 5, operator='>') != 0:
+    if (
+        last_index_of(tensor, 0, 0, operator="<") != 0
+        or last_index_of(tensor, 0, 5, operator=">") != 0
+    ):
         abnormal_data = True
     return abnormal_data
+
 
 def normalize_columns_0_to_1(X, eps=1e-12, exclude_cols=None, exclude_ranges=None):
     """
@@ -1691,6 +1985,7 @@ def normalize_columns_0_to_1(X, eps=1e-12, exclude_cols=None, exclude_ranges=Non
     Returns:
         동일 타입(torch.Tensor 또는 np.ndarray)의 정규화된 행렬
     """
+
     def _build_normalize_mask(n_cols: int):
         mask = np.ones(n_cols, dtype=bool)
 
@@ -1872,7 +2167,8 @@ def normalize_columns_by_mean_std(X, exclude_cols=None, exclude_ranges=None):
     out = A.copy()
     out[:, mask] = (A_sel - mu) / std
     return out
-    
+
+
 def _as_mapping(config: Any) -> dict:
     """Namespace/dict/dataclass/object 모두 dict 비슷하게 변환."""
     if config is None:
@@ -1940,7 +2236,10 @@ def print_sim_config(
         sys_lines = [
             ("timestamp", datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
             ("python", sys.version.split()[0]),
-            ("platform", f"{platform.system()} {platform.release()} ({platform.machine()})"),
+            (
+                "platform",
+                f"{platform.system()} {platform.release()} ({platform.machine()})",
+            ),
             ("cwd", os.getcwd()),
         ]
 
@@ -1973,6 +2272,7 @@ def print_sim_config(
 
 from pathlib import Path
 import re
+
 
 def read_learning_case_from_sim_config(models_dir: str) -> int:
     sim_path = Path(models_dir) / "sim_config.txt"
@@ -2008,8 +2308,10 @@ def _coerce_sim_config_value(raw: str):
             pass
 
     # list/tuple/dict literal (e.g., [1, 2, 3])
-    if (s.startswith("[") and s.endswith("]")) or (s.startswith("(") and s.endswith(")")) or (
-        s.startswith("{") and s.endswith("}")
+    if (
+        (s.startswith("[") and s.endswith("]"))
+        or (s.startswith("(") and s.endswith(")"))
+        or (s.startswith("{") and s.endswith("}"))
     ):
         try:
             return ast.literal_eval(s)
@@ -2019,7 +2321,9 @@ def _coerce_sim_config_value(raw: str):
     return s
 
 
-def read_values_from_sim_config(models_dir: str, names_to_find, *, strict: bool = True) -> dict:
+def read_values_from_sim_config(
+    models_dir: str, names_to_find, *, strict: bool = True
+) -> dict:
     """models_dir/sim_config.txt에서 특정 키들의 값을 읽어 dict로 반환.
 
     Args:
@@ -2065,8 +2369,11 @@ def read_values_from_sim_config(models_dir: str, names_to_find, *, strict: bool 
             out[k] = None
 
     if strict and missing:
-        raise ValueError(f"sim_config.txt에서 키를 찾지 못했습니다: {missing} (file={sim_path})")
+        raise ValueError(
+            f"sim_config.txt에서 키를 찾지 못했습니다: {missing} (file={sim_path})"
+        )
     return out
+
 
 def get_preprocessing_and_skip_charge_ready(learning_case: int):
     if learning_case == 1:
@@ -2093,47 +2400,82 @@ def load_vehicle_ids_used_for_training(sim_config_path: str) -> list[int]:
                 continue
             m = re.search(r":\s*(\[.*\])\s*$", line)
             if not m:
-                raise ValueError(f"sim_config.txt에서 차량 ID 리스트를 찾았지만 파싱에 실패했습니다: {line.strip()}")
+                raise ValueError(
+                    f"sim_config.txt에서 차량 ID 리스트를 찾았지만 파싱에 실패했습니다: {line.strip()}"
+                )
             value = ast.literal_eval(m.group(1))
             if isinstance(value, (list, tuple)):
                 return [int(x) for x in value]
-            raise ValueError(f"Vehicle IDs used for training 값이 list/tuple이 아닙니다: {type(value)}")
+            raise ValueError(
+                f"Vehicle IDs used for training 값이 list/tuple이 아닙니다: {type(value)}"
+            )
 
     raise FileNotFoundError(
         f"sim_config.txt에서 'Vehicle IDs used for training' 라인을 찾지 못했습니다: {sim_config_path}"
     )
 
+
 def get_input_dimensions(BATTERY_TYPE: str):
     dim_dict = dict()
-    dim_dict["x"] = 2 # [estimated pack voltage 1, estimated pack volatage 2]
-    dim_dict["y"] = 110 if BATTERY_TYPE == 'QAS' else 85 # DTI 일경우 85 이고 QAS일 경우 110인듯 [각 셀의 voltage]
-    dim_dict["z"] = 110 if BATTERY_TYPE == 'QAS' else 85 # DTI 일경우 85 이고 QAS일 경우 110인듯 [각 셀의 estimated voltage diviation]
-    dim_dict["q"] = 3 # [Board Temperature, Board-end SOC, Current]
+    dim_dict["x"] = 2  # [estimated pack voltage 1, estimated pack volatage 2]
+    dim_dict["y"] = (
+        110 if BATTERY_TYPE == "QAS" else 85
+    )  # DTI 일경우 85 이고 QAS일 경우 110인듯 [각 셀의 voltage]
+    dim_dict["z"] = (
+        110 if BATTERY_TYPE == "QAS" else 85
+    )  # DTI 일경우 85 이고 QAS일 경우 110인듯 [각 셀의 estimated voltage diviation]
+    dim_dict["q"] = 3  # [Board Temperature, Board-end SOC, Current]
 
-    dim_dict["x2"] = 2 # [estimated pack SOC 1, estimated pack SOC 2]
-    dim_dict["y2"] = 110 if BATTERY_TYPE == 'QAS' else 85 # DTI 일경우 85 이고 QAS일 경우 110인듯 [각 셀의 SOC]
-    dim_dict["z2"] = 110 if BATTERY_TYPE == 'QAS' else 85 # DTI 일경우 85 이고 QAS일 경우 110인듯 [각 셀의 estimated SOC diviation]
-    dim_dict["q2"]= 4 # [Board Temperature, Board-end SOC, Velocity, Current]
-    
+    dim_dict["x2"] = 2  # [estimated pack SOC 1, estimated pack SOC 2]
+    dim_dict["y2"] = (
+        110 if BATTERY_TYPE == "QAS" else 85
+    )  # DTI 일경우 85 이고 QAS일 경우 110인듯 [각 셀의 SOC]
+    dim_dict["z2"] = (
+        110 if BATTERY_TYPE == "QAS" else 85
+    )  # DTI 일경우 85 이고 QAS일 경우 110인듯 [각 셀의 estimated SOC diviation]
+    dim_dict["q2"] = 4  # [Board Temperature, Board-end SOC, Velocity, Current]
+
     return dim_dict
 
 
-def preprocess_combined_tensor(tensor, tensorx, dim_dict, BATTERY_TYPE, PREPROCESSING, SKIP_CHARGE_READY, normalize_dx: bool=False, normalize_val: float=1.0):
+def preprocess_combined_tensor(
+    tensor,
+    tensorx,
+    dim_dict,
+    BATTERY_TYPE,
+    PREPROCESSING,
+    SKIP_CHARGE_READY,
+    normalize_dx: bool = False,
+    normalize_val: float = 1.0,
+):
     if BATTERY_TYPE == "QAS":
         tensorx[:, dim_dict["x2"] + dim_dict["y2"] + dim_dict["z2"] + 2] = 0
-        
+
     if SKIP_CHARGE_READY:
         charge_idx = 224 if BATTERY_TYPE == "QAS" else 174
-        start_idx = last_index_of(tensor, feature_idx=charge_idx, value=-500, operator='<') # -500 means minimum current during charge ready
+        start_idx = last_index_of(
+            tensor, feature_idx=charge_idx, value=-500, operator="<"
+        )  # -500 means minimum current during charge ready
         tensor = tensor[start_idx:, :]
         tensorx = tensorx[start_idx:, :]
-        
+
     if PREPROCESSING:
-        start_idx = np.max([0,last_index_of(tensor, feature_idx=0, value=0, operator='<=')]) # 0 means minimum voltage
-        start_idx = np.max([start_idx,last_index_of(tensor, feature_idx=0, value=5, operator='>')]) # 5 means maximum voltage
-        cell_div_range = (dim_dict["x"] + dim_dict["y"], dim_dict["x"] + dim_dict["y"] + dim_dict["z"] - 1)
-        tensor = normalize_columns_0_to_1(tensor[start_idx:, :], exclude_ranges=[cell_div_range])
-        tensorx = normalize_columns_0_to_1(tensorx[start_idx:, :], exclude_ranges=[cell_div_range])
+        start_idx = np.max(
+            [0, last_index_of(tensor, feature_idx=0, value=0, operator="<=")]
+        )  # 0 means minimum voltage
+        start_idx = np.max(
+            [start_idx, last_index_of(tensor, feature_idx=0, value=5, operator=">")]
+        )  # 5 means maximum voltage
+        cell_div_range = (
+            dim_dict["x"] + dim_dict["y"],
+            dim_dict["x"] + dim_dict["y"] + dim_dict["z"] - 1,
+        )
+        tensor = normalize_columns_0_to_1(
+            tensor[start_idx:, :], exclude_ranges=[cell_div_range]
+        )
+        tensorx = normalize_columns_0_to_1(
+            tensorx[start_idx:, :], exclude_ranges=[cell_div_range]
+        )
         if normalize_dx:
             dx_s = int(dim_dict["x"] + dim_dict["y"])
             dx_e = int(dx_s + dim_dict["z"])
@@ -2150,43 +2492,593 @@ def preprocess_combined_tensor(tensor, tensorx, dim_dict, BATTERY_TYPE, PREPROCE
             if isinstance(tensorx, torch.Tensor):
                 tensorx[:, dx2_s:dx2_e].div_(normalize_val)
             else:
-                tensorx[:, dx2_s:dx2_e] = np.asarray(tensorx[:, dx2_s:dx2_e]) / normalize_val
+                tensorx[:, dx2_s:dx2_e] = (
+                    np.asarray(tensorx[:, dx2_s:dx2_e]) / normalize_val
+                )
     return tensor, tensorx
 
 
-def plot_ae_output_distribution(ERRORU, ERRORX, df_data, save_path=None, show=True, normal_fit=True, do_plot=False):
+def plot_ae_output_distribution(
+    ERRORU, ERRORX, df_data, save_path=None, show=True, normal_fit=True, do_plot=False
+):
     if not do_plot:
         return
-    plot_distribution_with_stats(ERRORU,
-                                    bins=60, kde=True, normal_fit=normal_fit,
-                                    title="Cell voltage sample Distribution",
-                                    save_path=save_path, show=show)
-    plot_distribution_with_stats(ERRORX,
-                                    bins=60, kde=True, normal_fit=normal_fit,
-                                    title="Cell SoC sample Distribution",
-                                    save_path=save_path, show=show)
-    plot_distribution_with_stats(np.array(df_data.iloc[:,0]),
-                                    bins=60, kde=True, normal_fit=normal_fit,
-                                    title="Cell $zu_2$ sample Distribution",
-                                    save_path=save_path, show=show)
-    plot_distribution_with_stats(np.array(df_data.iloc[:,1]),
-                                    bins=60, kde=True, normal_fit=normal_fit,
-                                    title="Cell $zx_2$ sample Distribution",
-                                    save_path=save_path, show=show)
-    plot_distribution_with_stats(np.array(df_data.iloc[:,2]),
-                                    bins=60, kde=True, normal_fit=normal_fit,
-                                    title="Cell $zu_1$ sample Distribution",
-                                    save_path=save_path, show=show)
-    plot_distribution_with_stats(np.array(df_data.iloc[:,3]),
-                                    bins=60, kde=True, normal_fit=normal_fit,
-                                    title="Cell $zx_1$ sample Distribution",
-                                    save_path=save_path, show=show)
-    plot_distribution_with_stats(np.array(df_data.iloc[:,4]),
-                                    bins=60, kde=True, normal_fit=normal_fit,
-                                    title="Cell $ewu$ sample Distribution",
-                                    save_path=save_path, show=show)
-    plot_distribution_with_stats(np.array(df_data.iloc[:,5]),
-                                    bins=60, kde=True, normal_fit=normal_fit,
-                                    title="Cell $ewx$ sample Distribution",
-                                    save_path=save_path, show=show)
-        
+    plot_distribution_with_stats(
+        ERRORU,
+        bins=60,
+        kde=True,
+        normal_fit=normal_fit,
+        title="Cell voltage sample Distribution",
+        save_path=save_path,
+        show=show,
+    )
+    plot_distribution_with_stats(
+        ERRORX,
+        bins=60,
+        kde=True,
+        normal_fit=normal_fit,
+        title="Cell SoC sample Distribution",
+        save_path=save_path,
+        show=show,
+    )
+    plot_distribution_with_stats(
+        np.array(df_data.iloc[:, 0]),
+        bins=60,
+        kde=True,
+        normal_fit=normal_fit,
+        title="Cell $zu_2$ sample Distribution",
+        save_path=save_path,
+        show=show,
+    )
+    plot_distribution_with_stats(
+        np.array(df_data.iloc[:, 1]),
+        bins=60,
+        kde=True,
+        normal_fit=normal_fit,
+        title="Cell $zx_2$ sample Distribution",
+        save_path=save_path,
+        show=show,
+    )
+    plot_distribution_with_stats(
+        np.array(df_data.iloc[:, 2]),
+        bins=60,
+        kde=True,
+        normal_fit=normal_fit,
+        title="Cell $zu_1$ sample Distribution",
+        save_path=save_path,
+        show=show,
+    )
+    plot_distribution_with_stats(
+        np.array(df_data.iloc[:, 3]),
+        bins=60,
+        kde=True,
+        normal_fit=normal_fit,
+        title="Cell $zx_1$ sample Distribution",
+        save_path=save_path,
+        show=show,
+    )
+    plot_distribution_with_stats(
+        np.array(df_data.iloc[:, 4]),
+        bins=60,
+        kde=True,
+        normal_fit=normal_fit,
+        title="Cell $ewu$ sample Distribution",
+        save_path=save_path,
+        show=show,
+    )
+    plot_distribution_with_stats(
+        np.array(df_data.iloc[:, 5]),
+        bins=60,
+        kde=True,
+        normal_fit=normal_fit,
+        title="Cell $ewx$ sample Distribution",
+        save_path=save_path,
+        show=show,
+    )
+
+
+def plot_net_layer_weight_bias_bars(
+    net, layer_names=("fc1", "fc2", "fc3"), bins=50, show=True, save_dir=None
+):
+    """
+    layer당 figure 1개 생성:
+      - subplot(1,2): weight 분포 / bias 분포
+    """
+    for layer_name in layer_names:
+        layer = getattr(net, layer_name, None)
+        if layer is None:
+            raise AttributeError(f"net에 '{layer_name}' 레이어가 없습니다.")
+
+        w = layer.weight.detach().cpu().numpy().ravel()
+        b = None
+        if getattr(layer, "bias", None) is not None:
+            b = layer.bias.detach().cpu().numpy().ravel()
+
+        fig, axes = plt.subplots(1, 2, figsize=(10, 3.5))
+        fig.suptitle(f"{layer_name} weight/bias distribution")
+
+        axes[0].hist(w, bins=bins)
+        axes[0].set_title(f"{layer_name}.weight (n={w.size})")
+        axes[0].set_xlabel("value")
+        axes[0].set_ylabel("count")
+
+        if b is not None:
+            axes[1].hist(b, bins=bins)
+            axes[1].set_title(f"{layer_name}.bias (n={b.size})")
+            axes[1].set_xlabel("value")
+            axes[1].set_ylabel("count")
+        else:
+            axes[1].set_visible(False)
+
+        fig.tight_layout()
+
+        if save_dir is not None:
+            fig.savefig(f"{save_dir}/{layer_name}_weight_bias_hist.png", dpi=150)
+
+        if show:
+            plt.show()
+        else:
+            plt.close(fig)
+
+
+def plot_net_layer_params_by_index(
+    net,
+    layer_names=("fc1", "fc2", "fc3"),
+    net_name="net",
+    *,
+    mode="bar",
+    max_points=8000,
+    show=True,
+    save_dir=None,
+    figsize=(12, 6),
+    bar_width_ratio=0.65,
+    edge_color="black",
+    edge_linewidth=0.6,
+    annotate_values=True,
+    annotate_max=60,
+    value_fmt="{:.4g}",
+    value_fontsize=7,
+    normalize_y=True,
+    max_xtick_labels=30,  # <- 추가: xtick 라벨 너무 많으면 일부만 표시
+):
+    for layer_name in layer_names:
+        layer = getattr(net, layer_name, None)
+        if layer is None:
+            raise AttributeError(f"net에 '{layer_name}' 레이어가 없습니다.")
+
+        w = layer.weight.detach().cpu().numpy().ravel()
+        b = (
+            layer.bias.detach().cpu().numpy().ravel()
+            if layer.bias is not None
+            else None
+        )
+
+        def _downsample(arr, max_n):
+            n = arr.size
+            if n <= max_n:
+                idx = np.arange(n)
+                return idx, arr
+            step = int(np.ceil(n / max_n))
+            idx = np.arange(0, n, step)
+            return idx, arr[idx]
+
+        def _bar_width_from_idx(idx):
+            if idx.size <= 1:
+                base = 1.0
+            else:
+                diffs = np.diff(idx)
+                base = float(np.median(diffs)) if diffs.size else 1.0
+                if base <= 0:
+                    base = 1.0
+            return base * float(bar_width_ratio)
+
+        def _normalize_minus1_to_1(y):
+            y = np.asarray(y, dtype=float)
+            y_min = float(np.nanmin(y))
+            y_max = float(np.nanmax(y))
+            if not np.isfinite(y_min) or not np.isfinite(y_max) or (y_max - y_min) == 0:
+                return np.zeros_like(y, dtype=float)
+            return 2.0 * (y - y_min) / (y_max - y_min) - 1.0
+
+        def normalize_by_max_abs(y):
+            y = np.asarray(y, dtype=float)
+            max_abs = np.nanmax(np.abs(y))
+            if not np.isfinite(max_abs) or max_abs == 0:
+                return np.zeros_like(y, dtype=float)
+            return y / max_abs
+
+        def _annotate(ax, xs, ys):
+            if not annotate_values:
+                return
+            n = len(xs)
+            if n == 0:
+                return
+            if n > int(annotate_max):
+                xs = xs[: int(annotate_max)]
+                ys = ys[: int(annotate_max)]
+
+            dy = 0.03 if normalize_y else 0.0
+            for x0, y0 in zip(xs, ys):
+                ax.text(
+                    x0,
+                    y0 + (dy if y0 >= 0 else -dy),
+                    value_fmt.format(y0),
+                    ha="center",
+                    va="bottom" if y0 >= 0 else "top",
+                    fontsize=value_fontsize,
+                    rotation=0,  # <- 가로
+                )
+
+        def _set_integer_xticks(ax, x_positions):
+            # x_positions는 이미 정수(1-based)라고 가정
+            x_positions = np.asarray(x_positions, dtype=int)
+            n = x_positions.size
+            if n == 0:
+                return
+
+            if n <= max_xtick_labels:
+                ticks = x_positions
+            else:
+                # 너무 많으면 일부만(그래도 정수만)
+                ticks = np.unique(
+                    np.linspace(x_positions.min(), x_positions.max(), max_xtick_labels)
+                    .round()
+                    .astype(int)
+                )
+
+            ax.set_xticks(ticks)
+            ax.xaxis.set_major_locator(
+                mtick.FixedLocator(ticks)
+            )  # <- 소수 tick 방지(강제)
+            ax.set_xticklabels([str(int(t)) for t in ticks])
+
+        w_idx, w_plot = _downsample(w, max_points)
+        if b is not None:
+            b_idx, b_plot = _downsample(b, max_points)
+
+        if normalize_y:
+            w_plot = normalize_by_max_abs(w_plot)
+            if b is not None:
+                b_plot = normalize_by_max_abs(b_plot)
+
+        # x축을 1-based 인덱스로 (요청: 2개면 1,2만)
+        xw = w_idx + 1
+        xb = (b_idx + 1) if b is not None else None
+
+        fig, axes = plt.subplots(1, 2 if b is not None else 1, figsize=figsize)
+        if not isinstance(axes, np.ndarray):
+            axes = np.array([axes])
+
+        fig.suptitle(
+            f"{layer_name}: value vs index (mode={mode})"
+            + (" [y normalized to -1~1]" if normalize_y else "")
+        )
+
+        # weight
+        ax = axes[0]
+        if mode == "bar":
+            width = _bar_width_from_idx(xw)  # 1-based라도 간격은 동일
+            ax.bar(
+                xw,
+                w_plot,
+                width=width,
+                edgecolor=edge_color,
+                linewidth=edge_linewidth,
+                color="tab:blue",
+                align="center",
+            )
+            _annotate(ax, xw, w_plot)
+        else:
+            ax.plot(xw, w_plot, linewidth=0.8)
+
+        ax.set_title(f"{layer_name}.weight  (orig_n={w.size}, plotted={w_plot.size})")
+        ax.set_xlabel("weight index")
+        ax.set_ylabel("value" + (" (normalized)" if normalize_y else ""))
+        ax.grid(True, alpha=0.2)
+        if normalize_y:
+            ax.set_ylim(-1.05, 1.05)
+
+        _set_integer_xticks(ax, xw)
+        ax.set_xlim(xw.min() - 0.5, xw.max() + 0.5)
+
+        # bias
+        if b is not None:
+            ax = axes[1]
+            if mode == "bar":
+                width = _bar_width_from_idx(xb)
+                ax.bar(
+                    xb,
+                    b_plot,
+                    width=width,
+                    edgecolor=edge_color,
+                    linewidth=edge_linewidth,
+                    color="tab:orange",
+                    align="center",
+                )
+                _annotate(ax, xb, b_plot)
+            else:
+                ax.plot(xb, b_plot, linewidth=0.8)
+
+            ax.set_title(f"{layer_name}.bias  (orig_n={b.size}, plotted={b_plot.size})")
+            ax.set_xlabel("bias index")
+            ax.set_ylabel("value" + (" (normalized)" if normalize_y else ""))
+            ax.grid(True, alpha=0.2)
+            if normalize_y:
+                ax.set_ylim(-1.05, 1.05)
+
+            _set_integer_xticks(ax, xb)
+            ax.set_xlim(xb.min() - 0.5, xb.max() + 0.5)
+
+        fig.tight_layout()
+
+        if save_dir is not None:
+            if normalize_y:
+                fig.savefig(
+                    f"{save_dir}/{net_name}_{layer_name}_params_by_index_normalized.png",
+                    dpi=150,
+                )
+            else:
+                fig.savefig(
+                    f"{save_dir}/{net_name}_{layer_name}_params_by_index.png", dpi=150
+                )
+
+        if show:
+            plt.show()
+        else:
+            plt.close(fig)
+
+
+def find_max_idx_from_array(array):
+    dv = 0.00001
+    if array.ndim == 1:
+        max_err = np.asarray(array, dtype=float).max()
+        max_err_time = np.where(np.asarray(array, dtype=float) > (max_err - dv))
+        return max_err_time
+    elif array.ndim == 2:
+        max_array = np.asarray(array, dtype=float).max(axis=1)
+        max_err = max_array.max()
+        max_err_time = np.where(max_array > (max_err - dv))
+        max_err_idx = np.where(
+            np.asarray(array[max_err_time], dtype=float) > (max_err - dv)
+        )
+        return max_err_time, max_err_idx
+    else:
+        raise ValueError("Input array must be 1D or 2D.")
+
+
+def find_min_idx_from_array(array):
+    dv = 0.00001
+    if array.ndim == 1:
+        min_err = np.asarray(array, dtype=float).min()
+        min_err_time = np.where(np.asarray(array, dtype=float) < (min_err + dv))
+        return min_err_time
+    elif array.ndim == 2:
+        min_array = np.asarray(array, dtype=float).min(axis=1)
+        min_err = min_array.min()
+        min_err_time = np.where(min_array < (min_err + dv))
+        min_err_idx = np.where(
+            np.asarray(array[min_err_time], dtype=float) < (min_err + dv)
+        )
+        return min_err_time, min_err_idx
+    else:
+        raise ValueError("Input array must be 1D or 2D.")
+
+
+def compare_max_error_data(max_idx_1, max_idx_2, df_data):
+    return [
+        [
+            df_data.iloc[max_idx_1, 0],
+            df_data.iloc[max_idx_1, 1],
+            df_data.iloc[max_idx_1, 2],
+            df_data.iloc[max_idx_1, 3],
+            df_data.iloc[max_idx_1, 4],
+            df_data.iloc[max_idx_1, 5],
+        ],
+        [
+            df_data.iloc[max_idx_2, 0],
+            df_data.iloc[max_idx_2, 1],
+            df_data.iloc[max_idx_2, 2],
+            df_data.iloc[max_idx_2, 3],
+            df_data.iloc[max_idx_2, 4],
+            df_data.iloc[max_idx_2, 5],
+        ],
+    ]
+
+
+import numpy as np
+import matplotlib.pyplot as plt
+
+import numpy as np
+import matplotlib.pyplot as plt
+
+
+def plot_contrib_percent_stacked(
+    contrib_array,  # (N,6)
+    *,
+    feature_names=None,  # 길이 6 리스트 (예: ["zx1","zx2","ewx","zu1","zu2","ewu"])
+    t_indices=None,  # 그리고 싶은 t 인덱스들(list/ndarray). None이면 top_k 사용
+    val_array=None,  # (N,) optional. top_k 고를 때 사용
+    top_k=1e8,  # t_indices가 None일 때, val_array 큰 순으로 top_k
+    mode="abs",  # "abs" 권장. ("raw"도 가능하지만 음수면 해석 어려움)
+    kind="$T^2$",
+    figsize=(14, 5),
+    alpha=0.9,
+    show=True,
+    save_path=None,
+    show_line=True,
+    plot_step: int | None = None,
+    max_bars: int | None = 5000,
+    xtick_step: int | None = 1,
+    xtick_max_labels: int | None = None,
+):
+    contrib_array = np.asarray(contrib_array, dtype=float)
+    if contrib_array.ndim != 2:
+        raise ValueError(
+            f"contrib_array는 2D여야 합니다. got shape={contrib_array.shape}"
+        )
+    n, f = contrib_array.shape
+
+    if feature_names is None:
+        feature_names = [f"f{i}" for i in range(f)]
+    if len(feature_names) != f:
+        raise ValueError(f"feature_names 길이({len(feature_names)}) != feature 수({f})")
+
+    # 어떤 t들을 그릴지 선택
+    if t_indices is None:
+        if val_array is None:
+            raise ValueError(
+                "t_indices가 None이면 val_array가 필요합니다(top_k 선택용)."
+            )
+        val_array = np.asarray(val_array, dtype=float).reshape(-1)
+        if val_array.shape[0] != n:
+            raise ValueError("val_array 길이가 contrib_array N과 다릅니다.")
+        # 큰 T2 기준 top_k 시점 선택
+        k = min(int(top_k), n)
+        t_indices = np.argsort(val_array)[::-1][:k]
+        t_indices = np.sort(t_indices)  # x축 보기 좋게 오름차순 정렬
+    else:
+        t_indices = np.asarray(t_indices, dtype=int)
+
+    # ================= 성능 최적화 =================
+    # 막대(stacked bar)는 K가 커지면 (feature 수 * K) 만큼 Rectangle을 만들어 매우 느려짐.
+    # - plot_step: 사용자 지정 간격으로 t를 샘플링
+    # - max_bars: 자동으로 최대 막대 개수 제한(기본 5000)
+    t_indices = np.asarray(t_indices, dtype=int)
+    t_indices = np.unique(t_indices)
+    if t_indices.size == 0:
+        raise ValueError("t_indices가 비어 있습니다.")
+    t_indices = np.sort(t_indices)
+
+    step_i = 1
+    if plot_step is not None:
+        try:
+            step_i = int(plot_step)
+        except Exception:
+            step_i = 1
+        if step_i < 1:
+            step_i = 1
+
+    if max_bars is not None:
+        try:
+            max_bars_i = int(max_bars)
+        except Exception:
+            max_bars_i = 0
+        if max_bars_i > 0 and t_indices.size > max_bars_i:
+            auto_step = int(np.ceil(t_indices.size / max_bars_i))
+            step_i = max(step_i, auto_step)
+
+    if step_i > 1:
+        t_indices_ds = t_indices[::step_i]
+        # 마지막 인덱스는 포함해서 끝값이 잘 안 보이는 문제 방지
+        if t_indices_ds[-1] != t_indices[-1]:
+            t_indices_ds = np.append(t_indices_ds, t_indices[-1])
+        t_indices = t_indices_ds
+
+    C = contrib_array[t_indices, :]  # (K, F)
+
+    if mode == "abs":
+        W = np.abs(C)
+    elif mode == "raw":
+        # raw는 음수 기여가 있으면 stacked-percent 해석이 애매해질 수 있음
+        W = C.copy()
+    else:
+        raise ValueError("mode는 'abs' 또는 'raw'")
+
+    denom = np.sum(W, axis=1, keepdims=True)  # (K,1)
+    # 0 division 방지
+    denom = np.where(denom == 0, 1.0, denom)
+    P = 100.0 * (W / denom)  # (K,6) 퍼센트
+
+    x = np.arange(len(t_indices))
+
+    fig, ax = plt.subplots(figsize=figsize)
+    bottom = np.zeros(len(t_indices), dtype=float)
+
+    colors = plt.get_cmap("tab10").colors  # 최대 10개
+    for j in range(f):
+        ax.bar(
+            x,
+            P[:, j],
+            bottom=bottom,
+            color=colors[j % len(colors)],
+            alpha=alpha,
+            edgecolor="black",
+            linewidth=0.4,
+            label=feature_names[j],
+        )
+        bottom += P[:, j]
+
+    ax.set_title(f"{kind} feature contribution (stacked % per time index)")
+    ax.set_ylabel("percent (%)")
+    ax.set_xlabel("t (time index)")
+    ax.set_ylim(0, 100)
+
+    # x축 라벨을 실제 t 인덱스로 표시
+    # - 막대는 모두 그리되, tick label만 간격(xtick_step)으로 줄여 가독성 개선
+    if xtick_step is None:
+        xtick_step_i = 1
+    else:
+        xtick_step_i = int(xtick_step)
+        if xtick_step_i < 1:
+            xtick_step_i = 1
+
+    if xtick_max_labels is not None:
+        m = int(xtick_max_labels)
+        if m > 0:
+            # 표시 가능한 라벨 수를 넘으면 자동으로 step을 늘림
+            xtick_step_i = max(xtick_step_i, int(np.ceil(len(x) / m)))
+
+    tick_pos = x[::xtick_step_i]
+    tick_lab = [str(int(t)) for t in t_indices[::xtick_step_i]]
+    if len(x) > 0 and tick_pos[-1] != x[-1]:
+        tick_pos = np.append(tick_pos, x[-1])
+        tick_lab.append(str(int(t_indices[-1])))
+
+    ax.set_xticks(tick_pos)
+    ax.set_xticklabels(tick_lab, rotation=90)
+
+    ax.grid(True, axis="y", alpha=0.2)
+    # legend/tight_layout은 show_line(twinx) 여부에 따라 아래에서 한 번만 정리
+
+    if show_line:
+        if val_array is None:
+            raise ValueError("show_line=True이면 val_array가 필요합니다.")
+        val_vals = np.asarray(val_array, dtype=float)[t_indices]
+
+        ax2 = ax.twinx()
+        ax2.plot(
+            x,
+            val_vals,
+            color="black",
+            marker="o",
+            linewidth=1.2,
+            markersize=3,
+            label=kind,
+        )
+        ax2.set_ylabel(f"{kind} value")
+        ax2.grid(False)
+
+        # 레전드는 1개만(우측 상단 레전드 제거): 왼쪽 상단에 통합 레전드
+        h1, l1 = ax.get_legend_handles_labels()
+        h2, l2 = ax2.get_legend_handles_labels()
+        ax.legend(h1 + h2, l1 + l2, loc="upper left", fontsize=9, ncol=1)
+
+        # twinx가 있으면 tight_layout이 우측 라벨을 잘 못 잡는 경우가 있어 right margin을 조금 확보
+        fig.tight_layout()
+        fig.subplots_adjust(right=0.95)
+    else:
+        ax.legend(ncol=1, fontsize=9, loc="upper left")
+        fig.tight_layout()
+
+    if save_path is not None:
+        dir_ = os.path.dirname(save_path)
+        if dir_:
+            os.makedirs(dir_, exist_ok=True)
+        fig.savefig(save_path, dpi=200)
+
+    if show:
+        plt.show()
+    else:
+        plt.close(fig)
+
+    return P, t_indices
