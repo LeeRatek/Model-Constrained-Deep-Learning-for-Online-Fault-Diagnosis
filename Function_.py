@@ -3294,9 +3294,7 @@ def plot_tsne_before_after_ci(
     axes[1].legend(loc="best")
     plt.tight_layout()
     if args.save:
-        save_path = (
-            f"{args.models_dir}/{args.models_idx}/results/tSNE_{fault_vehicle_idx}.png"
-        )
+        save_path = f"{args.models_dir}/{args.models_idx}/results_tsne/tSNE_{fault_vehicle_idx}.png"
         if save_path is not None and fig is not None:
             dir_ = os.path.dirname(save_path)
             if dir_:
