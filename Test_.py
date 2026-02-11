@@ -33,7 +33,7 @@ parser.add_argument(
     help="배터리 유형 선택 (DTI fault index range = [77~79], QAS fault index range = [335~392])",
 )
 parser.add_argument(
-    "--models-dir", type=str, default="./models/260206_084839"
+    "--models-dir", type=str, default="./models/260209_105821"
 )  # 260123_082222 & 260126_100030
 # parser.add_argument("--results-dir", type=str, default="./results" if os.environ.get("RESULT_DIR") is None else os.environ.get("RESULT_DIR"))
 parser.add_argument(
@@ -60,10 +60,16 @@ vals = read_values_from_sim_config(
         "ae_u_shift",
         "ae_x_scale",
         "ae_x_shift",
+        "no_use_dx",
+        "add_one_output_layer",
     ],
     strict=False,  # True: 키가 하나라도 없을 시 예외, False: 없는 키는 None
 )
 learning_case = vals["learning_case"]
+add_one_output_layer = (
+    vals["add_one_output_layer"] if vals["add_one_output_layer"] is not None else False
+)
+use_dx = not vals["no_use_dx"] if vals["no_use_dx"] is not None else True
 
 ## ================== For backward compatibility =================== ##
 ae_u_scale = vals["ae_u_scale"] if vals["ae_u_scale"] is not None else 1.8
@@ -80,7 +86,7 @@ PREPROCESSING, SKIP_CHARGE_READY = get_preprocessing_and_skip_charge_ready(
 )
 # SKIP_CHARGE_READY = False
 dim_dict = get_input_dimensions(BATTERY_TYPE)
-AUC_ANALYSIS = False
+AUC_ANALYSIS = True
 if not AUC_ANALYSIS:
     thresholds = [18.7, 28.7]
     # thresholds = [20, 30]
@@ -94,6 +100,8 @@ print_sim_config(
         "learning_case": learning_case,
         "PREPROCESSING": PREPROCESSING,
         "SKIP_CHARGE_READY": SKIP_CHARGE_READY,
+        "no_use_dx": not use_dx,
+        "add_one_output_layer": add_one_output_layer,
     },
 )
 
@@ -154,28 +162,26 @@ loads = load_pca_results(args.models_dir, load_data_nor=False, validate_shapes=F
 ) = loads
 elapsed_pca_load = time.perf_counter() - start_pca_load
 print(f"PCA results loading time (once): {elapsed_pca_load:.3f} seconds")
-if PREPROCESSING:
-    net_loaded = CombinedAE(
-        input_size=dim_dict["x"],
-        encode2_input_size=dim_dict["q"],
-        output_size=dim_dict["y"],
-        activation_fn=torch.sigmoid,
-        use_dx_in_forward=True,
-    ).to(device)
-else:
-    net_loaded = CombinedAE(
-        input_size=dim_dict["x"],
-        encode2_input_size=dim_dict["q"],
-        output_size=dim_dict["y"],
-        activation_fn=CustomSigmoidFunc(scale=ae_u_scale, shift=ae_u_shift),
-        use_dx_in_forward=True,
-    ).to(device)
+
+net_loaded = CombinedAE(
+    input_size=dim_dict["x"],
+    encode2_input_size=dim_dict["q"],
+    output_size=dim_dict["y"],
+    activation_fn=(
+        CustomSigmoidFunc(scale=ae_u_scale, shift=ae_u_shift)
+        if PREPROCESSING == False
+        else torch.sigmoid
+    ),
+    use_dx_in_forward=use_dx,
+    add_one_output_layer=add_one_output_layer,
+).to(device)
 netx_loaded = CombinedAE(
     input_size=dim_dict["x2"],
     encode2_input_size=dim_dict["q2"],
     output_size=dim_dict["y2"],
     activation_fn=CustomSigmoidFunc(scale=ae_x_scale, shift=ae_x_shift),
-    use_dx_in_forward=True,
+    use_dx_in_forward=use_dx,
+    add_one_output_layer=add_one_output_layer,
 ).to(device)
 net_state_dict = torch.load(os.path.join(f"{args.models_dir}/artifact/", "net.pth"))
 net_loaded.load_state_dict(net_state_dict)
@@ -253,12 +259,6 @@ for label, vehicle_ids in enumerate(test_list):
         m, s = divmod(rem, 60)
         print(f"Elapsed time: {int(h)}시간 {int(m)}분 {s:.3f}초")
         VEHICLE_ID = f"{i}"
-
-        # lstm = torch.load('./models/lstm.pth').to(device)
-        # test_X = safe_load(f'{args.source_data_dir}/{BATTERY_TYPE}/{VEHICLE_ID}/vin_1.pkl', verbose=False)
-        # # test
-        # lstm.eval()
-        # prediction = lstm(test_X)
 
         combined_tensor = safe_load(
             f"{args.source_data_dir}/{BATTERY_TYPE}/{VEHICLE_ID}/vin_2.pkl",
@@ -454,26 +454,6 @@ for label, vehicle_ids in enumerate(test_list):
             )
             elapsed1 = time.perf_counter() - start1
             print(f"Plotting time for vehicle ID={VEHICLE_ID}: {elapsed1:.3f} seconds")
-
-        ## =================== Compare to others code =================== ##
-        # df = pd.DataFrame((data_nor * data_std) + data_mean) # 원래 데이터 복원
-        # test = T2(scaling=True,explained_variance=4,p_value=0.95)
-        # test.fit(df)
-        # t_array, q_array = test.predict(df_data)
-        # ci_array = np.array(q_array) / SPE_95_limit +   np.array(t_array) / T_95_limit
-        # plot_diagnostics_triplet(t_array,
-        #                         q_array,
-        #                         ci_array,
-        #                         thresholds,
-        #                         sigma_levels=sigma_levels,
-        #                         title="Test",
-        #                         x_label="Time",
-        #                         y_labels=("T²", "SPE", "CI"),
-        #                         figsize=(12, 10),
-        #                         save_path=None,
-        #                         show=True,
-        #                         x_start=args.x_start,
-        #                         x_tick_step=args.x_tick_step)
         print("Done")
 
 elapsed = time.perf_counter() - start

@@ -30,6 +30,32 @@ from sklearn.manifold import TSNE
 from sklearn.preprocessing import StandardScaler
 
 
+def get_convergence_start_index(data, threshold=0.1, stable_window_size=20):
+    """
+    Finds the index where the data stabilizes.
+    Assumes data is 2D (Time, Features) and checks the first column (index 0).
+    Returns the first index `i` + 1 such that the absolute difference between steps
+    in the window [i : i + stable_window_size] is less than the threshold.
+    """
+    if isinstance(data, torch.Tensor):
+        # We need CPU numpy for checking
+        check_data = data[:, 0].detach().cpu().numpy()
+    else:
+        check_data = np.asarray(data)[:, 0]
+
+    diffs = np.abs(np.diff(check_data))
+
+    # Iterate through the differences
+    for i in range(len(diffs) - stable_window_size):
+        # Check if the window is stable
+        if np.all(diffs[i : i + stable_window_size] < threshold):
+            # The difference at index i represents change between data[i] and data[i+1].
+            # If diff[i] is small, stability effectively starts at i+1.
+            return i + 1
+
+    return 0  # If no stability found, return 0 (no cut)
+
+
 # Function to safely load a PyTorch model (serialized by GPU) or any pickled object to CPU
 def _to_cpu(obj: Any, *, verbose: bool = True):
     def log(message: str) -> None:
@@ -2458,6 +2484,50 @@ def preprocess_combined_tensor(
     normalize_dx: bool = False,
     normalize_val: float = 1.0,
 ):
+    if BATTERY_TYPE == "DTI":
+        # Remove unstable initial data dynamically
+        # Uses column 0 to detect convergence (diff < 0.1 for 20 steps)
+        start_idx_dti = 0
+        if SKIP_CHARGE_READY:
+            start_idx_dti = get_convergence_start_index(
+                tensor, threshold=0.1, stable_window_size=20
+            )
+            # print(
+            #     f"DTI: Detected convergence start index at {start_idx_dti} based on voltage stability."
+            # )
+            # print(
+            #     f"Length before trimming: {tensor.shape[0]}, after trimming: {tensor.shape[0] - start_idx_dti}"
+            # )
+        tensor = tensor[start_idx_dti:, :]
+        tensorx = tensorx[start_idx_dti:, :]
+
+        # Voltage features scaling (mV -> V)
+        # Indices 0 to 171: Pack Voltage(2) + Cell Voltages(85) + Voltage Deviations(85) = 172 columns
+        volt_end = dim_dict["x"] + dim_dict["y"]
+        # SOC features scaling (% -> Ratio)
+        # Index 173: Board SOC (dim_dict["q"]=3: Temp(172), SOC(173), Current(174))
+        soc_idx = volt_end + dim_dict["z"] + 1
+        tensor = tensor.float()
+        tensor[:, 1:volt_end] = tensor[:, 1:volt_end] / 1000.0
+        tensor[:, soc_idx] = tensor[:, soc_idx] / 100.0
+
+        # Target tensor (tensorx) scaling
+        # Indices 0 to 171: Pack SOC(2) + Cell SOC(85) + SOC Deviations(85)
+        # Index 173: Board SOC (dim_dict["q2"]=4)
+        soc_end_x = dim_dict["x2"]
+        soc_true_x = soc_end_x + dim_dict["y2"]
+        soc_idx_x = soc_true_x + dim_dict["z2"] + 1
+
+        tensorx = tensorx.float()
+        # Note: Pack SOC (index 0-1) in DTI vin_3 appears to have large values (1200+).
+        # Dividing by 100 as per general SOC % assumption.
+        tensorx[:, :soc_end_x] = tensorx[:, :soc_end_x] / 1000.0
+        tensorx[:, soc_end_x:soc_true_x] = tensorx[:, soc_end_x:soc_true_x] / 100.0
+        tensorx[:, soc_idx_x] = tensorx[:, soc_idx_x] / 100.0
+        tensorx[:, soc_idx_x + 1] = tensorx[:, soc_idx_x + 1] / 100.0  # velocity
+
+        return tensor, tensorx
+
     if BATTERY_TYPE == "QAS":
         tensorx[:, dim_dict["x2"] + dim_dict["y2"] + dim_dict["z2"] + 2] = 0
 

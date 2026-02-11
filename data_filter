@@ -27,7 +27,7 @@ class MODE(IntEnum):
     ANALYSIS_MODE = 3
 
 
-mode = MODE.PLOT_MODE
+mode = MODE.FILTER_MODE
 LSTM_LOAD = False
 FIRST_LOAD = True
 BATTERY_TYPE = "DTI"  # 'DTI' or 'QAS'
@@ -37,13 +37,16 @@ dim_dict = get_input_dimensions(BATTERY_TYPE)
 
 max_idx = 392 if BATTERY_TYPE == "QAS" else 79
 fault_idx = 335 if BATTERY_TYPE == "QAS" else 77
+n_train_set = 109 if BATTERY_TYPE == "QAS" else 39
+n_validation_set = 50 if BATTERY_TYPE == "QAS" else 19
+
 # "QAS" = [0~392], "DTI" = [0~79]
 filtered_vehicle_ids = np.array([])
 (vin1_start, vin2_start, vin3_start) = (0, 0, 0)
 
 start_idxes = []
 # vehicle_ids = range(0, max_idx + 1) if mode is not MODE.FILTER_MODE else []
-for i in range(66, max_idx + 1):
+for i in range(0, max_idx + 1):
     VEHICLE_ID = f"{i}"
     print(f"============== Processing Vehicle ID: {VEHICLE_ID} ==============")
     PATH = f"./data/data_analysis_at_charge_{vin2_start}/{BATTERY_TYPE}-{VEHICLE_ID}"
@@ -182,13 +185,18 @@ if mode == MODE.FILTER_MODE:
     normal_list = [i for i in filtered_vehicle_ids if i < fault_idx]
     np.save(f"./{BATTERY_TYPE}_filtered_vehicle_ids_normal.npy", np.array(normal_list))
     np.save(f"./{BATTERY_TYPE}_filtered_vehicle_ids_fault.npy", np.array(fault_list))
-    train_list = np.random.choice(normal_list, size=109, replace=False)
+    train_list = np.random.choice(normal_list, size=n_train_set, replace=False)
     train_list.sort()
     remain_list = [vid for vid in normal_list if vid not in set(train_list)]
-    validate_list = np.random.choice(remain_list, size=50, replace=False)
+    validate_list = np.random.choice(remain_list, size=n_validation_set, replace=False)
     validate_list.sort()
     test_list = [vid for vid in remain_list if vid not in set(validate_list)]
     test_list.sort()
+    np.save(f"./{BATTERY_TYPE}_filtered_vehicle_ids_train.npy", np.array(train_list))
+    np.save(
+        f"./{BATTERY_TYPE}_filtered_vehicle_ids_validate.npy", np.array(validate_list)
+    )
+    np.save(f"./{BATTERY_TYPE}_filtered_vehicle_ids_test.npy", np.array(test_list))
     exit()
 
 narray1 = np.array(combined_tensor)

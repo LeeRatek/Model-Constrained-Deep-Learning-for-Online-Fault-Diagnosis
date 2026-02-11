@@ -28,7 +28,7 @@ print(torch.cuda.device_count())
 warnings.filterwarnings("ignore")
 
 parser = argparse.ArgumentParser(description="Run MC-AE training with CLI options")
-parser.add_argument("--battery-type", choices=["QAS", "DTI"], default="QAS")
+parser.add_argument("--battery-type", choices=["QAS", "DTI"], default="DTI")
 parser.add_argument(
     "--vehicle-start",
     type=int,
@@ -68,7 +68,7 @@ parser.add_argument(
     "--ae-u-lr", type=float, default=5e-4
 )  # based on original manuscript
 parser.add_argument("--ae-u-batchsize", type=int, default=100)
-parser.add_argument("--ae-x-scale", type=float, default=1.2)
+parser.add_argument("--ae-x-scale", type=float, default=1.0)
 parser.add_argument("--ae-x-shift", type=float, default=0)
 parser.add_argument("--ae-x-epochs", type=int, default=300)  # default 300
 parser.add_argument(
@@ -338,28 +338,22 @@ validate_loader_u = DataLoader(
 )
 
 # Instantiate the networks
-if PREPROCESSING:
-    net = CombinedAE(
-        input_size=2,
-        encode2_input_size=3,
-        output_size=110,
-        activation_fn=torch.sigmoid,
-        use_dx_in_forward=use_dx_in_forward,
-        add_one_output_layer=add_one_output_layer,
-    ).to(device)
-else:
-    net = CombinedAE(
-        input_size=2,
-        encode2_input_size=3,
-        output_size=110,
-        activation_fn=CustomSigmoidFunc(scale=args.ae_u_scale, shift=args.ae_u_shift),
-        use_dx_in_forward=use_dx_in_forward,
-        add_one_output_layer=add_one_output_layer,
-    ).to(device)
+net = CombinedAE(
+    input_size=dim_dict["x"],
+    encode2_input_size=dim_dict["q"],
+    output_size=dim_dict["y"],
+    activation_fn=(
+        CustomSigmoidFunc(scale=args.ae_u_scale, shift=args.ae_u_shift)
+        if PREPROCESSING == False
+        else torch.sigmoid
+    ),
+    use_dx_in_forward=use_dx_in_forward,
+    add_one_output_layer=add_one_output_layer,
+).to(device)
 netx = CombinedAE(
-    input_size=2,
-    encode2_input_size=4,
-    output_size=110,
+    input_size=dim_dict["x2"],
+    encode2_input_size=dim_dict["q2"],
+    output_size=dim_dict["y2"],
     activation_fn=CustomSigmoidFunc(scale=args.ae_x_scale, shift=args.ae_x_shift),
     use_dx_in_forward=use_dx_in_forward,
     add_one_output_layer=add_one_output_layer,
