@@ -69,6 +69,14 @@ parser.add_argument("--normalize-dx", action="store_true")
 parser.add_argument("--normalize-val", type=int, default=4)
 parser.add_argument("--cnt-max", type=int, default=6)
 parser.add_argument("--per-vehicle", type=int, default=500)
+parser.add_argument(
+    "--thr",
+    nargs=2,
+    type=float,
+    default=[18.7, 28.7],
+    metavar=("THR0", "THR1"),
+    help="CI threshold 2개 지정. 예) --thr 18.7 28.7",
+)
 
 
 # t-SNE 알람(테두리 오버레이) 표시 옵션 (기본: 전부 표시)
@@ -117,7 +125,7 @@ parser.add_argument(
 
 args = parser.parse_args()
 
-thresholds = [18.7, 28.7]
+thresholds = list(args.thr)
 vals = read_values_from_sim_config(
     f"{args.models_dir}/{args.models_idx}",
     names_to_find=[
