@@ -1466,6 +1466,7 @@ def plot_testX_timeseries(
     _range: list = [-1],
     start_idx=0,
     ax=None,
+    close=None,
 ):
     """
     test_X 시계열 데이터(형상: [T, 1, 7] 또는 [T, 7])를 시간(x축) 대비 다중 라인(y축)으로 그립니다.
@@ -1520,6 +1521,7 @@ def plot_testX_timeseries(
                 save_path_input,
                 show,
                 ax=None,
+                close=close,
             )
     else:
         if plot_all:  # 모든 특성 그리기
@@ -1542,7 +1544,9 @@ def plot_testX_timeseries(
             if save_path is not None:
                 save_path += f"-range({_range[0]}-{_range[1]}).png"
 
-        plot_timeseries(test_X, feature_names, title, figsize, save_path, show, ax=ax)
+        plot_timeseries(
+            test_X, feature_names, title, figsize, save_path, show, ax=ax, close=close
+        )
 
 
 def plot_timeseries(
@@ -1553,6 +1557,7 @@ def plot_timeseries(
     save_path=None,
     show=True,
     ax=None,
+    close=None,
 ):
     # 입력을 numpy 2D [T, F]로 변환
     if isinstance(test_X, torch.Tensor):
@@ -1608,6 +1613,9 @@ def plot_timeseries(
             plt.show()
         else:
             plt.close(fig)
+
+    if close is True and fig is not None:
+        plt.close(fig)
 
 
 def plot_diagnostics_triplet(
@@ -2456,6 +2464,19 @@ def preprocess_combined_tensor(
         start_idx = last_index_of(
             tensor, feature_idx=charge_idx, value=-500, operator="<"
         )  # -500 means minimum current during charge ready
+        if BATTERY_TYPE == "DTI":
+            start_idx = np.max(
+                [
+                    start_idx,
+                    last_index_of(tensor, feature_idx=0, value=5.2, operator=">="),
+                ]
+            )
+            start_idx = np.max(
+                [
+                    start_idx,
+                    last_index_of(tensor, feature_idx=0, value=0, operator="<="),
+                ]
+            )
         tensor = tensor[start_idx:, :]
         tensorx = tensorx[start_idx:, :]
 
