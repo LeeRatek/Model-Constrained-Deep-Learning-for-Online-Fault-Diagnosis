@@ -26,6 +26,8 @@ from dataclasses import asdict, is_dataclass
 import platform
 import sys
 import ast
+from sklearn.manifold import TSNE
+from sklearn.preprocessing import StandardScaler
 
 
 # Function to safely load a PyTorch model (serialized by GPU) or any pickled object to CPU
@@ -3103,3 +3105,204 @@ def plot_contrib_percent_stacked(
         plt.close(fig)
 
     return P, t_indices
+
+
+def plot_tsne_before_after_ci(
+    *,
+    X_list_before,
+    Y_list_before,
+    X_list_after,
+    Y_list_after,
+    alarm_masks,
+    CI_array,
+    thresholds,
+    args,
+    fault_vehicle_idx,
+):
+    # ===== 리스트 -> 배열로 변환 (행 단위로 쌓였다는 가정) =====
+    X_before = np.vstack(X_list_before).astype(float)  # (M1, D)
+    y_before = np.asarray(Y_list_before, dtype=int)  # (M1,)
+
+    X_after = np.vstack(X_list_after).astype(float)  # (M2, D)
+    y_after = np.asarray(Y_list_after, dtype=int)  # (M2,)
+
+    print("before:", X_before.shape, y_before.shape)
+    print("after :", X_after.shape, y_after.shape)
+
+    # ===== 합쳐서 같은 스케일러/같은 t-SNE로 임베딩 =====
+    X_all = np.vstack([X_before, X_after])
+    Xs_all = StandardScaler().fit_transform(X_all)
+
+    tsne = TSNE(
+        n_components=2,
+        perplexity=10,
+        learning_rate="auto",
+        init="pca",
+        random_state=0,
+        max_iter=1000,
+    )
+    Z_all = tsne.fit_transform(Xs_all)
+
+    n_before = X_before.shape[0]
+    Z_before = Z_all[:n_before]
+    Z_after = Z_all[n_before:]
+
+    # ===== 1x3 plot (t-SNE 2개 + CI 1개) =====
+    # t-SNE 패널(axes[0], axes[1])만 같은 좌표계로 비교하고,
+    # CI 패널(axes[2])은 독립 축을 유지.
+    fig, axes = plt.subplots(1, 3, figsize=(18, 6), sharex=False, sharey=False)
+    axes[1].sharex(axes[0])
+    axes[1].sharey(axes[0])
+
+    for ax, Z, y, title in [
+        (axes[0], Z_before, y_before, "Before (y_recovered)"),
+        (axes[1], Z_after, y_after, "After (recon)"),
+    ]:
+        ax.scatter(Z[y == 0, 0], Z[y == 0, 1], s=4, alpha=0.5, label="normal")
+        ax.scatter(Z[y == 1, 0], Z[y == 1, 1], s=4, alpha=0.5, label="fault")
+        ax.set_title(title)
+        ax.grid(True, alpha=0.2)
+
+    CI = np.asarray(CI_array[args.x_start :]).reshape(-1)
+
+    n = len(CI)
+    # x_start가 지정되면 해당 값부터 시작하도록 x축 생성
+    if args.x_start is not None:
+        x = np.arange(n) + args.x_start
+    else:
+        x = np.arange(n)
+    axes[2].plot(x, CI, color="tab:blue", lw=1.4, label="CI")
+    axes[2].set_ylabel("CI")
+    axes[2].set_xlabel("Time")
+    axes[2].set_title("Comprehensive Index (CI)")
+    axes[2].grid(True, alpha=0.3)
+
+    if args.x_tick_step is not None:
+        ticks = (
+            np.floor(np.arange(x[0], x[-1] + 1, args.x_tick_step) / args.x_tick_step)
+            * args.x_tick_step
+        )
+        ticks[0] = args.x_start if args.x_start is not None else 0
+        ticks = np.append(ticks, x[-1]) if ticks[-1] != x[-1] else ticks
+        axes[2].xaxis.set_major_locator(mtick.FixedLocator(ticks))
+
+    threshold_color = ["tab:red", "tab:purple", "tab:green"]
+    thr = list(thresholds)
+    # 최대 3개까지만 표시
+    thr = thr[:3]
+    sigma_labels = [f"Threshold-{i}" for i in thr]
+    for val, lab, col in zip(thr, sigma_labels, threshold_color):
+        axes[2].axhline(val, color=col, linestyle="--", linewidth=1.2, label=lab)
+    axes[2].legend(loc="best", fontsize=8)
+
+    # alarm 샘플 강조(테두리만) — before/after 공통 처리
+    alarm_style_base = {
+        "alpha": 0.3,
+        # "facecolors": "none",
+    }
+
+    alarm_style_normal_lo = {
+        **alarm_style_base,
+        "s": 4,
+        "marker": "o",
+        "edgecolors": "#7F3B08",
+        "facecolors": "#7F3B08",
+        "linewidths": 0.7,
+        "zorder": 5,
+        "label": f"normal (CI>{thresholds[0]})",
+    }
+    alarm_style_normal_hi = {
+        **alarm_style_base,
+        "s": 4,
+        "marker": "o",
+        "edgecolors": "#2A9D8F",
+        "facecolors": "#2A9D8F",
+        "linewidths": 0.7,
+        "zorder": 5,
+        "label": f"normal (CI>{thresholds[1]})",
+    }
+
+    alarm_style_fault_lo = {
+        **alarm_style_base,
+        "s": 7,
+        "marker": "o",
+        "edgecolors": "blue",
+        "facecolors": "blue",
+        "linewidths": 0.9,
+        "zorder": 6,
+        "label": f"fault (CI>{thresholds[0]})",
+    }
+    alarm_style_fault_hi = {
+        **alarm_style_base,
+        "s": 7,
+        "marker": "o",
+        "edgecolors": "red",
+        "facecolors": "red",
+        "linewidths": 0.9,
+        "zorder": 6,
+        "label": f"fault (CI>{thresholds[1]})",
+    }
+
+    for key, ax, Z, y in [
+        ("before", axes[0], Z_before, y_before),
+        ("after", axes[1], Z_after, y_after),
+    ]:
+        if not args.alarm:
+            continue
+
+        alarm_level = np.asarray(alarm_masks[key], dtype=np.int8)
+        if alarm_level.shape[0] != Z.shape[0]:
+            print(
+                f"[WARN] alarm_mask_{key} 길이 불일치:",
+                alarm_level.shape[0],
+                f"vs Z_{key}:",
+                Z.shape[0],
+            )
+            continue
+
+        mask_normal_lo = (y == 0) & (alarm_level == 1)
+        mask_normal_hi = (y == 0) & (alarm_level == 2)
+        mask_fault_lo = (y == 1) & (alarm_level == 1)
+        mask_fault_hi = (y == 1) & (alarm_level == 2)
+
+        if args.alarm_nlo and np.any(mask_normal_lo):
+            ax.scatter(
+                Z[mask_normal_lo, 0],
+                Z[mask_normal_lo, 1],
+                **alarm_style_normal_lo,
+            )
+        if args.alarm_nhi and np.any(mask_normal_hi):
+            ax.scatter(
+                Z[mask_normal_hi, 0],
+                Z[mask_normal_hi, 1],
+                **alarm_style_normal_hi,
+            )
+        if args.alarm_flo and np.any(mask_fault_lo):
+            ax.scatter(
+                Z[mask_fault_lo, 0],
+                Z[mask_fault_lo, 1],
+                **alarm_style_fault_lo,
+            )
+        if args.alarm_fhi and np.any(mask_fault_hi):
+            ax.scatter(
+                Z[mask_fault_hi, 0],
+                Z[mask_fault_hi, 1],
+                **alarm_style_fault_hi,
+            )
+
+    axes[0].legend(loc="best")
+    axes[1].legend(loc="best")
+    plt.tight_layout()
+    if args.save:
+        save_path = (
+            f"{args.models_dir}/{args.models_idx}/results/tSNE_{fault_vehicle_idx}.png"
+        )
+        if save_path is not None and fig is not None:
+            dir_ = os.path.dirname(save_path)
+            if dir_:
+                os.makedirs(dir_, exist_ok=True)
+            fig.savefig(save_path, dpi=150)
+    else:
+        plt.show()
+
+    return fig, axes

@@ -12,8 +12,6 @@ import torch
 
 # from sklearn.datasets import load_boston
 from sklearn.model_selection import train_test_split
-from sklearn.manifold import TSNE
-from sklearn.preprocessing import StandardScaler
 import argparse
 from monitering import *
 import time
@@ -44,6 +42,12 @@ parser.add_argument(
     type=str,
     default="260206_084839",  # 260206_084839 or 260209_105821
 )
+parser.add_argument(
+    "--fault-idx",
+    type=int,
+    default=-1,
+    help=("-1: 모든 비정상차량, 그 외: 특정 비정상 차량 인덱스 (예: 347, 348 등)"),
+)
 # parser.add_argument("--results-dir", type=str, default="./results" if os.environ.get("RESULT_DIR") is None else os.environ.get("RESULT_DIR"))
 parser.add_argument(
     "--source-data-dir",
@@ -57,9 +61,11 @@ parser.add_argument(
 
 parser.add_argument("--x-start", type=int, default=20)
 parser.add_argument("--x-tick-step", type=int, default=3000)
-parser.add_argument("--sigma-levels", type=str, default="3,4.5,6")
 parser.add_argument("--normalize-dx", action="store_true")
 parser.add_argument("--normalize-val", type=int, default=4)
+parser.add_argument("--cnt-max", type=int, default=6)
+parser.add_argument("--per-vehicle", type=int, default=500)
+
 
 # t-SNE 알람(테두리 오버레이) 표시 옵션 (기본: 전부 표시)
 # 약어: n/f=normal/fault, lo/hi=thresholds[0]/thresholds[1]
@@ -104,6 +110,7 @@ parser.add_argument(
     default=False,
     help="normal lo(CI>thr[0]) 오버레이를 끕니다.",
 )
+
 args = parser.parse_args()
 
 thresholds = [18.7, 28.7]
@@ -230,22 +237,32 @@ def add_vehicle_points(df_data, label, idx):
     # y_list.append(np.full(len(idx), label, dtype=int))
 
 
-start = time.perf_counter()
-cnt_max = 6
-per_vehicle = 500
-# test_list = [normal_list[0:cnt_max], fault_list[0:cnt_max]]
-fault_vehicle_idx = 347
-normal = np.array(normal_list)[
-    np.asarray(np.isin(normal_list, [46, 184, 252, 301]), dtype=bool)
-].tolist()
-test_list = [[*normal_list[0:cnt_max], *normal], [fault_vehicle_idx]]
-X_list_before, Y_list_before = [], []
-X_list_after, Y_list_after = [], []
-alarm_masks = {
-    "before": [],  # 0: none, 1: CI>thresholds[0](blue), 2: CI>thresholds[1](red)
-    "after": [],  # 0: none, 1: CI>thresholds[0](blue), 2: CI>thresholds[1](red)
-}
-for label, vehicle_ids in enumerate(test_list):
+def collect_vehicle_points(
+    *,
+    vehicle_ids,
+    label,
+    per_vehicle,
+    args,
+    BATTERY_TYPE,
+    dim_dict,
+    PREPROCESSING,
+    SKIP_CHARGE_READY,
+    thresholds,
+    net_loaded,
+    netx_loaded,
+    data_mean,
+    data_std,
+    p_k,
+    v_I,
+    T_95_limit,
+    SPE_95_limit,
+):
+    X_list_before, Y_list_before = [], []
+    X_list_after, Y_list_after = [], []
+    alarm_masks = {"before": [], "after": []}
+
+    CI_last = None
+
     for i in vehicle_ids:
         VEHICLE_ID = f"{i}"
         combined_tensor = safe_load(
@@ -286,7 +303,6 @@ for label, vehicle_ids in enumerate(test_list):
             recon_imtest = net_loaded(
                 x_recovered, z_recovered, q_recovered, y_recovered
             )
-            # net_loaded.analyze_outputs(x_recovered, z_recovered, q_recovered, recon_imtest[0], y_recovered, cell_idx=1, combine=True, ncols=3, fill="spiral")
 
         # Use indexing to separate
         x_recovered2 = combined_tensorx[:, : dim_dict["x2"]]
@@ -309,7 +325,6 @@ for label, vehicle_ids in enumerate(test_list):
             reconx_imtest = netx_loaded(
                 x_recovered2, z_recovered2, q_recovered2, y_recovered2
             )
-            # netx_loaded.analyze_outputs(x_recovered2, z_recovered2, q_recovered2, reconx_imtest[0], y_recovered2, cell_idx=1, combine=True, ncols=3, fill="spiral")
 
             # 출력/정답을 각각 numpy로 변환하지 말고 torch에서 error를 먼저 계산 후 1회만 변환
             ERRORU = np.abs(recon_imtest[0] - y_recovered).cpu().numpy()
@@ -318,32 +333,20 @@ for label, vehicle_ids in enumerate(test_list):
         df_data, _ = DiagnosisFeature(ERRORU, ERRORX, get_true_feature=False)
         t2_array, _ = T2_array(df_data, data_mean, data_std, p_k, v_I)
         spe_array, _ = SPE_array(df_data, data_mean, data_std, p_k)
-        # CI_contrib = (spe_contrib / SPE_95_limit) + (t2_contrib / T_95_limit)
         CI_array = (spe_array / SPE_95_limit) + (t2_array / T_95_limit)
-        # recon_merged = torch.cat([y_recovered, y_recovered2], dim=1)
-        recon_merged = torch.cat(
-            [recon_imtest[0], reconx_imtest[0]], dim=1
-        )  # (N, y+y2)
-        # add_vehicle_points(
-        #     np.asarray((df_data - data_mean) / data_std, dtype=float),
-        #     label,
-        #     per_vehicle=1000,
-        # )
+        CI_last = CI_array
+
         alarmed_idx_hi = np.where(CI_array > thresholds[1])[0]
         alarmed_idx_lo = np.where(
             (CI_array > thresholds[0]) & (CI_array <= thresholds[1])
         )[0]
-
-        # alarmed_set = (
-        #     set(np.where(CI_array > thresholds[1])[0].tolist()) if label == 1 else set()
-        # )
 
         idx = np.random.default_rng(0).choice(
             y_recovered.shape[0],
             size=min(per_vehicle, y_recovered.shape[0]),
             replace=False,
         )
-        # normal(label==0)/fault(label==1) 모두에서 thresholds[0]/[1] 초과 샘플을 반드시 포함 (현재 차량 기준)
+        # thresholds[0]/[1] 초과 샘플을 반드시 포함 (현재 차량 기준)
         to_add = []
         if alarmed_idx_lo.size > 0:
             to_add.append(np.asarray(alarmed_idx_lo, dtype=idx.dtype))
@@ -351,6 +354,7 @@ for label, vehicle_ids in enumerate(test_list):
             to_add.append(np.asarray(alarmed_idx_hi, dtype=idx.dtype))
         if len(to_add) > 0:
             idx = np.unique(np.concatenate([idx, *to_add]))
+
         x_before, y_before = add_vehicle_points(
             torch.cat([y_recovered, y_recovered2], dim=1),
             label,
@@ -366,8 +370,8 @@ for label, vehicle_ids in enumerate(test_list):
         X_list_after.extend(x_after)
         Y_list_after.extend(y_after)
 
-        # 샘플링된 idx 중 알람 레벨 표시 (normal/fault 공통)
-        # 0: none, 1: thresholds[0] 초과(blue), 2: thresholds[1] 초과(red)
+        # 샘플링된 idx 중 알람 레벨 표시
+        # 0: none, 1: thresholds[0] 초과, 2: thresholds[1] 초과
         alarm_levels = np.zeros(len(idx), dtype=np.int8)
         if alarmed_idx_lo.size > 0:
             alarm_levels[np.isin(idx, alarmed_idx_lo)] = 1
@@ -376,135 +380,96 @@ for label, vehicle_ids in enumerate(test_list):
         alarm_masks["before"].extend(alarm_levels.tolist())
         alarm_masks["after"].extend(alarm_levels.tolist())
 
-        print("Done")
+        print(f"Done (label={label}, vehicle={i})")
 
-# ===== 리스트 -> 배열로 변환 (행 단위로 쌓였다는 가정) =====
-X_before = np.vstack(X_list_before).astype(float)  # (M1, D)
-y_before = np.asarray(Y_list_before, dtype=int)  # (M1,)
+    pack = {
+        "X_list_before": X_list_before,
+        "Y_list_before": Y_list_before,
+        "X_list_after": X_list_after,
+        "Y_list_after": Y_list_after,
+        "alarm_masks": alarm_masks,
+    }
+    return pack, CI_last
 
-X_after = np.vstack(X_list_after).astype(float)  # (M2, D)
-y_after = np.asarray(Y_list_after, dtype=int)  # (M2,)
 
-print("before:", X_before.shape, y_before.shape)
-print("after :", X_after.shape, y_after.shape)
+start = time.perf_counter()
+# cnt_max = 6
+cnt_max = args.cnt_max
+per_vehicle = args.per_vehicle
+normal_but_faulty = [46, 184, 252]  # [46, 184, 252, 301]
+normal = np.array(normal_list)[
+    np.asarray(np.isin(normal_list, normal_but_faulty), dtype=bool)
+].tolist()
 
-# ===== 합쳐서 같은 스케일러/같은 t-SNE로 임베딩 =====
-X_all = np.vstack([X_before, X_after])
-Xs_all = StandardScaler().fit_transform(X_all)
-
-tsne = TSNE(
-    n_components=2,
-    perplexity=10,
-    learning_rate="auto",
-    init="pca",
-    random_state=0,
-    max_iter=1000,
+# label=0(정상) 차량은 1회만 고정 수집
+normal_vehicle_ids = [*normal_list[0:cnt_max], *normal]
+normal_pack, _ = collect_vehicle_points(
+    vehicle_ids=normal_vehicle_ids,
+    label=0,
+    per_vehicle=per_vehicle,
+    args=args,
+    BATTERY_TYPE=BATTERY_TYPE,
+    dim_dict=dim_dict,
+    PREPROCESSING=PREPROCESSING,
+    SKIP_CHARGE_READY=SKIP_CHARGE_READY,
+    thresholds=thresholds,
+    net_loaded=net_loaded,
+    netx_loaded=netx_loaded,
+    data_mean=data_mean,
+    data_std=data_std,
+    p_k=p_k,
+    v_I=v_I,
+    T_95_limit=T_95_limit,
+    SPE_95_limit=SPE_95_limit,
 )
-Z_all = tsne.fit_transform(Xs_all)
 
-n_before = X_before.shape[0]
-Z_before = Z_all[:n_before]
-Z_after = Z_all[n_before:]
-
-# ===== 1x2 plot =====
-fig, axes = plt.subplots(1, 2, figsize=(12, 6), sharex=True, sharey=True)
-
-
-for ax, Z, y, title in [
-    (axes[0], Z_before, y_before, "Before (y_recovered)"),
-    (axes[1], Z_after, y_after, "After (recon)"),
-]:
-    ax.scatter(Z[y == 0, 0], Z[y == 0, 1], s=4, alpha=0.5, label="normal")
-    ax.scatter(Z[y == 1, 0], Z[y == 1, 1], s=4, alpha=0.5, label="fault")
-    ax.set_title(title)
-    ax.grid(True, alpha=0.2)
-
-# alarm 샘플 강조(테두리만) — before/after 공통 처리
-alarm_style_base = {
-    "s": 4,
-    "alpha": 0.3,
-    "facecolors": "none",
-}
-
-alarm_style_normal_lo = {
-    **alarm_style_base,
-    "marker": "o",
-    "edgecolors": "#D100D1",
-    "linewidths": 0.5,
-    "zorder": 5,
-    "label": f"normal (CI>{thresholds[0]})",
-}
-alarm_style_normal_hi = {
-    **alarm_style_base,
-    "marker": "o",
-    "edgecolors": "#2A9D8F",
-    "linewidths": 0.5,
-    "zorder": 5,
-    "label": f"normal (CI>{thresholds[1]})",
-}
-
-alarm_style_fault_lo = {
-    **alarm_style_base,
-    "marker": "o",
-    "edgecolors": "blue",
-    "linewidths": 0.9,
-    "zorder": 6,
-    "label": f"fault (CI>{thresholds[0]})",
-}
-alarm_style_fault_hi = {
-    **alarm_style_base,
-    "marker": "o",
-    "edgecolors": "red",
-    "linewidths": 0.9,
-    "zorder": 6,
-    "label": f"fault (CI>{thresholds[1]})",
-}
-
-for key, ax, Z, y in [
-    ("before", axes[0], Z_before, y_before),
-    ("after", axes[1], Z_after, y_after),
-]:
-    if not args.alarm:
-        continue
-
-    alarm_level = np.asarray(alarm_masks[key], dtype=np.int8)
-    if alarm_level.shape[0] != Z.shape[0]:
-        print(
-            f"[WARN] alarm_mask_{key} 길이 불일치:",
-            alarm_level.shape[0],
-            f"vs Z_{key}:",
-            Z.shape[0],
-        )
-        continue
-
-    mask_normal_lo = (y == 0) & (alarm_level == 1)
-    mask_normal_hi = (y == 0) & (alarm_level == 2)
-    mask_fault_lo = (y == 1) & (alarm_level == 1)
-    mask_fault_hi = (y == 1) & (alarm_level == 2)
-
-    if args.alarm_nlo and np.any(mask_normal_lo):
-        ax.scatter(Z[mask_normal_lo, 0], Z[mask_normal_lo, 1], **alarm_style_normal_lo)
-    if args.alarm_nhi and np.any(mask_normal_hi):
-        ax.scatter(Z[mask_normal_hi, 0], Z[mask_normal_hi, 1], **alarm_style_normal_hi)
-    if args.alarm_flo and np.any(mask_fault_lo):
-        ax.scatter(Z[mask_fault_lo, 0], Z[mask_fault_lo, 1], **alarm_style_fault_lo)
-    if args.alarm_fhi and np.any(mask_fault_hi):
-        ax.scatter(Z[mask_fault_hi, 0], Z[mask_fault_hi, 1], **alarm_style_fault_hi)
-
-axes[0].legend(loc="best")
-axes[1].legend(loc="best")
-plt.tight_layout()
-if args.save:
-    save_path = (
-        f"{args.models_dir}/{args.models_idx}/results/tSNE_{fault_vehicle_idx}.png"
+# label=1(고장) 차량 인덱스는 바꿔가며 반복 플롯
+fault_idx = np.arange(335, 393) if args.fault_idx == -1 else [args.fault_idx]
+fault_vehicle_idxs = fault_idx
+for fault_vehicle_idx in fault_vehicle_idxs:
+    fault_pack, CI_fault = collect_vehicle_points(
+        vehicle_ids=[fault_vehicle_idx],
+        label=1,
+        per_vehicle=per_vehicle,
+        args=args,
+        BATTERY_TYPE=BATTERY_TYPE,
+        dim_dict=dim_dict,
+        PREPROCESSING=PREPROCESSING,
+        SKIP_CHARGE_READY=SKIP_CHARGE_READY,
+        thresholds=thresholds,
+        net_loaded=net_loaded,
+        netx_loaded=netx_loaded,
+        data_mean=data_mean,
+        data_std=data_std,
+        p_k=p_k,
+        v_I=v_I,
+        T_95_limit=T_95_limit,
+        SPE_95_limit=SPE_95_limit,
     )
-    if save_path is not None and fig is not None:
-        dir_ = os.path.dirname(save_path)
-        if dir_:
-            os.makedirs(dir_, exist_ok=True)
-        fig.savefig(save_path, dpi=150)
-else:
-    plt.show()
+
+    X_list_before = normal_pack["X_list_before"] + fault_pack["X_list_before"]
+    Y_list_before = normal_pack["Y_list_before"] + fault_pack["Y_list_before"]
+    X_list_after = normal_pack["X_list_after"] + fault_pack["X_list_after"]
+    Y_list_after = normal_pack["Y_list_after"] + fault_pack["Y_list_after"]
+    alarm_masks = {
+        "before": normal_pack["alarm_masks"]["before"]
+        + fault_pack["alarm_masks"]["before"],
+        "after": normal_pack["alarm_masks"]["after"]
+        + fault_pack["alarm_masks"]["after"],
+    }
+
+    print(f"\n=== Plotting fault_vehicle_idx={fault_vehicle_idx} ===")
+    fig, axes = plot_tsne_before_after_ci(
+        X_list_before=X_list_before,
+        Y_list_before=Y_list_before,
+        X_list_after=X_list_after,
+        Y_list_after=Y_list_after,
+        alarm_masks=alarm_masks,
+        CI_array=CI_fault,
+        thresholds=thresholds,
+        args=args,
+        fault_vehicle_idx=fault_vehicle_idx,
+    )
 
 elapsed = time.perf_counter() - start
 h, rem = divmod(elapsed, 3600)
