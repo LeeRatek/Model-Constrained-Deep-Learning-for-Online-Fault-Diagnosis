@@ -35,8 +35,12 @@ parser.add_argument(
 parser.add_argument(
     "--models-dir",
     type=str,
-    default="./models",  # 260206_084839 or 260209_105821
-)  # 260123_082222 & 260126_100030
+    default=(
+        "./models"
+        if os.environ.get("MODEL_DIR") is None
+        else os.environ.get("MODEL_DIR")
+    ),
+)
 parser.add_argument(
     "--models-idx",
     type=str,
