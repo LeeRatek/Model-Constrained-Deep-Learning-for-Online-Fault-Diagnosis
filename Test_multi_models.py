@@ -85,6 +85,11 @@ parser.add_argument(
     action="store_true",
     help="Resume from previous run. If true, attempts to reuse error files in temp_cache and skips already computed combinations in CSV.",
 )
+parser.add_argument(
+    "--keep-cache",
+    action="store_true",
+    help="Keep the disk cache files (error matrices) after the simulation finishes. Useful for debugging or subsequent runs with --resume.",
+)
 args = parser.parse_args()
 
 
@@ -874,10 +879,15 @@ for u_idx in u_model_indices:
                 print(f"AUC result appended to: {csv_path}")
 
 
-# Cleanup temp files if disk strategy was used
+# Cleanup temp files if disk strategy was used and keep_cache is False
 if cache_strategy == "disk" and temp_cache_dir and os.path.exists(temp_cache_dir):
-    print(f"Cleaning up temporary disk cache: {temp_cache_dir}")
-    shutil.rmtree(temp_cache_dir)
+    if args.keep_cache:
+        print(
+            f"Keeping temporary disk cache at: {temp_cache_dir} (--keep-cache enabled)"
+        )
+    else:
+        print(f"Cleaning up temporary disk cache: {temp_cache_dir}")
+        shutil.rmtree(temp_cache_dir)
 
 if cache_strategy == "memory":
     # Clear memory cache explicitly
