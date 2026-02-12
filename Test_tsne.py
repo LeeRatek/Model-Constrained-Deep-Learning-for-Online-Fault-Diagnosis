@@ -139,17 +139,17 @@ vals = read_values_from_sim_config(
     ],
     strict=False,  # True: 키가 하나라도 없을 시 예외, False: 없는 키는 None
 )
-learning_case = vals["learning_case"]
+learning_case = vals.learning_case
 add_one_output_layer = (
-    vals["add_one_output_layer"] if vals["add_one_output_layer"] is not None else False
+    vals.add_one_output_layer if hasattr(vals, "add_one_output_layer") else False
 )
-use_dx = not vals["no_use_dx"] if vals["no_use_dx"] is not None else True
+use_dx = not vals.no_use_dx if hasattr(vals, "no_use_dx") else True
 
 ## ================== For backward compatibility =================== ##
-ae_u_scale = vals["ae_u_scale"] if vals["ae_u_scale"] is not None else 1.8
-ae_u_shift = vals["ae_u_shift"] if vals["ae_u_shift"] is not None else 2.5
-ae_x_scale = vals["ae_x_scale"] if vals["ae_x_scale"] is not None else 1.0
-ae_x_shift = vals["ae_x_shift"] if vals["ae_x_shift"] is not None else 0
+ae_u_scale = vals.ae_u_scale if hasattr(vals, "ae_u_scale") else 1.8
+ae_u_shift = vals.ae_u_shift if hasattr(vals, "ae_u_shift") else 2.5
+ae_x_scale = vals.ae_x_scale if hasattr(vals, "ae_x_scale") else 1.0
+ae_x_shift = vals.ae_x_shift if hasattr(vals, "ae_x_shift") else 0
 
 # 플롯 결과 저장 폴더는 한 번만 생성
 os.makedirs(f"{args.models_dir}/{args.models_idx}/results", exist_ok=True)
@@ -290,7 +290,7 @@ def collect_vehicle_points(
             verbose=False,
         )
 
-        combined_tensor, combined_tensorx = preprocess_combined_tensor(
+        combined_tensor, combined_tensorx = preprocess_loaded_tensor(
             combined_tensor,
             combined_tensorx,
             dim_dict,

@@ -9,6 +9,7 @@ import matplotlib
 from Function_ import *
 from Class_ import *
 import torch
+from Train_pca_only import train_pca_only
 
 # from sklearn.datasets import load_boston
 from sklearn.model_selection import train_test_split
@@ -26,16 +27,11 @@ warnings.filterwarnings("ignore")
 parser = argparse.ArgumentParser(
     description="Run diagnostics plotting with CLI options"
 )
+
 parser.add_argument(
-    "--battery-type",
-    choices=["QAS", "DTI"],
-    default="QAS",
-    help="배터리 유형 선택 (DTI fault index range = [77~79], QAS fault index range = [335~392])",
-)
-parser.add_argument(
-    "--models-dir", type=str, default="./models/260209_105821"
-)  # 260123_082222 & 260126_100030
-# parser.add_argument("--results-dir", type=str, default="./results" if os.environ.get("RESULT_DIR") is None else os.environ.get("RESULT_DIR"))
+    "--models-dir", type=str, default="./models"
+)  # 260206_084839 & 260211_163108
+parser.add_argument("--models-folder", type=str, default="260211_163108")
 parser.add_argument(
     "--source-data-dir",
     type=str,
@@ -48,39 +44,40 @@ parser.add_argument(
 parser.add_argument("--x-start", type=int, default=20)
 parser.add_argument("--x-tick-step", type=int, default=3000)
 parser.add_argument("--sigma-levels", type=str, default="3,4.5,6")
-parser.add_argument("--normalize-dx", action="store_true")
-parser.add_argument("--normalize-val", type=int, default=4)
+parser.add_argument("--u-model-idx", type=int, default=30)
+parser.add_argument("--x-model-idx", type=int, default=130)
 args = parser.parse_args()
 
 vals = read_values_from_sim_config(
-    args.models_dir,
-    names_to_find=[
-        "learning_case",
-        "ae_u_scale",
-        "ae_u_shift",
-        "ae_x_scale",
-        "ae_x_shift",
-        "no_use_dx",
-        "add_one_output_layer",
+    f"{args.models_dir}/{args.models_folder}",
+    exclude_keys=[
+        "models_dir",
+        "models_folder",
+        "source_data_dir",
     ],
     strict=False,  # True: 키가 하나라도 없을 시 예외, False: 없는 키는 None
 )
-learning_case = vals["learning_case"]
+
+learning_case = vals.learning_case
+
+
 add_one_output_layer = (
-    vals["add_one_output_layer"] if vals["add_one_output_layer"] is not None else False
+    vals.add_one_output_layer if hasattr(vals, "add_one_output_layer") else False
 )
-use_dx = not vals["no_use_dx"] if vals["no_use_dx"] is not None else True
+use_dx = not vals.no_use_dx if hasattr(vals, "no_use_dx") else True
+u_model_idx = "net" if args.u_model_idx == -1 else f"net_e{args.u_model_idx}"
+x_model_idx = "netx" if args.x_model_idx == -1 else f"netx_e{args.x_model_idx}"
 
 ## ================== For backward compatibility =================== ##
-ae_u_scale = vals["ae_u_scale"] if vals["ae_u_scale"] is not None else 1.8
-ae_u_shift = vals["ae_u_shift"] if vals["ae_u_shift"] is not None else 2.5
-ae_x_scale = vals["ae_x_scale"] if vals["ae_x_scale"] is not None else 1.0
-ae_x_shift = vals["ae_x_shift"] if vals["ae_x_shift"] is not None else 0
+ae_u_scale = vals.ae_u_scale if hasattr(vals, "ae_u_scale") else 1.8
+ae_u_shift = vals.ae_u_shift if hasattr(vals, "ae_u_shift") else 2.5
+ae_x_scale = vals.ae_x_scale if hasattr(vals, "ae_x_scale") else 1.0
+ae_x_shift = vals.ae_x_shift if hasattr(vals, "ae_x_shift") else 0
 
 # 플롯 결과 저장 폴더는 한 번만 생성
-os.makedirs(f"{args.models_dir}/results", exist_ok=True)
+os.makedirs(f"{args.models_dir}/{args.models_folder}/results", exist_ok=True)
 
-BATTERY_TYPE = args.battery_type  # 'DTI' or 'QAS'
+BATTERY_TYPE = vals.battery_type  # 'DTI' or 'QAS'
 PREPROCESSING, SKIP_CHARGE_READY = get_preprocessing_and_skip_charge_ready(
     learning_case
 )
@@ -115,7 +112,7 @@ except Exception as e:
 ## =================== DTI fault index range = [77~79] ===================
 ## =================== QAS fault index range = [335~392] ===================
 
-# sim_config_path = os.path.join(args.models_dir, "sim_config.txt")
+# sim_config_path = os.path.join(f"{args.models_dir}/{args.models_folder}", "sim_config.txt")
 # train_vehicle_ids = load_vehicle_ids_used_for_training(sim_config_path)
 # all_normal_vehicle_ids = np.load(f"./{BATTERY_TYPE}_filtered_vehicle_ids_normal.npy").astype(np.int64).tolist()
 # normal_list = [vid for vid in all_normal_vehicle_ids if vid not in set(train_vehicle_ids)]
@@ -142,7 +139,19 @@ y_true = np.zeros(total_test_vehicles, dtype=np.int8)  # normal=0, fault=1
 
 ## =================== Load training data  =================== ##
 start_pca_load = time.perf_counter()
-loads = load_pca_results(args.models_dir, load_data_nor=False, validate_shapes=False)
+if args.u_model_idx == -1:
+    loads = load_pca_results(
+        f"{args.models_dir}/{args.models_folder}",
+        load_data_nor=True,
+        validate_shapes=False,
+    )
+else:
+    vals.u_model_idx = args.u_model_idx
+    vals.x_model_idx = args.x_model_idx
+    vals.models_dir = args.models_dir
+    vals.models_folder = args.models_folder
+    vals.source_data_dir = args.source_data_dir
+    loads = train_pca_only(vals, device, save=False)
 (
     v_I,
     v,
@@ -183,9 +192,18 @@ netx_loaded = CombinedAE(
     use_dx_in_forward=use_dx,
     add_one_output_layer=add_one_output_layer,
 ).to(device)
-net_state_dict = torch.load(os.path.join(f"{args.models_dir}/artifact/", "net.pth"))
+
+net_state_dict = torch.load(
+    os.path.join(
+        f"{args.models_dir}/{args.models_folder}/artifact/", f"{u_model_idx}.pth"
+    )
+)
 net_loaded.load_state_dict(net_state_dict)
-netx_state_dict = torch.load(os.path.join(f"{args.models_dir}/artifact/", "netx.pth"))
+netx_state_dict = torch.load(
+    os.path.join(
+        f"{args.models_dir}/{args.models_folder}/artifact/", f"{x_model_idx}.pth"
+    )
+)
 netx_loaded.load_state_dict(netx_state_dict)
 
 ## =================== Plot network layer parameters  =================== ##
@@ -203,7 +221,7 @@ plot_net_layer_params_by_index(
     mode="bar",
     max_points=8000,
     show=showing_params,
-    save_dir=f"{args.models_dir}",
+    save_dir=f"{args.models_dir}/{args.models_folder}",
     layer_names=("fc1", "fc2"),
     figsize=(6, 3),
 )
@@ -213,7 +231,7 @@ plot_net_layer_params_by_index(
     mode="bar",
     max_points=8000,
     show=showing_params,
-    save_dir=f"{args.models_dir}",
+    save_dir=f"{args.models_dir}/{args.models_folder}",
     layer_names=("fc1", "fc2"),
     figsize=(6, 3),
     normalize_y=False,
@@ -232,7 +250,7 @@ plot_net_layer_params_by_index(
     mode="bar",
     max_points=8000,
     show=showing_params,
-    save_dir=f"{args.models_dir}",
+    save_dir=f"{args.models_dir}/{args.models_folder}",
     layer_names=("fc1", "fc2"),
     figsize=(6, 3),
 )
@@ -242,7 +260,7 @@ plot_net_layer_params_by_index(
     mode="bar",
     max_points=8000,
     show=showing_params,
-    save_dir=f"{args.models_dir}",
+    save_dir=f"{args.models_dir}/{args.models_folder}",
     layer_names=("fc1", "fc2"),
     figsize=(6, 3),
     normalize_y=False,
@@ -269,14 +287,14 @@ for label, vehicle_ids in enumerate(test_list):
             verbose=False,
         )
 
-        combined_tensor, combined_tensorx = preprocess_combined_tensor(
+        combined_tensor, combined_tensorx = preprocess_loaded_tensor(
             combined_tensor,
             combined_tensorx,
             dim_dict,
             BATTERY_TYPE,
             PREPROCESSING,
             SKIP_CHARGE_READY,
-            normalize_dx=args.normalize_dx,
+            normalize_dx=vals.normalize_dx,
         )
 
         # Use indexing to separate
@@ -292,6 +310,7 @@ for label, vehicle_ids in enumerate(test_list):
         q_recovered = combined_tensor[
             :, dim_dict["x"] + dim_dict["y"] + dim_dict["z"] :
         ]
+
         net_loaded = net_loaded.double().eval()
 
         with torch.inference_mode():
@@ -315,6 +334,7 @@ for label, vehicle_ids in enumerate(test_list):
         q_recovered2 = combined_tensorx[
             :, dim_dict["x2"] + dim_dict["y2"] + dim_dict["z2"] :
         ]
+
         netx_loaded = netx_loaded.double().eval()
 
         with torch.inference_mode():
@@ -345,12 +365,13 @@ for label, vehicle_ids in enumerate(test_list):
         # for i in range(len(title)):
         #     plot_testX_timeseries(t2_contrib[:, i].to_numpy().reshape(df_data2.shape[0],1), feature_names=title[i], title=title[i], figsize=(6, 3), show=True, seperate=False, start_idx=0, _range=[0,0])
 
-        # plot_testX_timeseries(df_data2.iloc[:,0].to_numpy().reshape(df_data2.shape[0],1), feature_names="$zu_2$", title="$zu_2$", figsize=(6, 3), show=True, seperate=False, start_idx=0, _range=[0,0])
-        # plot_testX_timeseries(df_data2.iloc[:,1].to_numpy().reshape(df_data2.shape[0],1), feature_names="$zx_2$", title="$zx_2$", figsize=(6, 3), show=True, seperate=False, start_idx=0, _range=[0,0])
-        # plot_testX_timeseries(df_data2.iloc[:,2].to_numpy().reshape(df_data2.shape[0],1), feature_names="$zu_1$", title="$zu_1$", figsize=(6, 3), show=True, seperate=False, start_idx=0, _range=[0,0])
-        # plot_testX_timeseries(df_data2.iloc[:,3].to_numpy().reshape(df_data2.shape[0],1), feature_names="$zx_1$", title="$zx_1$", figsize=(6, 3), show=True, seperate=False, start_idx=0, _range=[0,0])
-        # plot_testX_timeseries(df_data2.iloc[:,4].to_numpy().reshape(df_data2.shape[0],1), feature_names="$ewu$", title="$ewu$", figsize=(6, 3), show=True, seperate=False, start_idx=0, _range=[0,0])
-        # plot_testX_timeseries(df_data2.iloc[:,5].to_numpy().reshape(df_data2.shape[0],1), feature_names="$ewx$", title="$ewx$", figsize=(6, 3), show=True, seperate=False, start_idx=0, _range=[0,0])
+        # plot_testX_timeseries(df_data.iloc[:,0].to_numpy().reshape(df_data.shape[0],1), feature_names="$zu_2$", title="$zu_2$", figsize=(6, 3), show=True, seperate=False, start_idx=0, _range=[0,0])
+        # plot_testX_timeseries(df_data.iloc[:,1].to_numpy().reshape(df_data.shape[0],1), feature_names="$zx_2$", title="$zx_2$", figsize=(6, 3), show=True, seperate=False, start_idx=0, _range=[0,0])
+        # plot_testX_timeseries(df_data.iloc[:,2].to_numpy().reshape(df_data.shape[0],1), feature_names="$zu_1$", title="$zu_1$", figsize=(6, 3), show=True, seperate=False, start_idx=0, _range=[0,0])
+        # plot_testX_timeseries(df_data.iloc[:,3].to_numpy().reshape(df_data.shape[0],1), feature_names="$zx_1$", title="$zx_1$", figsize=(6, 3), show=True, seperate=False, start_idx=0, _range=[0,0])
+        # plot_testX_timeseries(df_data.iloc[:,4].to_numpy().reshape(df_data.shape[0],1), feature_names="$ewu$", title="$ewu$", figsize=(6, 3), show=True, seperate=False, start_idx=0, _range=[0,0])
+        # plot_testX_timeseries(df_data.iloc[:,5].to_numpy().reshape(df_data.shape[0],1), feature_names="$ewx$", title="$ewx$", figsize=(6, 3), show=True, seperate=False, start_idx=0, _range=[0,0])
+        # df_origin = (data_nor * data_std) + data_mean
 
         # plot_testX_timeseries(z_recovered, feature_names="$\Delta{U}$", title="$\Delta{U}$", figsize=(6, 3), show=True, seperate=False, start_idx=0, _range=[0,0])
         # plot_testX_timeseries(x_recovered[:, 0].reshape(x_recovered.shape[0],1), feature_names="$U^{pre1}$", title="$U^{pre1}$", figsize=(6, 3), show=True, seperate=False, start_idx=0, _range=[0,0])
@@ -360,7 +381,7 @@ for label, vehicle_ids in enumerate(test_list):
         df_data, df_data2 = DiagnosisFeature(
             ERRORU, ERRORX, get_true_feature=analyse_ae_output
         )
-        plot_ae_output_distribution(ERRORU, ERRORX, df_data2, do_plot=analyse_ae_output)
+        plot_ae_output_distribution(df_data2, do_plot=analyse_ae_output)
 
         # u_max_idx = find_max_idx_from_array(df_data2.iloc[:,0])[0][0]
         # ci_max_idx = find_max_idx_from_array(CI_array)[0][0]
@@ -415,7 +436,7 @@ for label, vehicle_ids in enumerate(test_list):
             # plot_contrib_percent_stacked(
             #     CI_contrib,
             #     val_array=CI_array,
-            #     save_path=f"{args.models_dir}/results_ci/{VEHICLE_ID}_testing_contrib_top{learning_case}.png",
+            #     save_path=f"{args.models_dir}/{args.models_folder}/results_ci/{VEHICLE_ID}_testing_contrib_top{learning_case}.png",
             #     show=False,
             #     feature_names=title,
             #     top_k=100,
@@ -425,7 +446,7 @@ for label, vehicle_ids in enumerate(test_list):
             # plot_contrib_percent_stacked(
             #     CI_contrib,
             #     val_array=CI_array,
-            #     save_path=f"{args.models_dir}/results_ci/{VEHICLE_ID}_testing_contrib{learning_case}.png",
+            #     save_path=f"{args.models_dir}/{args.models_folder}/results_ci/{VEHICLE_ID}_testing_contrib{learning_case}.png",
             #     show=False,
             #     feature_names=title,
             #     kind="CI",
@@ -443,7 +464,7 @@ for label, vehicle_ids in enumerate(test_list):
                 x_label="Time",
                 y_labels=("T²", "SPE", "CI"),
                 figsize=(12, 10),
-                save_path=f"{args.models_dir}/results/{VEHICLE_ID}_testing_diagnostics_case{learning_case}.png",
+                save_path=f"{args.models_dir}/{args.models_folder}/results/{VEHICLE_ID}_testing_diagnostics_case{learning_case}.png",
                 show=False,
                 x_start=args.x_start,
                 x_tick_step=args.x_tick_step,
@@ -456,6 +477,7 @@ for label, vehicle_ids in enumerate(test_list):
             print(f"Plotting time for vehicle ID={VEHICLE_ID}: {elapsed1:.3f} seconds")
         print("Done")
 
+
 elapsed = time.perf_counter() - start
 h, rem = divmod(elapsed, 3600)
 m, s = divmod(rem, 60)
@@ -463,7 +485,9 @@ print(f"{int(h)}시간 {int(m)}분 {s:.3f}초")
 
 if AUC_ANALYSIS:
     # =================== ROC / AUC ===================
-    roc_save_path = f"{args.models_dir}/results/AUC_ROC{learning_case}.png"
+    roc_save_path = (
+        f"{args.models_dir}/{args.models_folder}/results/AUC_ROC{learning_case}.png"
+    )
     roc = compute_roc_auc_from_threshold_matrix(
         y_true, predict_results, predict_thresholds
     )

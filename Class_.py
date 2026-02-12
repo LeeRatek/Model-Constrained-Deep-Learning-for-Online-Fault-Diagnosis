@@ -2,6 +2,7 @@ from sklearn import preprocessing
 import torch
 import torch.nn as nn
 import torch.optim as optim
+
 # from sklearn.datasets import load_boston
 from sklearn import metrics
 from sklearn.model_selection import train_test_split
@@ -12,7 +13,12 @@ from torch.utils.data import DataLoader
 import torch.nn.functional as F
 from torch import nn
 from torchvision import transforms as tfs
-from Function_ import CustomSigmoidFunc, plot_distribution_with_stats, plot_testX_timeseries
+from Function_ import (
+    CustomSigmoidFunc,
+    plot_distribution_with_stats,
+    plot_testX_timeseries,
+)
+
 
 class MyDataset(Dataset):
     def __init__(self, data, target):
@@ -27,7 +33,10 @@ class MyDataset(Dataset):
     def __len__(self):
         return len(self.data)
 
+
 INPUT_SIZE = 7  # rnn input size
+
+
 class LSTM(nn.Module):
     def __init__(self):
         super(LSTM, self).__init__()
@@ -36,31 +45,45 @@ class LSTM(nn.Module):
             hidden_size=18,  # rnn hidden unit
             num_layers=1,  # number of rnn layer
             batch_first=True,  # input & output will has batch size as 1s dimension. e.g. (batch, time_step, input_size)
-            bidirectional=True
+            bidirectional=True,
         )
-        self.out = nn.Linear(36, 2) # Bi-directional LSTM 이기 때문에, 최종 추론에는 순방향 18 hidden node 그리고 역방향 18 hidden node 가중치를 모두 포함.
+        self.out = nn.Linear(
+            36, 2
+        )  # Bi-directional LSTM 이기 때문에, 최종 추론에는 순방향 18 hidden node 그리고 역방향 18 hidden node 가중치를 모두 포함.
+
     def forward(self, x):
-        r_out, (hidden_state1, hidden_state2) = self.lstm(x, None) 
-        outs = []  
-        for time_step in range(r_out.size(1)):  
+        r_out, (hidden_state1, hidden_state2) = self.lstm(x, None)
+        outs = []
+        for time_step in range(r_out.size(1)):
             outs.append(self.out(r_out[:, time_step, :]))
         return torch.stack(outs, dim=1)
-    
-class Dataset(Dataset): 
+
+
+class Dataset(Dataset):
     def __init__(self, x, y, z, q, w):
         self.x = torch.from_numpy(x).to(torch.double)
         self.y = torch.from_numpy(y).to(torch.double)
         self.z = torch.from_numpy(z).to(torch.double)
         self.q = torch.from_numpy(q).to(torch.double)
         self.w = torch.from_numpy(w).to(torch.double)
+
     def __len__(self):
         return len(self.x)
-    def __getitem__(self, idx):  
+
+    def __getitem__(self, idx):
         return self.x[idx], self.y[idx], self.z[idx], self.q[idx], self.w[idx]
-    
+
 
 class CombinedAE(nn.Module):
-    def __init__(self, input_size, encode2_input_size, output_size, use_dx_in_forward: bool=True, add_one_output_layer: bool=False, activation_fn: CustomSigmoidFunc=None):
+    def __init__(
+        self,
+        input_size,
+        encode2_input_size,
+        output_size,
+        use_dx_in_forward: bool = True,
+        add_one_output_layer: bool = False,
+        activation_fn: CustomSigmoidFunc = None,
+    ):
         super(CombinedAE, self).__init__()
         self.fc1 = nn.Linear(input_size, 1)
         self.fc2 = nn.Linear(encode2_input_size, 1)
@@ -83,7 +106,7 @@ class CombinedAE(nn.Module):
     def forward(self, x, dx, q, y=None):
         if not self.use_dx_in_forward:
             dx = dx * 0.0
-        
+
         z = self.encode(x) + self.encode2(q) + dx
         if self.add_one_output_layer:
             z = self.fc4(z)
@@ -126,15 +149,87 @@ class CombinedAE(nn.Module):
         """
 
         if not combine:
-            plot_testX_timeseries(x, feature_names="Kalman prediction", title="Kalman prediction", figsize=figsize, show=show, seperate=False, start_idx=0, _range=[0,0])
-            plot_testX_timeseries(x, feature_names="LSTM prediction", title="LSTM prediction", figsize=figsize, show=show, seperate=False, start_idx=0, _range=[1,1])
-            plot_testX_timeseries(self.encode2(q), feature_names="Encode vechile information", title="Encode vechile information", figsize=figsize, show=show, seperate=False, start_idx=0, _range=[0,0])
-            plot_testX_timeseries(self.encode(x), feature_names="Encode Kalman + LSTM prediction", title="Encode Kalman + LSTM prediction", figsize=figsize, show=show, seperate=False, start_idx=0, _range=[0,0])
-            plot_testX_timeseries(self.encode(x) + self.encode2(q), feature_names="Sum of all system information", title="Sum of all system information", figsize=figsize, show=show, seperate=False, start_idx=0, _range=[0,0])
-            plot_testX_timeseries(self.encode(x) + self.encode2(q) + dx, feature_names=f"Latent information of {cell_idx+1}th cell", title=f"Latent information of {cell_idx+1}th cell", figsize=figsize, show=show, seperate=False, start_idx=0, _range=[cell_idx,cell_idx])
-            plot_testX_timeseries(re, feature_names=f"Decoder's output of {cell_idx+1}th cell", title=f"Decoder's output of {cell_idx+1}th cell", figsize=figsize, show=show, seperate=False, start_idx=0, _range=[cell_idx,cell_idx])
+            plot_testX_timeseries(
+                x,
+                feature_names="Kalman prediction",
+                title="Kalman prediction",
+                figsize=figsize,
+                show=show,
+                seperate=False,
+                start_idx=0,
+                _range=[0, 0],
+            )
+            plot_testX_timeseries(
+                x,
+                feature_names="LSTM prediction",
+                title="LSTM prediction",
+                figsize=figsize,
+                show=show,
+                seperate=False,
+                start_idx=0,
+                _range=[1, 1],
+            )
+            plot_testX_timeseries(
+                self.encode2(q),
+                feature_names="Encode vechile information",
+                title="Encode vechile information",
+                figsize=figsize,
+                show=show,
+                seperate=False,
+                start_idx=0,
+                _range=[0, 0],
+            )
+            plot_testX_timeseries(
+                self.encode(x),
+                feature_names="Encode Kalman + LSTM prediction",
+                title="Encode Kalman + LSTM prediction",
+                figsize=figsize,
+                show=show,
+                seperate=False,
+                start_idx=0,
+                _range=[0, 0],
+            )
+            plot_testX_timeseries(
+                self.encode(x) + self.encode2(q),
+                feature_names="Sum of all system information",
+                title="Sum of all system information",
+                figsize=figsize,
+                show=show,
+                seperate=False,
+                start_idx=0,
+                _range=[0, 0],
+            )
+            plot_testX_timeseries(
+                self.encode(x) + self.encode2(q) + dx,
+                feature_names=f"Latent information of {cell_idx+1}th cell",
+                title=f"Latent information of {cell_idx+1}th cell",
+                figsize=figsize,
+                show=show,
+                seperate=False,
+                start_idx=0,
+                _range=[cell_idx, cell_idx],
+            )
+            plot_testX_timeseries(
+                re,
+                feature_names=f"Decoder's output of {cell_idx+1}th cell",
+                title=f"Decoder's output of {cell_idx+1}th cell",
+                figsize=figsize,
+                show=show,
+                seperate=False,
+                start_idx=0,
+                _range=[cell_idx, cell_idx],
+            )
             if y is not None:
-                plot_testX_timeseries(y, feature_names=f"True value of {cell_idx+1}th cell", title=f"True value of {cell_idx+1}th cell", figsize=figsize, show=show, seperate=False, start_idx=0, _range=[cell_idx,cell_idx])
+                plot_testX_timeseries(
+                    y,
+                    feature_names=f"True value of {cell_idx+1}th cell",
+                    title=f"True value of {cell_idx+1}th cell",
+                    figsize=figsize,
+                    show=show,
+                    seperate=False,
+                    start_idx=0,
+                    _range=[cell_idx, cell_idx],
+                )
             return
 
         # combine=True: 하나의 figure에 7개 서브플롯로 묶기 (layout/ncols 지원)
@@ -150,23 +245,35 @@ class CombinedAE(nn.Module):
             (self.encode2(q), "Encode vechile information", [0, 0]),
             (self.encode(x), "Encode Kalman + LSTM prediction", [0, 0]),
             (self.encode(x) + self.encode2(q), "Sum of all system information", [0, 0]),
-            (self.encode(x) + self.encode2(q) + dx, f"Latent information of {cell_idx+1}th cell", [cell_idx, cell_idx]),
+            (
+                self.encode(x) + self.encode2(q) + dx,
+                f"Latent information of {cell_idx+1}th cell",
+                [cell_idx, cell_idx],
+            ),
             (re, f"Decoder's output of {cell_idx+1}th cell", [cell_idx, cell_idx]),
         ]
-        items += [] if y is None else [(y, f"True value of {cell_idx+1}th cell", [cell_idx, cell_idx])]
+        items += (
+            []
+            if y is None
+            else [(y, f"True value of {cell_idx+1}th cell", [cell_idx, cell_idx])]
+        )
 
         nplots = len(items)
         if layout is not None:
             nrows, ncols2 = int(layout[0]), int(layout[1])
             if nrows < 1 or ncols2 < 1:
-                raise ValueError(f"layout은 양의 정수 (rows, cols) 여야 합니다: {layout}")
+                raise ValueError(
+                    f"layout은 양의 정수 (rows, cols) 여야 합니다: {layout}"
+                )
         else:
             ncols2 = int(ncols) if ncols is not None else 1
             if ncols2 < 1:
                 ncols2 = 1
             nrows = int(math.ceil(nplots / ncols2))
 
-        fig, axes = plt.subplots(nrows, ncols2, figsize=(w * ncols2, h * nrows), sharex=True)
+        fig, axes = plt.subplots(
+            nrows, ncols2, figsize=(w * ncols2, h * nrows), sharex=True
+        )
 
         axes_arr = np.asarray(axes)
         if axes_arr.ndim == 0:
@@ -244,7 +351,9 @@ class CombinedAE(nn.Module):
         elif fill_l in ("spiral", "spiral_down_right", "spiral-down-right"):
             positions = _spiral_positions(nrows, ncols2)
         else:
-            raise ValueError(f"지원하지 않는 fill 옵션입니다: {fill} (row|col|outside_in_columns|spiral)")
+            raise ValueError(
+                f"지원하지 않는 fill 옵션입니다: {fill} (row|col|outside_in_columns|spiral)"
+            )
 
         for i, (arr, t, r) in enumerate(items):
             plot_testX_timeseries(
@@ -260,8 +369,8 @@ class CombinedAE(nn.Module):
             )
 
         # 남는 축은 숨김 (fill 순서에 따라 "빈 칸" 위치가 달라짐)
-        used = set(positions[:len(items)])
-        for (r, c) in positions:
+        used = set(positions[: len(items)])
+        for r, c in positions:
             if (r, c) not in used:
                 axes_arr[r, c].set_visible(False)
 
@@ -273,7 +382,7 @@ class CombinedAE(nn.Module):
             plt.show()
         else:
             plt.close(fig)
-    
+
 
 class RMSELoss(nn.Module):
     def __init__(self):

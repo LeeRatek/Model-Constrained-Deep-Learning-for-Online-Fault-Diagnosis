@@ -195,7 +195,7 @@ for i in train_list:
     )
 
     # ----------------------------------------Preprocessing ------------------------------#
-    tensor, tensorx = preprocess_combined_tensor(
+    tensor, tensorx = preprocess_loaded_tensor(
         tensor,
         tensorx,
         dim_dict,
@@ -247,7 +247,7 @@ for i in validate_list:
     v_tensorx = safe_load(
         f"{args.source_data_dir}/{BATTERY_TYPE}/{i}/vin_3.pkl", verbose=False
     )
-    v_tensor, v_tensorx = preprocess_combined_tensor(
+    v_tensor, v_tensorx = preprocess_loaded_tensor(
         v_tensor,
         v_tensorx,
         dim_dict,

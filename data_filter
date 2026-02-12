@@ -71,7 +71,7 @@ for i in range(0, max_idx + 1):
     # )
     # current = pd.DataFrame(tensor[:, dim_dict["x"] + dim_dict["y"] + dim_dict["z"] + 2])
 
-    tensor, tensorx = preprocess_combined_tensor(
+    tensor, tensorx = preprocess_loaded_tensor(
         tensor, tensorx, dim_dict, BATTERY_TYPE, PREPROCESSING, SKIP_CHARGE_READY
     )
     # if is_abnormal(tensor):

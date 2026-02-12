@@ -8,6 +8,7 @@ import pandas as pd
 import matplotlib.ticker as mtick
 import os
 import json
+from types import SimpleNamespace
 
 # import warnings
 from pyparsing import Any
@@ -2358,26 +2359,26 @@ def _coerce_sim_config_value(raw: str):
 
 
 def read_values_from_sim_config(
-    models_dir: str, names_to_find, *, strict: bool = True
-) -> dict:
-    """models_dir/sim_config.txt에서 특정 키들의 값을 읽어 dict로 반환.
+    models_dir: str,
+    names_to_find=None,
+    *,
+    strict: bool = True,
+    exclude_keys: list | str | None = None,
+) -> SimpleNamespace:
+    """models_dir/sim_config.txt에서 특정 키들의 값을 읽어 SimpleNamespace로 반환.
 
     Args:
         models_dir: sim_config.txt가 있는 디렉터리 (예: ./models/260203_163103)
-        names_to_find: 찾을 키 이름(문자열) 또는 키 이름 리스트/튜플
-        strict: True면 누락된 키가 있을 때 예외 발생, False면 누락 키는 None으로 반환
+        names_to_find: 찾을 키 이름(문자열) 또는 키 이름 리스트/튜플. None이면 파일 내 모든 키를 반환.
+        strict: True면 누락된 키가 있을 때 예외 발생, False면 누락 키는 None으로 반환 (names_to_find가 None이면 무시됨)
+        exclude_keys: 결과에서 제외할 키 이름(문자열) 또는 리스트.
 
     Returns:
-        dict[str, Any]: {key: value}
+        SimpleNamespace: obj.key 형태로 접근 가능
         value는 bool/int/float/list/dict literal 등을 가능한 범위에서 자동 변환합니다.
     """
     sim_path = Path(models_dir) / "sim_config.txt"
     text = sim_path.read_text(encoding="utf-8")
-
-    if isinstance(names_to_find, (str, bytes)):
-        keys = [names_to_find]
-    else:
-        keys = list(names_to_find)
 
     # sim_config.txt는 보통 "key : value" 형태로 정렬되어 출력됨
     parsed = {}
@@ -2395,12 +2396,35 @@ def read_values_from_sim_config(
         if k:
             parsed[k] = v
 
+    # 제외할 키 처리
+    if exclude_keys is None:
+        exclude_set = set()
+    elif isinstance(exclude_keys, str):
+        exclude_set = {exclude_keys}
+    else:
+        exclude_set = set(exclude_keys)
+
     out = {}
-    missing = []
+
+    if names_to_find is None:
+        # 모든 키 반환 모드
+        keys = list(parsed.keys())
+        missing = []  # 모든 키를 가져오므로 missing은 없음
+    else:
+        # 특정 키 반환 모드
+        if isinstance(names_to_find, (str, bytes)):
+            keys = [names_to_find]
+        else:
+            keys = list(names_to_find)
+        missing = []
+
     for k in keys:
+        if k in exclude_set:
+            continue
         if k in parsed:
             out[k] = _coerce_sim_config_value(parsed[k])
-        else:
+        elif names_to_find is not None:
+            # names_to_find가 명시되었는데 키가 없는 경우에만 처리
             missing.append(k)
             out[k] = None
 
@@ -2408,7 +2432,7 @@ def read_values_from_sim_config(
         raise ValueError(
             f"sim_config.txt에서 키를 찾지 못했습니다: {missing} (file={sim_path})"
         )
-    return out
+    return SimpleNamespace(**out)
 
 
 def get_preprocessing_and_skip_charge_ready(learning_case: int):
@@ -2474,7 +2498,7 @@ def get_input_dimensions(BATTERY_TYPE: str):
     return dim_dict
 
 
-def preprocess_combined_tensor(
+def preprocess_loaded_tensor(
     tensor,
     tensorx,
     dim_dict,
@@ -2526,7 +2550,7 @@ def preprocess_combined_tensor(
         tensorx[:, soc_idx_x] = tensorx[:, soc_idx_x] / 100.0
         tensorx[:, soc_idx_x + 1] = tensorx[:, soc_idx_x + 1] / 100.0  # velocity
 
-        return tensor, tensorx
+        return tensor.double(), tensorx.double()
 
     if BATTERY_TYPE == "QAS":
         tensorx[:, dim_dict["x2"] + dim_dict["y2"] + dim_dict["z2"] + 2] = 0
@@ -2592,28 +2616,28 @@ def preprocess_combined_tensor(
 
 
 def plot_ae_output_distribution(
-    ERRORU, ERRORX, df_data, save_path=None, show=True, normal_fit=True, do_plot=False
+    df_data, save_path=None, show=True, normal_fit=True, do_plot=False
 ):
     if not do_plot:
         return
-    plot_distribution_with_stats(
-        ERRORU,
-        bins=60,
-        kde=True,
-        normal_fit=normal_fit,
-        title="Cell voltage sample Distribution",
-        save_path=save_path,
-        show=show,
-    )
-    plot_distribution_with_stats(
-        ERRORX,
-        bins=60,
-        kde=True,
-        normal_fit=normal_fit,
-        title="Cell SoC sample Distribution",
-        save_path=save_path,
-        show=show,
-    )
+    # plot_distribution_with_stats(
+    #     ERRORU,
+    #     bins=60,
+    #     kde=True,
+    #     normal_fit=normal_fit,
+    #     title="Cell voltage sample Distribution",
+    #     save_path=save_path,
+    #     show=show,
+    # )
+    # plot_distribution_with_stats(
+    #     ERRORX,
+    #     bins=60,
+    #     kde=True,
+    #     normal_fit=normal_fit,
+    #     title="Cell SoC sample Distribution",
+    #     save_path=save_path,
+    #     show=show,
+    # )
     plot_distribution_with_stats(
         np.array(df_data.iloc[:, 0]),
         bins=60,
@@ -3374,3 +3398,28 @@ def plot_tsne_before_after_ci(
         plt.show()
 
     return fig, axes
+
+
+def get_rmse_stats_from_error(error_array):
+    """
+    error_array: (Sample_Size, Features) 형태의 2차원 배열 권장
+    """
+    # 1. 제곱 (Square)
+    squared_errors = error_array**2
+
+    # 2. 각 샘플마다의 평균 (Mean) -> 각 샘플의 MSE가 됨
+    # 배열이 1차원이면 그냥 전체 RMSE 하나만 나옵니다.
+    if error_array.ndim > 1:
+        # 다차원일 경우, 마지막 차원(특징 차원)에 대해 평균을 냄
+        sample_mse = np.mean(squared_errors, axis=1)
+    else:
+        sample_mse = squared_errors
+
+    # 3. 제곱근 (Root) -> 각 샘플의 RMSE
+    sample_rmse = np.sqrt(sample_mse)
+
+    # 4. 통계 산출
+    total_rmse = np.mean(sample_rmse)  # RMSE 평균
+    rmse_std = np.std(sample_rmse)  # RMSE 표준편차
+
+    return total_rmse, rmse_std
