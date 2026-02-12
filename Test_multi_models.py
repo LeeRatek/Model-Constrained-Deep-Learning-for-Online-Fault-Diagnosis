@@ -658,17 +658,30 @@ for u_idx in u_model_indices:
             # Load cached errors
             if cache_strategy == "disk":
                 print("  Loading pre-computed errors from disk...")
+                start_1 = time.perf_counter()
                 ERRORU = np.load(u_error_files[u_idx])
                 ERRORX = np.load(x_error_files[x_idx])
+                elapsed_1 = time.perf_counter() - start_1
+                h, rem = divmod(elapsed_1, 3600)
+                m, s = divmod(rem, 60)
+                print(
+                    f"Load data {test_idx}/{total_test_vehicles} | Elapsed: {int(h)}h {int(m)}m {s:.1f}s"
+                )
             else:
                 print("  Using pre-computed errors from memory...")
                 ERRORU = u_error_cache[u_idx]
                 ERRORX = x_error_cache[x_idx]
 
             # Run only the PCA calculation part (fast) using pre-calculated errors
+            start_2 = time.perf_counter()
             df_data, _ = DiagnosisFeature(ERRORU, ERRORX)
             loads = Custom_PCA(df_data, 0.99, 0.99)
-
+            elapsed_2 = time.perf_counter() - start_2
+            h, rem = divmod(elapsed_2, 3600)
+            m, s = divmod(rem, 60)
+            print(
+                f"Load data {test_idx}/{total_test_vehicles} | Elapsed: {int(h)}h {int(m)}m {s:.1f}s"
+            )
             # Explicitly delete temporary df_data to save memory
             del df_data, ERRORU, ERRORX
 
