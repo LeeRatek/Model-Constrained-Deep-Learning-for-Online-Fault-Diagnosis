@@ -67,6 +67,24 @@ parser.add_argument(
     default="auto",
     help="X model indices: 'auto' to scan artifact folder, comma-separated for manual (e.g., '130,140,150'), or '-1' for saved PCA",
 )
+parser.add_argument(
+    "--inference-batch-size",
+    type=int,
+    default=65536,
+    help="Batch size for model inference in train_pca_only (default: 65536, optimized for large datasets)",
+)
+parser.add_argument(
+    "--cache-strategy",
+    type=str,
+    default="disk",
+    choices=["memory", "disk"],
+    help="Caching strategy for training errors: 'memory' (faster, high RAM usage) or 'disk' (slower, saves RAM). Default: 'disk'",
+)
+parser.add_argument(
+    "--resume",
+    action="store_true",
+    help="Resume from previous run. If true, attempts to reuse error files in temp_cache and skips already computed combinations in CSV.",
+)
 args = parser.parse_args()
 
 
@@ -101,6 +119,95 @@ def scan_model_indices(artifact_dir, model_prefix):
             # Skip net.pth (idx=-1)
 
     return sorted(set(indices))  # Remove duplicates and sort
+
+
+def run_model_inference(
+    model,
+    combined_tensor,
+    dim_dict,
+    batch_size,
+    device,
+    is_x_model=False,
+    use_abs_err=True,
+):
+    """
+    Run inference on combined tensor and return error matrix.
+    Optimized to avoid repeated data loading/slicing in multi-model tests.
+    """
+    # Helper to slice tensor based on model type
+    if is_x_model:
+        x_recovered = combined_tensor[:, : dim_dict["x2"]]
+        y_recovered = combined_tensor[
+            :, dim_dict["x2"] : dim_dict["x2"] + dim_dict["y2"]
+        ]
+        z_recovered = combined_tensor[
+            :,
+            dim_dict["x2"]
+            + dim_dict["y2"] : dim_dict["x2"]
+            + dim_dict["y2"]
+            + dim_dict["z2"],
+        ]
+        q_recovered = combined_tensor[
+            :, dim_dict["x2"] + dim_dict["y2"] + dim_dict["z2"] :
+        ]
+    else:
+        x_recovered = combined_tensor[:, : dim_dict["x"]]
+        y_recovered = combined_tensor[:, dim_dict["x"] : dim_dict["x"] + dim_dict["y"]]
+        z_recovered = combined_tensor[
+            :,
+            dim_dict["x"]
+            + dim_dict["y"] : dim_dict["x"]
+            + dim_dict["y"]
+            + dim_dict["z"],
+        ]
+        q_recovered = combined_tensor[
+            :, dim_dict["x"] + dim_dict["y"] + dim_dict["z"] :
+        ]
+
+    # Move to GPU/CPU efficiently based on device type
+    is_gpu = device.type == "cuda"
+
+    if is_gpu:
+        x_recovered = x_recovered.double().to(device, non_blocking=True)
+        z_recovered = z_recovered.double().to(device, non_blocking=True)
+        q_recovered = q_recovered.double().to(device, non_blocking=True)
+        y_recovered_device = y_recovered.double().to(device, non_blocking=True)
+    else:
+        x_recovered = x_recovered.double()
+        z_recovered = z_recovered.double()
+        q_recovered = q_recovered.double()
+        y_recovered_device = y_recovered.double()
+
+    num_samples = x_recovered.shape[0]
+    error_list = []
+
+    with torch.inference_mode():
+        for start_idx in range(0, num_samples, batch_size):
+            end_idx = min(start_idx + batch_size, num_samples)
+
+            x_batch = x_recovered[start_idx:end_idx]
+            z_batch = z_recovered[start_idx:end_idx]
+            q_batch = q_recovered[start_idx:end_idx]
+            y_batch = y_recovered_device[start_idx:end_idx]
+
+            recon, _ = model(x_batch, z_batch, q_batch)
+
+            if use_abs_err:
+                error_batch = torch.abs(recon - y_batch)
+            else:
+                error_batch = recon - y_batch
+
+            error_list.append(
+                error_batch.cpu().numpy() if is_gpu else error_batch.numpy()
+            )
+            del recon, error_batch
+
+    # Free memory
+    del x_recovered, z_recovered, q_recovered, y_recovered_device
+    if is_gpu:
+        torch.cuda.empty_cache()
+
+    return np.concatenate(error_list, axis=0)
 
 
 # Parse model indices
@@ -207,6 +314,36 @@ predict_thresholds = np.asarray(list(predict_threshold_array), dtype=float)
 # Store results for all model combinations
 all_roc_results = []
 
+# Define CSV path for incremental saving
+csv_path = f"{args.models_dir}/{args.models_idx}/AUC_summary_case{learning_case}.csv"
+
+completed_combinations = set()
+
+# Initialize completed combinations set if resuming
+if args.resume and os.path.exists(csv_path):
+    print(f"Resuming mode enabled. Checking cached results in {csv_path}...")
+    try:
+        existing_df = pd.read_csv(csv_path)
+        # Check if columns exist
+        if (
+            "u_model_idx" in existing_df.columns
+            and "x_model_idx" in existing_df.columns
+        ):
+            for _, row in existing_df.iterrows():
+                completed_combinations.add(
+                    (int(row["u_model_idx"]), int(row["x_model_idx"]))
+                )
+        print(
+            f"  Found {len(completed_combinations)} already computed combinations. These will be skipped."
+        )
+    except Exception as e:
+        print(f"Warning: Could not read existing CSV for resume: {e}")
+
+# Clear existing CSV file if it exists to start fresh (ONLY if not resuming)
+if not args.resume and os.path.exists(csv_path):
+    os.remove(csv_path)
+    print(f"Removed previous AUC summary file: {csv_path}")
+
 # Pre-load all models to avoid repeated loading
 print("\nPre-loading all models...")
 models_u = {}
@@ -234,6 +371,7 @@ for u_idx in u_model_indices:
         map_location=device,
     )
     net_loaded.load_state_dict(net_state_dict)
+    # Revert to double for precision accuracy (AUC integrity)
     net_loaded.double().eval()
     models_u[u_idx] = net_loaded
     del net_state_dict  # Free memory
@@ -257,10 +395,12 @@ for x_idx in x_model_indices:
         map_location=device,
     )
     netx_loaded.load_state_dict(netx_state_dict)
+    # Revert to double for precision accuracy
     netx_loaded.double().eval()
     models_x[x_idx] = netx_loaded
     del netx_state_dict  # Free memory
     print(f"  Loaded X model: {x_model_idx}")
+
 
 print(
     f"All models loaded successfully. Total: {len(models_u)} U models, {len(models_x)} X models\n"
@@ -316,14 +456,17 @@ for i in train_list:
     combined_tensorx_list.append(tensorx)
 
 if len(combined_tensor_list) > 0:
-    combined_tensor_train = torch.cat(combined_tensor_list, dim=0)
-    combined_tensorx_train = torch.cat(combined_tensorx_list, dim=0)
+    # Revert to Double (Float64) for precision accuracy
+    combined_tensor_train = torch.cat(combined_tensor_list, dim=0).double()
+    combined_tensorx_train = torch.cat(combined_tensorx_list, dim=0).double()
     del combined_tensor_list, combined_tensorx_list
 else:
     combined_tensor_train = torch.empty(0)
     combined_tensorx_train = torch.empty(0)
 
-print(f"Training data loaded: {combined_tensor_train.shape[0]} samples\n")
+print(
+    f"Training data loaded: {combined_tensor_train.shape[0]} samples (Double precision)\n"
+)
 
 # Pre-load all test data once to avoid repeated loading
 print("Pre-loading test data...")
@@ -363,9 +506,131 @@ for label, vehicle_ids in enumerate(test_list):
 
 print(f"Test data loaded: {len(test_data_cache)} vehicles\n")
 
+# Initialize caches for training errors to avoid redundant computations
+import tempfile
+import shutil
+
+# Caching Strategy Setup
+cache_strategy = args.cache_strategy
+temp_cache_dir = None
+u_error_cache = {}  # Used for direct memory storage
+x_error_cache = {}
+u_error_files = {}  # Used for disk storage paths
+x_error_files = {}
+
+if cache_strategy == "disk":
+    # Create a fixed temporary directory for disk caching (easier manual cleanup)
+    temp_cache_dir = os.path.join(f"{args.models_dir}/{args.models_idx}", "temp_cache")
+
+    # Clean up previous cache if it exists (e.g. from a crashed run), unless resuming
+    if os.path.exists(temp_cache_dir) and not args.resume:
+        try:
+            shutil.rmtree(temp_cache_dir)
+            print(f"Cleared stale cache directory: {temp_cache_dir}")
+        except OSError as e:
+            print(f"Warning: Could not clear old cache directory {temp_cache_dir}: {e}")
+
+    os.makedirs(temp_cache_dir, exist_ok=True)
+    if args.resume:
+        print(
+            f"Using DISK cache for training errors at: {temp_cache_dir} (Resuming mode)"
+        )
+    else:
+        print(f"Using DISK cache for training errors at: {temp_cache_dir}")
+else:
+    print("Using MEMORY cache for training errors (High RAM usage)")
+
+# Use abs error based on vals (sim_config)
+use_abs_err = not vals.no_abs_err if hasattr(vals, "no_abs_err") else True
+inference_batch_size = args.inference_batch_size
+
+# Phase 1: Compute ALL U errors
+print(f"\nPhase 1: Computing and caching U errors to {cache_strategy}...")
+for u_idx in u_model_indices:
+    if u_idx != -1:
+        # Check for existing cache if resuming
+        if cache_strategy == "disk" and args.resume:
+            fpath = os.path.join(temp_cache_dir, f"error_u_{u_idx}.npy")
+            if os.path.exists(fpath):
+                print(
+                    f"  [Resume] Found cached U error for model {u_idx}, skipping computation."
+                )
+                u_error_files[u_idx] = fpath
+                continue
+
+        print(f"  Computing training error for U model {u_idx}...")
+        error_u = run_model_inference(
+            models_u[u_idx],
+            combined_tensor_train,
+            dim_dict,
+            inference_batch_size,
+            device,
+            is_x_model=False,
+            use_abs_err=use_abs_err,
+        )
+
+        if cache_strategy == "disk":
+            # Save to disk
+            fpath = os.path.join(temp_cache_dir, f"error_u_{u_idx}.npy")
+            np.save(fpath, error_u)
+            u_error_files[u_idx] = fpath
+            # Free memory
+            del error_u
+        else:
+            # Keep in memory
+            u_error_cache[u_idx] = error_u
+
+# Phase 2: Compute ALL X errors
+print(f"\nPhase 2: Computing and caching X errors to {cache_strategy}...")
+for x_idx in x_model_indices:
+    if x_idx != -1:
+        # Check for existing cache if resuming
+        if cache_strategy == "disk" and args.resume:
+            fpath = os.path.join(temp_cache_dir, f"error_x_{x_idx}.npy")
+            if os.path.exists(fpath):
+                print(
+                    f"  [Resume] Found cached X error for model {x_idx}, skipping computation."
+                )
+                x_error_files[x_idx] = fpath
+                continue
+
+        print(f"  Computing training error for X model {x_idx}...")
+        error_x = run_model_inference(
+            models_x[x_idx],
+            combined_tensorx_train,
+            dim_dict,
+            inference_batch_size,
+            device,
+            is_x_model=True,
+            use_abs_err=use_abs_err,
+        )
+
+        if cache_strategy == "disk":
+            # Save to disk
+            fpath = os.path.join(temp_cache_dir, f"error_x_{x_idx}.npy")
+            np.save(fpath, error_x)
+            x_error_files[x_idx] = fpath
+            # Free memory
+            del error_x
+        else:
+            # Keep in memory
+            x_error_cache[x_idx] = error_x
+
+# Critical: Release original training data to free up RAM before PCA loop
+print("Releasing training data from memory...")
+del combined_tensor_train, combined_tensorx_train
+if torch.cuda.is_available():
+    torch.cuda.empty_cache()
+
 # Iterate over all u_model and x_model combinations
 for u_idx in u_model_indices:
     for x_idx in x_model_indices:
+
+        # SKIP LOGIC for RESUME
+        if (u_idx, x_idx) in completed_combinations:
+            print(f"Skipping cached combination: u={u_idx}, x={x_idx}")
+            continue
+
         print(f"\n{'='*80}")
         print(f"Testing model combination: u_model_idx={u_idx}, x_model_idx={x_idx}")
         print(f"{'='*80}\n")
@@ -385,19 +650,22 @@ for u_idx in u_model_indices:
                 validate_shapes=False,
             )
         else:
-            # Use pre-loaded models and training data
-            net_for_pca = models_u[u_idx]
-            netx_for_pca = models_x[x_idx]
+            # Load cached errors
+            if cache_strategy == "disk":
+                print("  Loading pre-computed errors from disk...")
+                ERRORU = np.load(u_error_files[u_idx])
+                ERRORX = np.load(x_error_files[x_idx])
+            else:
+                print("  Using pre-computed errors from memory...")
+                ERRORU = u_error_cache[u_idx]
+                ERRORX = x_error_cache[x_idx]
 
-            # Pass pre-loaded training data to avoid reloading
-            loads = train_pca_only(
-                vals,
-                device,
-                save=False,
-                net=net_for_pca,
-                netx=netx_for_pca,
-                preloaded_train_data=(combined_tensor_train, combined_tensorx_train),
-            )
+            # Run only the PCA calculation part (fast) using pre-calculated errors
+            df_data, _ = DiagnosisFeature(ERRORU, ERRORX)
+            loads = Custom_PCA(df_data, 0.99, 0.99)
+
+            # Explicitly delete temporary df_data to save memory
+            del df_data, ERRORU, ERRORX
 
         (
             v_I,
@@ -469,6 +737,17 @@ for u_idx in u_model_indices:
                 q_recovered2 = tensor_x[
                     :, dim_dict["x2"] + dim_dict["y2"] + dim_dict["z2"] :
                 ]
+
+                # Revert inputs to double (Float64) to match Double precision model weights
+                x_recovered = x_recovered.double()
+                y_recovered = y_recovered.double()
+                z_recovered = z_recovered.double()
+                q_recovered = q_recovered.double()
+
+                x_recovered2 = x_recovered2.double()
+                y_recovered2 = y_recovered2.double()
+                z_recovered2 = z_recovered2.double()
+                q_recovered2 = q_recovered2.double()
 
                 with torch.inference_mode():
                     recon_imtest = net_loaded(
@@ -568,6 +847,45 @@ for u_idx in u_model_indices:
                 }
             )
 
+            # =================== Save AUC result immediately to CSV =================== ##
+            auc_record = pd.DataFrame(
+                [
+                    {
+                        "u_model_idx": u_idx,
+                        "x_model_idx": x_idx,
+                        "AUC": roc["auc"],
+                        "best_threshold": opt["best"]["threshold"],
+                        "best_TPR": opt["best"]["tpr"],
+                        "best_FPR": opt["best"]["fpr"],
+                        "closest_01_threshold": opt["closest_to_01"]["threshold"],
+                        "closest_01_TPR": opt["closest_to_01"]["tpr"],
+                        "closest_01_FPR": opt["closest_to_01"]["fpr"],
+                        "closest_01_distance": opt["closest_to_01"]["distance"],
+                    }
+                ]
+            )
+
+            # Append to CSV (write header only for first entry)
+            if not os.path.exists(csv_path):
+                auc_record.to_csv(csv_path, mode="w", header=True, index=False)
+                print(f"AUC result saved to: {csv_path}")
+            else:
+                auc_record.to_csv(csv_path, mode="a", header=False, index=False)
+                print(f"AUC result appended to: {csv_path}")
+
+
+# Cleanup temp files if disk strategy was used
+if cache_strategy == "disk" and temp_cache_dir and os.path.exists(temp_cache_dir):
+    print(f"Cleaning up temporary disk cache: {temp_cache_dir}")
+    shutil.rmtree(temp_cache_dir)
+
+if cache_strategy == "memory":
+    # Clear memory cache explicitly
+    u_error_cache.clear()
+    x_error_cache.clear()
+    del u_error_cache, x_error_cache
+
+
 # =================== Plot all ROC curves on one figure =================== ##
 if AUC_ANALYSIS and len(all_roc_results) > 1:
     print(f"\n{'='*80}")
@@ -614,5 +932,84 @@ if AUC_ANALYSIS and len(all_roc_results) > 1:
             f"{result['u_idx']:<10} {result['x_idx']:<10} {result['auc']:<10.4f} {result['best']['threshold']:<15.6g} {result['best']['tpr']:<10.4f} {result['best']['fpr']:<10.4f}"
         )
     print(f"{'='*80}\n")
+
+    # =================== Create AUC heatmap visualization =================== ##
+    # Read the incrementally saved CSV file for visualization
+    print("Loading AUC results from CSV for heatmap...")
+    auc_df = pd.read_csv(csv_path)
+    print(f"Loaded {len(auc_df)} model combination results\n")
+
+    print("Creating AUC heatmap...")
+
+    # Create pivot table for heatmap
+    pivot_data = auc_df.pivot(index="x_model_idx", columns="u_model_idx", values="AUC")
+
+    # Sort indices for better visualization
+    pivot_data = pivot_data.sort_index(axis=0).sort_index(axis=1)
+
+    # Create heatmap
+    fig, ax = plt.subplots(
+        figsize=(
+            max(10, len(u_model_indices) * 0.8),
+            max(8, len(x_model_indices) * 0.6),
+        )
+    )
+
+    # Use a colormap (viridis is good for AUC values)
+    im = ax.imshow(pivot_data.values, cmap="viridis", aspect="auto", vmin=0.5, vmax=1.0)
+
+    # Set ticks and labels
+    ax.set_xticks(np.arange(len(pivot_data.columns)))
+    ax.set_yticks(np.arange(len(pivot_data.index)))
+    ax.set_xticklabels(pivot_data.columns)
+    ax.set_yticklabels(pivot_data.index)
+
+    # Rotate x labels for better readability
+    plt.setp(ax.get_xticklabels(), rotation=45, ha="right", rotation_mode="anchor")
+
+    # Add colorbar
+    cbar = plt.colorbar(im, ax=ax)
+    cbar.set_label("AUC Score", rotation=270, labelpad=20, fontsize=12)
+
+    # Add text annotations with AUC values
+    for i in range(len(pivot_data.index)):
+        for j in range(len(pivot_data.columns)):
+            if not np.isnan(pivot_data.values[i, j]):
+                text_color = "white" if pivot_data.values[i, j] < 0.75 else "black"
+                text = ax.text(
+                    j,
+                    i,
+                    f"{pivot_data.values[i, j]:.3f}",
+                    ha="center",
+                    va="center",
+                    color=text_color,
+                    fontsize=9,
+                )
+
+    # Labels and title
+    ax.set_xlabel("U Model Index", fontsize=13, fontweight="bold")
+    ax.set_ylabel("X Model Index", fontsize=13, fontweight="bold")
+    ax.set_title(
+        "AUC Heatmap: Model Combination Performance",
+        fontsize=15,
+        fontweight="bold",
+        pad=20,
+    )
+
+    # Grid
+    ax.set_xticks(np.arange(len(pivot_data.columns)) - 0.5, minor=True)
+    ax.set_yticks(np.arange(len(pivot_data.index)) - 0.5, minor=True)
+    ax.grid(which="minor", color="gray", linestyle="-", linewidth=0.5)
+    ax.tick_params(which="minor", size=0)
+
+    plt.tight_layout()
+
+    heatmap_path = (
+        f"{args.models_dir}/{args.models_idx}/AUC_heatmap_case{learning_case}.png"
+    )
+    plt.savefig(heatmap_path, dpi=200, bbox_inches="tight")
+    plt.close()
+
+    print(f"AUC heatmap saved to: {heatmap_path}\n")
 
 print("\n✓ All model combinations tested successfully!")

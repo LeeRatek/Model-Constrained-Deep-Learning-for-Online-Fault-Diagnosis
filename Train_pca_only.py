@@ -15,7 +15,9 @@ import argparse
 from monitering import *
 
 
-def train_pca_only(args, device, save=True, net=None, netx=None, preloaded_train_data=None):
+def train_pca_only(
+    args, device, save=True, net=None, netx=None, preloaded_train_data=None, inference_batch_size=None
+):
     from torch.utils.data import Dataset
 
     if save:
@@ -175,64 +177,107 @@ def train_pca_only(args, device, save=True, net=None, netx=None, preloaded_train
     ]
 
     ## ================= MC-AE inference for voltage reconstruction ================= ##
-    # DataLoader 오버헤드 제거, 직접 배치 처리
-    INFERENCE_BATCH_SIZE = 4096  # 더 큰 배치 사용
+    # Optimize for both CPU and GPU environments
+    # Use provided batch size or default for large datasets
+    if inference_batch_size is None:
+        INFERENCE_BATCH_SIZE = 65536  # Default: optimized for 50GB RAM with 6.3M samples
+    else:
+        INFERENCE_BATCH_SIZE = inference_batch_size
 
-    # y는 추론에 불필요하므로 CPU에 유지
-    x_recovered = x_recovered.double()
-    z_recovered = z_recovered.double()
-    q_recovered = q_recovered.double()
+    # For CPU: Keep data on CPU and use larger batches
+    # For GPU: Move to GPU once to avoid repeated transfers
+    is_gpu = device.type == "cuda"
+
+    if is_gpu:
+        # GPU: Move all data to GPU once
+        x_recovered = x_recovered.double().to(device, non_blocking=True)
+        z_recovered = z_recovered.double().to(device, non_blocking=True)
+        q_recovered = q_recovered.double().to(device, non_blocking=True)
+        y_recovered_device = y_recovered.double().to(device, non_blocking=True)
+    else:
+        # CPU: Convert to double in-place, stay on CPU
+        x_recovered = x_recovered.double()
+        z_recovered = z_recovered.double()
+        q_recovered = q_recovered.double()
+        y_recovered_device = y_recovered.double()
 
     num_samples = x_recovered.shape[0]
-    recon_imtest_list = []
+    ERRORU_list = []
 
     with torch.inference_mode():
         for start_idx in range(0, num_samples, INFERENCE_BATCH_SIZE):
             end_idx = min(start_idx + INFERENCE_BATCH_SIZE, num_samples)
 
-            x_batch = x_recovered[start_idx:end_idx].to(device, non_blocking=True)
-            z_batch = z_recovered[start_idx:end_idx].to(device, non_blocking=True)
-            q_batch = q_recovered[start_idx:end_idx].to(device, non_blocking=True)
+            x_batch = x_recovered[start_idx:end_idx]
+            z_batch = z_recovered[start_idx:end_idx]
+            q_batch = q_recovered[start_idx:end_idx]
+            y_batch = y_recovered_device[start_idx:end_idx]
 
             recon_imtest, _ = net(x_batch, z_batch, q_batch)
-            recon_imtest_list.append(recon_imtest.cpu().numpy())
 
-            # GPU 메모리 즉시 해제
-            del x_batch, z_batch, q_batch, recon_imtest
+            # Compute error directly (on GPU or CPU)
+            if use_abs_err:
+                error_batch = torch.abs(recon_imtest - y_batch)
+            else:
+                error_batch = recon_imtest - y_batch
 
-    AA = np.concatenate(recon_imtest_list, axis=0)
-    del recon_imtest_list
-    yTrainU = y_recovered.cpu().numpy()
-    ERRORU = np.abs(AA - yTrainU) if use_abs_err else AA - yTrainU
-    del AA, yTrainU
+            # For CPU: already on CPU, for GPU: transfer back
+            ERRORU_list.append(
+                error_batch.cpu().numpy() if is_gpu else error_batch.numpy()
+            )
+
+            del recon_imtest, error_batch
+
+    # Free memory
+    del x_recovered, z_recovered, q_recovered, y_recovered, y_recovered_device
+
+    ERRORU = np.concatenate(ERRORU_list, axis=0)
+    del ERRORU_list
 
     ## ================= MC-AE inference for SOC reconstruction ================= ##
-    x_recovered2 = x_recovered2.double()
-    z_recovered2 = z_recovered2.double()
-    q_recovered2 = q_recovered2.double()
+    # Same CPU/GPU optimization
+    if is_gpu:
+        x_recovered2 = x_recovered2.double().to(device, non_blocking=True)
+        z_recovered2 = z_recovered2.double().to(device, non_blocking=True)
+        q_recovered2 = q_recovered2.double().to(device, non_blocking=True)
+        y_recovered2_device = y_recovered2.double().to(device, non_blocking=True)
+    else:
+        x_recovered2 = x_recovered2.double()
+        z_recovered2 = z_recovered2.double()
+        q_recovered2 = q_recovered2.double()
+        y_recovered2_device = y_recovered2.double()
 
     num_samples2 = x_recovered2.shape[0]
-    recon_imtestx_list = []
+    ERRORX_list = []
 
     with torch.inference_mode():
         for start_idx in range(0, num_samples2, INFERENCE_BATCH_SIZE):
             end_idx = min(start_idx + INFERENCE_BATCH_SIZE, num_samples2)
 
-            x_batch = x_recovered2[start_idx:end_idx].to(device, non_blocking=True)
-            z_batch = z_recovered2[start_idx:end_idx].to(device, non_blocking=True)
-            q_batch = q_recovered2[start_idx:end_idx].to(device, non_blocking=True)
+            x_batch = x_recovered2[start_idx:end_idx]
+            z_batch = z_recovered2[start_idx:end_idx]
+            q_batch = q_recovered2[start_idx:end_idx]
+            y_batch = y_recovered2_device[start_idx:end_idx]
 
             recon_imtestx, _ = netx(x_batch, z_batch, q_batch)
-            recon_imtestx_list.append(recon_imtestx.cpu().numpy())
 
-            # GPU 메모리 즉시 해제
-            del x_batch, z_batch, q_batch, recon_imtestx
+            # Compute error
+            if use_abs_err:
+                error_batch = torch.abs(recon_imtestx - y_batch)
+            else:
+                error_batch = recon_imtestx - y_batch
 
-    BB = np.concatenate(recon_imtestx_list, axis=0)
-    del recon_imtestx_list
-    yTrainX = y_recovered2.cpu().numpy()
-    ERRORX = np.abs(BB - yTrainX) if use_abs_err else BB - yTrainX
-    del BB, yTrainX
+            ERRORX_list.append(
+                error_batch.cpu().numpy() if is_gpu else error_batch.numpy()
+            )
+
+            del recon_imtestx, error_batch
+
+    # Free memory
+    del x_recovered2, z_recovered2, q_recovered2, y_recovered2, y_recovered2_device
+
+    ERRORX = np.concatenate(ERRORX_list, axis=0)
+    del ERRORX_list
 
     df_data, _ = DiagnosisFeature(ERRORU, ERRORX)
     results = Custom_PCA(df_data, 0.99, 0.99)
