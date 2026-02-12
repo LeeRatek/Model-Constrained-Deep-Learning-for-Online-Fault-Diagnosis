@@ -29,8 +29,20 @@ parser = argparse.ArgumentParser(
     description="Run diagnostics plotting with CLI options for multiple model combinations"
 )
 
-parser.add_argument("--models-dir", type=str, default="./models")
-parser.add_argument("--models-folder", type=str, default="260211_163108")
+parser.add_argument(
+    "--models-dir",
+    type=str,
+    default=(
+        "./models"
+        if os.environ.get("MODEL_DIR") is None
+        else os.environ.get("MODEL_DIR")
+    ),
+)
+parser.add_argument(
+    "--models-idx",
+    type=str,
+    default="260206_084839",  # 260206_084839 or 260209_105821
+)
 parser.add_argument(
     "--source-data-dir",
     type=str,
@@ -92,7 +104,7 @@ def scan_model_indices(artifact_dir, model_prefix):
 
 
 # Parse model indices
-artifact_dir = f"{args.models_dir}/{args.models_folder}/artifact"
+artifact_dir = f"{args.models_dir}/{args.models_idx}/artifact"
 
 if args.u_model_idx.lower() == "auto":
     print(f"Scanning artifact directory for U models: {artifact_dir}")
@@ -122,10 +134,10 @@ if not u_model_indices or not x_model_indices:
     exit(1)
 
 vals = read_values_from_sim_config(
-    f"{args.models_dir}/{args.models_folder}",
+    f"{args.models_dir}/{args.models_idx}",
     exclude_keys=[
         "models_dir",
-        "models_folder",
+        "models_idx",
         "source_data_dir",
     ],
     strict=False,
@@ -145,7 +157,7 @@ ae_x_scale = vals.ae_x_scale if hasattr(vals, "ae_x_scale") else 1.0
 ae_x_shift = vals.ae_x_shift if hasattr(vals, "ae_x_shift") else 0
 
 # 플롯 결과 저장 폴더는 한 번만 생성
-os.makedirs(f"{args.models_dir}/{args.models_folder}/results", exist_ok=True)
+os.makedirs(f"{args.models_dir}/{args.models_idx}/results", exist_ok=True)
 
 BATTERY_TYPE = vals.battery_type  # 'DTI' or 'QAS'
 PREPROCESSING, SKIP_CHARGE_READY = get_preprocessing_and_skip_charge_ready(
@@ -216,7 +228,7 @@ for u_idx in u_model_indices:
     ).to(device)
     net_state_dict = torch.load(
         os.path.join(
-            f"{args.models_dir}/{args.models_folder}/artifact/",
+            f"{args.models_dir}/{args.models_idx}/artifact/",
             f"{u_model_idx}.pth",
         ),
         map_location=device,
@@ -239,7 +251,7 @@ for x_idx in x_model_indices:
     ).to(device)
     netx_state_dict = torch.load(
         os.path.join(
-            f"{args.models_dir}/{args.models_folder}/artifact/",
+            f"{args.models_dir}/{args.models_idx}/artifact/",
             f"{x_model_idx}.pth",
         ),
         map_location=device,
@@ -368,7 +380,7 @@ for u_idx in u_model_indices:
         start_pca_load = time.perf_counter()
         if u_idx == -1:
             loads = load_pca_results(
-                f"{args.models_dir}/{args.models_folder}",
+                f"{args.models_dir}/{args.models_idx}",
                 load_data_nor=True,
                 validate_shapes=False,
             )
@@ -528,7 +540,7 @@ for u_idx in u_model_indices:
             )
 
             # Save individual ROC curve
-            roc_save_path = f"{args.models_dir}/{args.models_folder}/results/AUC_ROC_u{u_idx}_x{x_idx}_case{learning_case}.png"
+            roc_save_path = f"{args.models_dir}/{args.models_idx}/results/AUC_ROC_u{u_idx}_x{x_idx}_case{learning_case}.png"
             plot_roc_curve(
                 roc["fpr"],
                 roc["tpr"],
@@ -582,7 +594,7 @@ if AUC_ANALYSIS and len(all_roc_results) > 1:
     ax.set_xlim([0.0, 1.0])
     ax.set_ylim([0.0, 1.05])
 
-    combined_roc_path = f"{args.models_dir}/{args.models_folder}/results/AUC_ROC_ALL_COMBINATIONS_case{learning_case}.png"
+    combined_roc_path = f"{args.models_dir}/{args.models_idx}/results/AUC_ROC_ALL_COMBINATIONS_case{learning_case}.png"
     plt.tight_layout()
     plt.savefig(combined_roc_path, dpi=200, bbox_inches="tight")
     plt.close()
