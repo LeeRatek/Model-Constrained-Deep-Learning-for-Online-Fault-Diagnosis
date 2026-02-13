@@ -90,6 +90,11 @@ parser.add_argument(
     action="store_true",
     help="Keep the disk cache files (error matrices) after the simulation finishes. Useful for debugging or subsequent runs with --resume.",
 )
+parser.add_argument(
+    "--use-float32",
+    action="store_true",
+    help="Convert error matrices to float32 (Single Precision) to save memory/disk (approx 50% reduction). Optional optimization.",
+)
 args = parser.parse_args()
 
 
@@ -126,6 +131,62 @@ def scan_model_indices(artifact_dir, model_prefix):
     return sorted(set(indices))  # Remove duplicates and sort
 
 
+def sliding_average_np(s, n: int):
+    a = np.asarray(s, dtype=float).reshape(-1)
+    L = int(a.shape[0])
+    n = int(n)
+    if L == 0:
+        return a
+    if L <= n or n <= 0:
+        return a
+    out = np.empty(L, dtype=float)
+    first_mean = float(np.mean(a[:n]))
+    out[:n] = first_mean
+    c = np.cumsum(a, dtype=float)
+    c = np.concatenate(([0.0], c))
+    window_sums = c[n:] - c[:-n]
+    out[n:] = window_sums[:-1] / n
+    return out
+
+
+def extract_features_from_error(mode, error_matrix):
+    """
+    Extract diagnosis features from error matrix to reduce memory/disk usage.
+    mode: 'u' or 'x'
+    Returns: tuple of (max_diff, Z, Z_smoothed) as pd.Series
+    """
+    arr = np.asarray(error_matrix, dtype=float)
+    eps = 1e-12
+    arr_max = arr.max(axis=1)
+    arr_mean = arr.mean(axis=1)
+    arr_std = np.maximum(arr.std(axis=1), eps)
+
+    Z = ((arr - arr_mean[:, None]) / arr_std[:, None]).max(axis=1)
+
+    if arr.shape[1] >= 2:
+        arr_second = np.partition(arr, -2, axis=1)[:, -2]
+    else:
+        arr_second = arr[:, 0]
+
+    max_diff = (arr_max - arr_second) / arr_std
+
+    # EWM Smoothing (alpha=0.2)
+    s_max = pd.Series(arr_max)
+    Z_smoothed = s_max.ewm(alpha=0.2).mean()
+
+    if mode == "u":
+        # U returns: max_diff, Z, Z_smoothed (No sliding window)
+        return (pd.Series(max_diff), pd.Series(Z), pd.Series(Z_smoothed))
+
+    elif mode == "x":
+        # X returns: max_diff, Z, Z_smoothed (WITH sliding window 100)
+        max_diff_slid = pd.Series(sliding_average_np(max_diff, 100))
+        Z_slid = pd.Series(sliding_average_np(Z, 100))
+        Z_smoothed_slid = pd.Series(sliding_average_np(Z_smoothed.to_numpy(), 100))
+
+        return (max_diff_slid, Z_slid, Z_smoothed_slid)
+
+
 def run_model_inference(
     model,
     combined_tensor,
@@ -134,6 +195,7 @@ def run_model_inference(
     device,
     is_x_model=False,
     use_abs_err=True,
+    use_float32=False,
 ):
     """
     Run inference on combined tensor and return error matrix.
@@ -201,6 +263,10 @@ def run_model_inference(
                 error_batch = torch.abs(recon - y_batch)
             else:
                 error_batch = recon - y_batch
+
+            # Optional optimization: Convert to float32
+            if use_float32:
+                error_batch = error_batch.float()
 
             error_list.append(
                 error_batch.cpu().numpy() if is_gpu else error_batch.numpy()
@@ -277,7 +343,6 @@ PREPROCESSING, SKIP_CHARGE_READY = get_preprocessing_and_skip_charge_ready(
 )
 dim_dict = get_input_dimensions(BATTERY_TYPE)
 AUC_ANALYSIS = True
-analyse_ae_output = False
 
 print_sim_config(
     title="Multi-Model Test Run",
@@ -538,32 +603,36 @@ if cache_strategy == "disk":
     os.makedirs(temp_cache_dir, exist_ok=True)
     if args.resume:
         print(
-            f"Using DISK cache for training errors at: {temp_cache_dir} (Resuming mode)"
+            f"Using DISK cache for training FEATURES (not raw errors) at: {temp_cache_dir} (Resuming mode)"
         )
     else:
-        print(f"Using DISK cache for training errors at: {temp_cache_dir}")
+        print(
+            f"Using DISK cache for training FEATURES (not raw errors) at: {temp_cache_dir}"
+        )
 else:
-    print("Using MEMORY cache for training errors (High RAM usage)")
+    print(
+        "Using MEMORY cache for training FEATURES (not raw errors) (Optimized RAM usage)"
+    )
 
 # Use abs error based on vals (sim_config)
 use_abs_err = not vals.no_abs_err if hasattr(vals, "no_abs_err") else True
 inference_batch_size = args.inference_batch_size
 
-# Phase 1: Compute ALL U errors
-print(f"\nPhase 1: Computing and caching U errors to {cache_strategy}...")
+# Phase 1: Compute and Cache U FEATURES (Extracted from errors)
+print(f"\nPhase 1: Computing and caching U FEATURES to {cache_strategy}...")
 for u_idx in u_model_indices:
     if u_idx != -1:
         # Check for existing cache if resuming
         if cache_strategy == "disk" and args.resume:
-            fpath = os.path.join(temp_cache_dir, f"error_u_{u_idx}.npy")
+            fpath = os.path.join(temp_cache_dir, f"feat_u_{u_idx}.pkl")
             if os.path.exists(fpath):
                 print(
-                    f"  [Resume] Found cached U error for model {u_idx}, skipping computation."
+                    f"  [Resume] Found cached U features for model {u_idx}, skipping computation."
                 )
                 u_error_files[u_idx] = fpath
                 continue
 
-        print(f"  Computing training error for U model {u_idx}...")
+        print(f"  Computing training features for U model {u_idx}...")
         error_u = run_model_inference(
             models_u[u_idx],
             combined_tensor_train,
@@ -572,34 +641,41 @@ for u_idx in u_model_indices:
             device,
             is_x_model=False,
             use_abs_err=use_abs_err,
+            use_float32=args.use_float32,
         )
 
+        # Extract features (small size)
+        feat_u_tuple = extract_features_from_error("u", error_u)
+        del error_u  # Must delete raw error matrix immediately
+
         if cache_strategy == "disk":
-            # Save to disk
-            fpath = os.path.join(temp_cache_dir, f"error_u_{u_idx}.npy")
-            np.save(fpath, error_u)
+            # Save to disk as pickle (pd.Series tuple)
+            fpath = os.path.join(temp_cache_dir, f"feat_u_{u_idx}.pkl")
+            # Use pickle for tuple/series
+            with open(fpath, "wb") as f:
+                import pickle
+
+                pickle.dump(feat_u_tuple, f)
             u_error_files[u_idx] = fpath
-            # Free memory
-            del error_u
         else:
             # Keep in memory
-            u_error_cache[u_idx] = error_u
+            u_error_cache[u_idx] = feat_u_tuple
 
-# Phase 2: Compute ALL X errors
-print(f"\nPhase 2: Computing and caching X errors to {cache_strategy}...")
+# Phase 2: Compute and Cache X FEATURES
+print(f"\nPhase 2: Computing and caching X FEATURES to {cache_strategy}...")
 for x_idx in x_model_indices:
     if x_idx != -1:
         # Check for existing cache if resuming
         if cache_strategy == "disk" and args.resume:
-            fpath = os.path.join(temp_cache_dir, f"error_x_{x_idx}.npy")
+            fpath = os.path.join(temp_cache_dir, f"feat_x_{x_idx}.pkl")
             if os.path.exists(fpath):
                 print(
-                    f"  [Resume] Found cached X error for model {x_idx}, skipping computation."
+                    f"  [Resume] Found cached X features for model {x_idx}, skipping computation."
                 )
                 x_error_files[x_idx] = fpath
                 continue
 
-        print(f"  Computing training error for X model {x_idx}...")
+        print(f"  Computing training features for X model {x_idx}...")
         error_x = run_model_inference(
             models_x[x_idx],
             combined_tensorx_train,
@@ -608,18 +684,24 @@ for x_idx in x_model_indices:
             device,
             is_x_model=True,
             use_abs_err=use_abs_err,
+            use_float32=args.use_float32,
         )
+
+        # Extract features (small size)
+        feat_x_tuple = extract_features_from_error("x", error_x)
+        del error_x  # Must delete raw error matrix immediately
 
         if cache_strategy == "disk":
             # Save to disk
-            fpath = os.path.join(temp_cache_dir, f"error_x_{x_idx}.npy")
-            np.save(fpath, error_x)
+            fpath = os.path.join(temp_cache_dir, f"feat_x_{x_idx}.pkl")
+            with open(fpath, "wb") as f:
+                import pickle
+
+                pickle.dump(feat_x_tuple, f)
             x_error_files[x_idx] = fpath
-            # Free memory
-            del error_x
         else:
             # Keep in memory
-            x_error_cache[x_idx] = error_x
+            x_error_cache[x_idx] = feat_x_tuple
 
 # Critical: Release original training data to free up RAM before PCA loop
 print("Releasing training data from memory...")
@@ -655,35 +737,41 @@ for u_idx in u_model_indices:
                 validate_shapes=False,
             )
         else:
-            # Load cached errors
+            # Load cached features (fast!)
             if cache_strategy == "disk":
-                print("  Loading pre-computed errors from disk...")
-                start_1 = time.perf_counter()
-                ERRORU = np.load(u_error_files[u_idx])
-                ERRORX = np.load(x_error_files[x_idx])
-                elapsed_1 = time.perf_counter() - start_1
-                h, rem = divmod(elapsed_1, 3600)
-                m, s = divmod(rem, 60)
-                print(
-                    f"Load data {test_idx}/{total_test_vehicles} | Elapsed: {int(h)}h {int(m)}m {s:.1f}s"
-                )
-            else:
-                print("  Using pre-computed errors from memory...")
-                ERRORU = u_error_cache[u_idx]
-                ERRORX = x_error_cache[x_idx]
+                import pickle
 
-            # Run only the PCA calculation part (fast) using pre-calculated errors
-            start_2 = time.perf_counter()
-            df_data, _ = DiagnosisFeature(ERRORU, ERRORX)
-            loads = Custom_PCA(df_data, 0.99, 0.99)
-            elapsed_2 = time.perf_counter() - start_2
-            h, rem = divmod(elapsed_2, 3600)
-            m, s = divmod(rem, 60)
-            print(
-                f"Load data {test_idx}/{total_test_vehicles} | Elapsed: {int(h)}h {int(m)}m {s:.1f}s"
+                print("  Loading pre-computed FEATURES from disk...")
+                with open(u_error_files[u_idx], "rb") as f:
+                    u_feat = pickle.load(f)
+                with open(x_error_files[x_idx], "rb") as f:
+                    x_feat = pickle.load(f)
+            else:
+                print("  Using pre-computed FEATURES from memory...")
+                u_feat = u_error_cache[u_idx]
+                x_feat = x_error_cache[x_idx]
+
+            # Construct df_data directly from features
+            # Structure: max_diff_ERRORU, max_diff_ERRORX, Z_U, Z_X, Z_U_smoothed, Z_X_smoothed
+            # u_feat = (max_diff, Z, Z_smoothed)
+            # x_feat = (max_diff_slid, Z_slid, Z_smoothed_slid)
+
+            df_data = pd.concat(
+                [
+                    u_feat[0],  # max_diff_ERRORU
+                    x_feat[0],  # max_diff_ERRORX
+                    u_feat[1],  # Z_U
+                    x_feat[1],  # Z_X
+                    u_feat[2],  # Z_U_smoothed
+                    x_feat[2],  # Z_X_smoothed
+                ],
+                axis=1,
             )
+
+            # Run PCA on features
+            loads = Custom_PCA(df_data, 0.99, 0.99)
             # Explicitly delete temporary df_data to save memory
-            del df_data, ERRORU, ERRORX
+            del df_data, u_feat, x_feat
 
         (
             v_I,
@@ -782,9 +870,7 @@ for u_idx in u_model_indices:
                     # Free GPU tensors immediately
                     del recon_imtest, reconx_imtest
 
-                df_data, df_data2 = DiagnosisFeature(
-                    ERRORU, ERRORX, get_true_feature=analyse_ae_output
-                )
+                df_data, _ = DiagnosisFeature(ERRORU, ERRORX)
 
                 ## =================== Testing Diagnosis =================== ##
                 t2_array, _ = T2_array(df_data, data_mean, data_std, p_k, v_I)
