@@ -3462,8 +3462,27 @@ def draw_auc_heatmap(csv_path, save_path, title_suffix=""):
         )
     )
 
+    # Calculate vmin/vmax based on data to enhance contrast
+    data_values = pivot_data.values
+    valid_values = data_values[~np.isnan(data_values)]
+    
+    if len(valid_values) > 0:
+        val_min = np.min(valid_values)
+        val_max = np.max(valid_values)
+        # Add a tiny padding to avoid single-value issues
+        if val_max == val_min:
+             val_min -= 0.01
+             val_max += 0.01
+        
+        # Use dynamic range instead of fixed 0.5-1.0
+        vmin = val_min
+        vmax = val_max
+    else:
+        vmin = 0.5
+        vmax = 1.0
+
     # Use a colormap (viridis is good for AUC values)
-    im = ax.imshow(pivot_data.values, cmap="viridis", aspect="auto", vmin=0.5, vmax=1.0)
+    im = ax.imshow(pivot_data.values, cmap="viridis", aspect="auto", vmin=vmin, vmax=vmax)
 
     # Set ticks and labels
     ax.set_xticks(np.arange(len(pivot_data.columns)))

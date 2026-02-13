@@ -18,6 +18,8 @@ from monitering import *
 import time
 import re
 from pathlib import Path
+import hashlib
+import json
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
@@ -492,46 +494,94 @@ train_list = (
     else train_list[vehicle_start:]
 )
 
-combined_tensor_list = []
-combined_tensorx_list = []
+# ================= Check Cache for Combined Data ================= #
+normalize_dx_flag = vals.normalize_dx if hasattr(vals, "normalize_dx") else False
 
-count = 0
-for i in train_list:
-    count += 1
-    if count % 10 == 0:
-        print(f"  Processing vehicle {count}/{len(train_list)}")
-    VEHICLE_ID = f"{i}"
+# Generate unique hash for this configuration
+config_dict = {
+    "train_list": train_list,
+    "battery_type": BATTERY_TYPE,
+    "preprocessing": PREPROCESSING,
+    "skip_charge_ready": SKIP_CHARGE_READY,
+    "normalize_dx": normalize_dx_flag,
+}
+config_str = json.dumps(config_dict, sort_keys=True)
+config_hash = hashlib.md5(config_str.encode("utf-8")).hexdigest()
 
-    tensor = safe_load(
-        f"{args.source_data_dir}/{BATTERY_TYPE}/{VEHICLE_ID}/vin_2.pkl",
-        verbose=False,
-    )
-    tensorx = safe_load(
-        f"{args.source_data_dir}/{BATTERY_TYPE}/{VEHICLE_ID}/vin_3.pkl",
-        verbose=False,
-    )
+cache_filename = f"combined_train_data_{BATTERY_TYPE}_{config_hash}.pt"
+cache_path = os.path.join(args.source_data_dir, cache_filename)
 
-    tensor, tensorx = preprocess_loaded_tensor(
-        tensor,
-        tensorx,
-        dim_dict,
-        BATTERY_TYPE,
-        PREPROCESSING,
-        SKIP_CHARGE_READY,
-        normalize_dx=(vals.normalize_dx if hasattr(vals, "normalize_dx") else False),
-    )
+combined_tensor_train = None
+combined_tensorx_train = None
 
-    combined_tensor_list.append(tensor)
-    combined_tensorx_list.append(tensorx)
+if os.path.exists(cache_path):
+    print(f"Found cached training data: {cache_path}")
+    print("Loading...")
+    try:
+        cache_data = torch.load(cache_path)
+        combined_tensor_train = cache_data["tensor"]
+        combined_tensorx_train = cache_data["tensorx"]
+        del cache_data
+        print("Successfully loaded cached training data.")
+    except Exception as e:
+        print(f"Error loading cache: {e}. Will regenerate.")
 
-if len(combined_tensor_list) > 0:
-    # Revert to Double (Float64) for precision accuracy
-    combined_tensor_train = torch.cat(combined_tensor_list, dim=0).double()
-    combined_tensorx_train = torch.cat(combined_tensorx_list, dim=0).double()
-    del combined_tensor_list, combined_tensorx_list
-else:
-    combined_tensor_train = torch.empty(0)
-    combined_tensorx_train = torch.empty(0)
+if combined_tensor_train is None:
+    print("Cache miss or error. Processing raw pickle files...")
+    combined_tensor_list = []
+    combined_tensorx_list = []
+
+    count = 0
+    for i in train_list:
+        count += 1
+        if count % 10 == 0:
+            print(f"  Processing vehicle {count}/{len(train_list)}")
+        VEHICLE_ID = f"{i}"
+
+        tensor = safe_load(
+            f"{args.source_data_dir}/{BATTERY_TYPE}/{VEHICLE_ID}/vin_2.pkl",
+            verbose=False,
+        )
+        tensorx = safe_load(
+            f"{args.source_data_dir}/{BATTERY_TYPE}/{VEHICLE_ID}/vin_3.pkl",
+            verbose=False,
+        )
+
+        tensor, tensorx = preprocess_loaded_tensor(
+            tensor,
+            tensorx,
+            dim_dict,
+            BATTERY_TYPE,
+            PREPROCESSING,
+            SKIP_CHARGE_READY,
+            normalize_dx=normalize_dx_flag,
+        )
+
+        combined_tensor_list.append(tensor)
+        combined_tensorx_list.append(tensorx)
+
+    if len(combined_tensor_list) > 0:
+        # Revert to Double (Float64) for precision accuracy
+        combined_tensor_train = torch.cat(combined_tensor_list, dim=0).double()
+        combined_tensorx_train = torch.cat(combined_tensorx_list, dim=0).double()
+        del combined_tensor_list, combined_tensorx_list
+    else:
+        combined_tensor_train = torch.empty(0)
+        combined_tensorx_train = torch.empty(0)
+
+    # Save to cache
+    print(f"Saving combined training data to cache: {cache_path}")
+    try:
+        torch.save(
+            {
+                "tensor": combined_tensor_train,
+                "tensorx": combined_tensorx_train,
+            },
+            cache_path,
+        )
+        print("Cache saved successfully.")
+    except Exception as e:
+        print(f"Warning: Could not save cache to {cache_path}: {e}")
 
 print(
     f"Training data loaded: {combined_tensor_train.shape[0]} samples (Double precision)\n"
@@ -592,12 +642,12 @@ if cache_strategy == "disk":
     temp_cache_dir = os.path.join(f"{args.models_dir}/{args.models_idx}", "temp_cache")
 
     # Clean up previous cache if it exists (e.g. from a crashed run), unless resuming
-    if os.path.exists(temp_cache_dir) and not args.resume:
-        try:
-            shutil.rmtree(temp_cache_dir)
-            print(f"Cleared stale cache directory: {temp_cache_dir}")
-        except OSError as e:
-            print(f"Warning: Could not clear old cache directory {temp_cache_dir}: {e}")
+    # if os.path.exists(temp_cache_dir) and not args.resume:
+    #     try:
+    #         shutil.rmtree(temp_cache_dir)
+    #         print(f"Cleared stale cache directory: {temp_cache_dir}")
+    #     except OSError as e:
+    #         print(f"Warning: Could not clear old cache directory {temp_cache_dir}: {e}")
 
     os.makedirs(temp_cache_dir, exist_ok=True)
     if args.resume:
