@@ -591,37 +591,74 @@ print(
 print("Pre-loading test data...")
 test_data_cache = {}  # Dictionary to store {vehicle_id: (tensor, tensor_x)}
 
-count = 0
-for label, vehicle_ids in enumerate(test_list):
-    for i in vehicle_ids:
-        count += 1
-        if count % 10 == 0:
-            print(f"  Loading test vehicle {count}/{total_test_vehicles}")
+# ================= Check Cache for Test Data ================= #
+# Create a flat list of test vehicle IDs for hash generation
+flat_test_list = []
+for sublist in test_list:
+    flat_test_list.extend(sublist)
 
-        VEHICLE_ID = f"{i}"
+test_config_dict = {
+    "test_list": flat_test_list,
+    "battery_type": BATTERY_TYPE,
+    "preprocessing": PREPROCESSING,
+    "skip_charge_ready": SKIP_CHARGE_READY,
+    "normalize_dx": normalize_dx_flag,
+}
+test_config_str = json.dumps(test_config_dict, sort_keys=True)
+test_config_hash = hashlib.md5(test_config_str.encode("utf-8")).hexdigest()
 
-        tensor = safe_load(
-            f"{args.source_data_dir}/{BATTERY_TYPE}/{VEHICLE_ID}/vin_2.pkl",
-            verbose=False,
-        )
-        tensor_x = safe_load(
-            f"{args.source_data_dir}/{BATTERY_TYPE}/{VEHICLE_ID}/vin_3.pkl",
-            verbose=False,
-        )
+test_cache_filename = f"test_data_cache_{BATTERY_TYPE}_{test_config_hash}.pt"
+test_cache_path = os.path.join(args.source_data_dir, test_cache_filename)
 
-        tensor, tensor_x = preprocess_loaded_tensor(
-            tensor,
-            tensor_x,
-            dim_dict,
-            BATTERY_TYPE,
-            PREPROCESSING,
-            SKIP_CHARGE_READY,
-            normalize_dx=(
-                vals.normalize_dx if hasattr(vals, "normalize_dx") else False
-            ),
-        )
+if os.path.exists(test_cache_path):
+    print(f"Found cached test data: {test_cache_path}")
+    print("Loading...")
+    try:
+        test_data_cache = torch.load(test_cache_path)
+        print(f"Successfully loaded cached test data: {len(test_data_cache)} vehicles")
+    except Exception as e:
+        print(f"Error loading test cache: {e}. Will regenerate.")
+        test_data_cache = {}
 
-        test_data_cache[i] = (tensor, tensor_x)
+if not test_data_cache:
+    print("Cache miss or error. Processing raw test pickle files...")
+    count = 0
+    for label, vehicle_ids in enumerate(test_list):
+        for i in vehicle_ids:
+            count += 1
+            if count % 10 == 0:
+                print(f"  Loading test vehicle {count}/{total_test_vehicles}")
+
+            VEHICLE_ID = f"{i}"
+
+            tensor = safe_load(
+                f"{args.source_data_dir}/{BATTERY_TYPE}/{VEHICLE_ID}/vin_2.pkl",
+                verbose=False,
+            )
+            tensor_x = safe_load(
+                f"{args.source_data_dir}/{BATTERY_TYPE}/{VEHICLE_ID}/vin_3.pkl",
+                verbose=False,
+            )
+
+            tensor, tensor_x = preprocess_loaded_tensor(
+                tensor,
+                tensor_x,
+                dim_dict,
+                BATTERY_TYPE,
+                PREPROCESSING,
+                SKIP_CHARGE_READY,
+                normalize_dx=normalize_dx_flag,
+            )
+
+            test_data_cache[i] = (tensor, tensor_x)
+
+    # Save to cache
+    print(f"Saving test data to cache: {test_cache_path}")
+    try:
+        torch.save(test_data_cache, test_cache_path)
+        print("Test cache saved successfully.")
+    except Exception as e:
+        print(f"Warning: Could not save test cache to {test_cache_path}: {e}")
 
 print(f"Test data loaded: {len(test_data_cache)} vehicles\n")
 
