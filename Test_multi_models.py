@@ -342,7 +342,6 @@ PREPROCESSING, SKIP_CHARGE_READY = get_preprocessing_and_skip_charge_ready(
     learning_case
 )
 dim_dict = get_input_dimensions(BATTERY_TYPE)
-AUC_ANALYSIS = True
 
 print_sim_config(
     title="Multi-Model Test Run",
@@ -420,7 +419,7 @@ models_u = {}
 models_x = {}
 
 for u_idx in u_model_indices:
-    u_model_idx = "net" if u_idx == -1 else f"net_e{u_idx}"
+    u_model_idx = f"net_e{u_idx}"
     net_loaded = CombinedAE(
         input_size=dim_dict["x"],
         encode2_input_size=dim_dict["q"],
@@ -448,7 +447,7 @@ for u_idx in u_model_indices:
     print(f"  Loaded U model: {u_model_idx}")
 
 for x_idx in x_model_indices:
-    x_model_idx = "netx" if x_idx == -1 else f"netx_e{x_idx}"
+    x_model_idx = f"netx_e{x_idx}"
     netx_loaded = CombinedAE(
         input_size=dim_dict["x2"],
         encode2_input_size=dim_dict["q2"],
@@ -621,87 +620,85 @@ inference_batch_size = args.inference_batch_size
 # Phase 1: Compute and Cache U FEATURES (Extracted from errors)
 print(f"\nPhase 1: Computing and caching U FEATURES to {cache_strategy}...")
 for u_idx in u_model_indices:
-    if u_idx != -1:
-        # Check for existing cache if resuming
-        if cache_strategy == "disk" and args.resume:
-            fpath = os.path.join(temp_cache_dir, f"feat_u_{u_idx}.pkl")
-            if os.path.exists(fpath):
-                print(
-                    f"  [Resume] Found cached U features for model {u_idx}, skipping computation."
-                )
-                u_error_files[u_idx] = fpath
-                continue
-
-        print(f"  Computing training features for U model {u_idx}...")
-        error_u = run_model_inference(
-            models_u[u_idx],
-            combined_tensor_train,
-            dim_dict,
-            inference_batch_size,
-            device,
-            is_x_model=False,
-            use_abs_err=use_abs_err,
-            use_float32=args.use_float32,
-        )
-
-        # Extract features (small size)
-        feat_u_tuple = extract_features_from_error("u", error_u)
-        del error_u  # Must delete raw error matrix immediately
-
-        if cache_strategy == "disk":
-            # Save to disk as pickle (pd.Series tuple)
-            fpath = os.path.join(temp_cache_dir, f"feat_u_{u_idx}.pkl")
-            # Use pickle for tuple/series
-            with open(fpath, "wb") as f:
-                import pickle
-
-                pickle.dump(feat_u_tuple, f)
+    # Check for existing cache if resuming
+    if cache_strategy == "disk" and args.resume:
+        fpath = os.path.join(temp_cache_dir, f"feat_u_{u_idx}.pkl")
+        if os.path.exists(fpath):
+            print(
+                f"  [Resume] Found cached U features for model {u_idx}, skipping computation."
+            )
             u_error_files[u_idx] = fpath
-        else:
-            # Keep in memory
-            u_error_cache[u_idx] = feat_u_tuple
+            continue
+
+    print(f"  Computing training features for U model {u_idx}...")
+    error_u = run_model_inference(
+        models_u[u_idx],
+        combined_tensor_train,
+        dim_dict,
+        inference_batch_size,
+        device,
+        is_x_model=False,
+        use_abs_err=use_abs_err,
+        use_float32=args.use_float32,
+    )
+
+    # Extract features (small size)
+    feat_u_tuple = extract_features_from_error("u", error_u)
+    del error_u  # Must delete raw error matrix immediately
+
+    if cache_strategy == "disk":
+        # Save to disk as pickle (pd.Series tuple)
+        fpath = os.path.join(temp_cache_dir, f"feat_u_{u_idx}.pkl")
+        # Use pickle for tuple/series
+        with open(fpath, "wb") as f:
+            import pickle
+
+            pickle.dump(feat_u_tuple, f)
+        u_error_files[u_idx] = fpath
+    else:
+        # Keep in memory
+        u_error_cache[u_idx] = feat_u_tuple
 
 # Phase 2: Compute and Cache X FEATURES
 print(f"\nPhase 2: Computing and caching X FEATURES to {cache_strategy}...")
 for x_idx in x_model_indices:
-    if x_idx != -1:
-        # Check for existing cache if resuming
-        if cache_strategy == "disk" and args.resume:
-            fpath = os.path.join(temp_cache_dir, f"feat_x_{x_idx}.pkl")
-            if os.path.exists(fpath):
-                print(
-                    f"  [Resume] Found cached X features for model {x_idx}, skipping computation."
-                )
-                x_error_files[x_idx] = fpath
-                continue
-
-        print(f"  Computing training features for X model {x_idx}...")
-        error_x = run_model_inference(
-            models_x[x_idx],
-            combined_tensorx_train,
-            dim_dict,
-            inference_batch_size,
-            device,
-            is_x_model=True,
-            use_abs_err=use_abs_err,
-            use_float32=args.use_float32,
-        )
-
-        # Extract features (small size)
-        feat_x_tuple = extract_features_from_error("x", error_x)
-        del error_x  # Must delete raw error matrix immediately
-
-        if cache_strategy == "disk":
-            # Save to disk
-            fpath = os.path.join(temp_cache_dir, f"feat_x_{x_idx}.pkl")
-            with open(fpath, "wb") as f:
-                import pickle
-
-                pickle.dump(feat_x_tuple, f)
+    # Check for existing cache if resuming
+    if cache_strategy == "disk" and args.resume:
+        fpath = os.path.join(temp_cache_dir, f"feat_x_{x_idx}.pkl")
+        if os.path.exists(fpath):
+            print(
+                f"  [Resume] Found cached X features for model {x_idx}, skipping computation."
+            )
             x_error_files[x_idx] = fpath
-        else:
-            # Keep in memory
-            x_error_cache[x_idx] = feat_x_tuple
+            continue
+
+    print(f"  Computing training features for X model {x_idx}...")
+    error_x = run_model_inference(
+        models_x[x_idx],
+        combined_tensorx_train,
+        dim_dict,
+        inference_batch_size,
+        device,
+        is_x_model=True,
+        use_abs_err=use_abs_err,
+        use_float32=args.use_float32,
+    )
+
+    # Extract features (small size)
+    feat_x_tuple = extract_features_from_error("x", error_x)
+    del error_x  # Must delete raw error matrix immediately
+
+    if cache_strategy == "disk":
+        # Save to disk
+        fpath = os.path.join(temp_cache_dir, f"feat_x_{x_idx}.pkl")
+        with open(fpath, "wb") as f:
+            import pickle
+
+            pickle.dump(feat_x_tuple, f)
+        x_error_files[x_idx] = fpath
+    else:
+        # Keep in memory
+        x_error_cache[x_idx] = feat_x_tuple
 
 # Critical: Release original training data to free up RAM before PCA loop
 print("Releasing training data from memory...")
@@ -730,48 +727,53 @@ for u_idx in u_model_indices:
 
         ## =================== Load PCA data for each combination  =================== ##
         start_pca_load = time.perf_counter()
-        if u_idx == -1:
-            loads = load_pca_results(
-                f"{args.models_dir}/{args.models_idx}",
-                load_data_nor=True,
-                validate_shapes=False,
-            )
+
+        # Load cached features (fast!)
+        if cache_strategy == "disk":
+            import pickle
+
+            print("  Loading pre-computed FEATURES from disk...")
+            with open(u_error_files[u_idx], "rb") as f:
+                u_feat = pickle.load(f)
+            with open(x_error_files[x_idx], "rb") as f:
+                x_feat = pickle.load(f)
         else:
-            # Load cached features (fast!)
-            if cache_strategy == "disk":
-                import pickle
+            print("  Using pre-computed FEATURES from memory...")
+            u_feat = u_error_cache[u_idx]
+            x_feat = x_error_cache[x_idx]
 
-                print("  Loading pre-computed FEATURES from disk...")
-                with open(u_error_files[u_idx], "rb") as f:
-                    u_feat = pickle.load(f)
-                with open(x_error_files[x_idx], "rb") as f:
-                    x_feat = pickle.load(f)
-            else:
-                print("  Using pre-computed FEATURES from memory...")
-                u_feat = u_error_cache[u_idx]
-                x_feat = x_error_cache[x_idx]
+        # Construct df_data directly from features
+        # Structure: max_diff_ERRORU, max_diff_ERRORX, Z_U, Z_X, Z_U_smoothed, Z_X_smoothed
+        # u_feat = (max_diff, Z, Z_smoothed)
+        # x_feat = (max_diff_slid, Z_slid, Z_smoothed_slid)
 
-            # Construct df_data directly from features
-            # Structure: max_diff_ERRORU, max_diff_ERRORX, Z_U, Z_X, Z_U_smoothed, Z_X_smoothed
-            # u_feat = (max_diff, Z, Z_smoothed)
-            # x_feat = (max_diff_slid, Z_slid, Z_smoothed_slid)
+        df_data = pd.concat(
+            [
+                u_feat[0],  # max_diff_ERRORU
+                x_feat[0],  # max_diff_ERRORX
+                u_feat[1],  # Z_U
+                x_feat[1],  # Z_X
+                u_feat[2],  # Z_U_smoothed
+                x_feat[2],  # Z_X_smoothed
+            ],
+            axis=1,
+        )
 
-            df_data = pd.concat(
-                [
-                    u_feat[0],  # max_diff_ERRORU
-                    x_feat[0],  # max_diff_ERRORX
-                    u_feat[1],  # Z_U
-                    x_feat[1],  # Z_X
-                    u_feat[2],  # Z_U_smoothed
-                    x_feat[2],  # Z_X_smoothed
-                ],
-                axis=1,
-            )
+        # Run PCA on features
+        loads = Custom_PCA(df_data, 0.99, 0.99)
 
-            # Run PCA on features
-            loads = Custom_PCA(df_data, 0.99, 0.99)
-            # Explicitly delete temporary df_data to save memory
-            del df_data, u_feat, x_feat
+        # OPTIMIZATION: Discard large arrays from loads (data_nor, X)
+        # loads structure: v_I, v, v_ratio, p_k, data_mean, data_std, T_95, T_99, SPE_95, SPE_99, P, k, P_t, X, data_nor
+        # Indices:         0    1  2        3    4          5         6     7     8       9       10 11 12   13 14
+
+        # Convert to list to modify
+        loads_list = list(loads)
+        loads_list[13] = None  # Discard X (scores)
+        loads_list[14] = None  # Discard data_nor (normalized training data)
+        loads = tuple(loads_list)
+
+        # Explicitly delete temporary df_data to save memory
+        del df_data, u_feat, x_feat
 
         (
             v_I,
@@ -877,18 +879,17 @@ for u_idx in u_model_indices:
                 spe_array, _ = SPE_array(df_data, data_mean, data_std, p_k)
                 CI_array = (spe_array / SPE_95_limit) + (t2_array / T_95_limit)
 
-                if AUC_ANALYSIS:
-                    ci_max = float(np.nanmax(np.asarray(CI_array, dtype=float)))
-                    predict_results[test_idx, :] = (ci_max > predict_thresholds).astype(
-                        np.int8
-                    )
-                    y_true[test_idx] = np.int8(label)
-                    test_idx += 1
+                ci_max = float(np.nanmax(np.asarray(CI_array, dtype=float)))
+                predict_results[test_idx, :] = (ci_max > predict_thresholds).astype(
+                    np.int8
+                )
+                y_true[test_idx] = np.int8(label)
+                test_idx += 1
 
                 # Free memory after processing each vehicle
                 del x_recovered, y_recovered, z_recovered, q_recovered
                 del x_recovered2, y_recovered2, z_recovered2, q_recovered2
-                del ERRORU, ERRORX, df_data, df_data2
+                del ERRORU, ERRORX, df_data
                 del t2_array, spe_array, CI_array
 
         elapsed = time.perf_counter() - start
@@ -902,80 +903,79 @@ for u_idx in u_model_indices:
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
-        if AUC_ANALYSIS:
-            # =================== ROC / AUC ===================
-            roc = compute_roc_auc_from_threshold_matrix(
-                y_true, predict_results, predict_thresholds
-            )
-            opt = compute_optimal_thresholds_from_roc(
-                roc["fpr"],
-                roc["tpr"],
-                roc["thresholds"],
-                candidate_idx=roc["candidate_idx"],
-            )
+        # =================== ROC / AUC ===================
+        roc = compute_roc_auc_from_threshold_matrix(
+            y_true, predict_results, predict_thresholds
+        )
+        opt = compute_optimal_thresholds_from_roc(
+            roc["fpr"],
+            roc["tpr"],
+            roc["thresholds"],
+            candidate_idx=roc["candidate_idx"],
+        )
 
-            print(f"AUC = {roc['auc']:.4f}")
-            print(
-                f"Best threshold (Youden J) ≈ {opt['best']['threshold']:.6g} @ (FPR={opt['best']['fpr']:.4f}, TPR={opt['best']['tpr']:.4f})"
-            )
-            print(
-                f"Closest to (0,1) ≈ {opt['closest_to_01']['threshold']:.6g} @ (FPR={opt['closest_to_01']['fpr']:.4f}, TPR={opt['closest_to_01']['tpr']:.4f}), dist={opt['closest_to_01']['distance']:.4f}"
-            )
+        print(f"AUC = {roc['auc']:.4f}")
+        print(
+            f"Best threshold (Youden J) ≈ {opt['best']['threshold']:.6g} @ (FPR={opt['best']['fpr']:.4f}, TPR={opt['best']['tpr']:.4f})"
+        )
+        print(
+            f"Closest to (0,1) ≈ {opt['closest_to_01']['threshold']:.6g} @ (FPR={opt['closest_to_01']['fpr']:.4f}, TPR={opt['closest_to_01']['tpr']:.4f}), dist={opt['closest_to_01']['distance']:.4f}"
+        )
 
-            # Save individual ROC curve
-            roc_save_path = f"{args.models_dir}/{args.models_idx}/results/AUC_ROC_u{u_idx}_x{x_idx}_case{learning_case}.png"
-            plot_roc_curve(
-                roc["fpr"],
-                roc["tpr"],
-                roc["auc"],
-                best_point=opt["best"],
-                closest_to_01_point=opt["closest_to_01"],
-                save_path=roc_save_path,
-                title=f"AUC-ROC Curve (u_model={u_idx}, x_model={x_idx})",
-                figsize=(6, 6),
-                show=False,
-                dpi=200,
-            )
-            print(f"ROC curve saved to: {roc_save_path}\n")
+        # Save individual ROC curve
+        roc_save_path = f"{args.models_dir}/{args.models_idx}/results/AUC_ROC_u{u_idx}_x{x_idx}_case{learning_case}.png"
+        plot_roc_curve(
+            roc["fpr"],
+            roc["tpr"],
+            roc["auc"],
+            best_point=opt["best"],
+            closest_to_01_point=opt["closest_to_01"],
+            save_path=roc_save_path,
+            title=f"AUC-ROC Curve (u_model={u_idx}, x_model={x_idx})",
+            figsize=(6, 6),
+            show=False,
+            dpi=200,
+        )
+        print(f"ROC curve saved to: {roc_save_path}\n")
 
-            # Store results for combined plot
-            all_roc_results.append(
+        # Store results for combined plot
+        all_roc_results.append(
+            {
+                "u_idx": u_idx,
+                "x_idx": x_idx,
+                "fpr": roc["fpr"],
+                "tpr": roc["tpr"],
+                "auc": roc["auc"],
+                "best": opt["best"],
+                "closest_to_01": opt["closest_to_01"],
+            }
+        )
+
+        # =================== Save AUC result immediately to CSV =================== ##
+        auc_record = pd.DataFrame(
+            [
                 {
-                    "u_idx": u_idx,
-                    "x_idx": x_idx,
-                    "fpr": roc["fpr"],
-                    "tpr": roc["tpr"],
-                    "auc": roc["auc"],
-                    "best": opt["best"],
-                    "closest_to_01": opt["closest_to_01"],
+                    "u_model_idx": u_idx,
+                    "x_model_idx": x_idx,
+                    "AUC": roc["auc"],
+                    "best_threshold": opt["best"]["threshold"],
+                    "best_TPR": opt["best"]["tpr"],
+                    "best_FPR": opt["best"]["fpr"],
+                    "closest_01_threshold": opt["closest_to_01"]["threshold"],
+                    "closest_01_TPR": opt["closest_to_01"]["tpr"],
+                    "closest_01_FPR": opt["closest_to_01"]["fpr"],
+                    "closest_01_distance": opt["closest_to_01"]["distance"],
                 }
-            )
+            ]
+        )
 
-            # =================== Save AUC result immediately to CSV =================== ##
-            auc_record = pd.DataFrame(
-                [
-                    {
-                        "u_model_idx": u_idx,
-                        "x_model_idx": x_idx,
-                        "AUC": roc["auc"],
-                        "best_threshold": opt["best"]["threshold"],
-                        "best_TPR": opt["best"]["tpr"],
-                        "best_FPR": opt["best"]["fpr"],
-                        "closest_01_threshold": opt["closest_to_01"]["threshold"],
-                        "closest_01_TPR": opt["closest_to_01"]["tpr"],
-                        "closest_01_FPR": opt["closest_to_01"]["fpr"],
-                        "closest_01_distance": opt["closest_to_01"]["distance"],
-                    }
-                ]
-            )
-
-            # Append to CSV (write header only for first entry)
-            if not os.path.exists(csv_path):
-                auc_record.to_csv(csv_path, mode="w", header=True, index=False)
-                print(f"AUC result saved to: {csv_path}")
-            else:
-                auc_record.to_csv(csv_path, mode="a", header=False, index=False)
-                print(f"AUC result appended to: {csv_path}")
+        # Append to CSV (write header only for first entry)
+        if not os.path.exists(csv_path):
+            auc_record.to_csv(csv_path, mode="w", header=True, index=False)
+            print(f"AUC result saved to: {csv_path}")
+        else:
+            auc_record.to_csv(csv_path, mode="a", header=False, index=False)
+            print(f"AUC result appended to: {csv_path}")
 
 
 # Cleanup temp files if disk strategy was used and keep_cache is False
@@ -996,7 +996,7 @@ if cache_strategy == "memory":
 
 
 # =================== Plot all ROC curves on one figure =================== ##
-if AUC_ANALYSIS and len(all_roc_results) > 1:
+if len(all_roc_results) > 1:
     print(f"\n{'='*80}")
     print("Plotting all ROC curves on a single figure...")
     print(f"{'='*80}\n")
@@ -1043,82 +1043,9 @@ if AUC_ANALYSIS and len(all_roc_results) > 1:
     print(f"{'='*80}\n")
 
     # =================== Create AUC heatmap visualization =================== ##
-    # Read the incrementally saved CSV file for visualization
-    print("Loading AUC results from CSV for heatmap...")
-    auc_df = pd.read_csv(csv_path)
-    print(f"Loaded {len(auc_df)} model combination results\n")
-
-    print("Creating AUC heatmap...")
-
-    # Create pivot table for heatmap
-    pivot_data = auc_df.pivot(index="x_model_idx", columns="u_model_idx", values="AUC")
-
-    # Sort indices for better visualization
-    pivot_data = pivot_data.sort_index(axis=0).sort_index(axis=1)
-
-    # Create heatmap
-    fig, ax = plt.subplots(
-        figsize=(
-            max(10, len(u_model_indices) * 0.8),
-            max(8, len(x_model_indices) * 0.6),
-        )
-    )
-
-    # Use a colormap (viridis is good for AUC values)
-    im = ax.imshow(pivot_data.values, cmap="viridis", aspect="auto", vmin=0.5, vmax=1.0)
-
-    # Set ticks and labels
-    ax.set_xticks(np.arange(len(pivot_data.columns)))
-    ax.set_yticks(np.arange(len(pivot_data.index)))
-    ax.set_xticklabels(pivot_data.columns)
-    ax.set_yticklabels(pivot_data.index)
-
-    # Rotate x labels for better readability
-    plt.setp(ax.get_xticklabels(), rotation=45, ha="right", rotation_mode="anchor")
-
-    # Add colorbar
-    cbar = plt.colorbar(im, ax=ax)
-    cbar.set_label("AUC Score", rotation=270, labelpad=20, fontsize=12)
-
-    # Add text annotations with AUC values
-    for i in range(len(pivot_data.index)):
-        for j in range(len(pivot_data.columns)):
-            if not np.isnan(pivot_data.values[i, j]):
-                text_color = "white" if pivot_data.values[i, j] < 0.75 else "black"
-                text = ax.text(
-                    j,
-                    i,
-                    f"{pivot_data.values[i, j]:.3f}",
-                    ha="center",
-                    va="center",
-                    color=text_color,
-                    fontsize=9,
-                )
-
-    # Labels and title
-    ax.set_xlabel("U Model Index", fontsize=13, fontweight="bold")
-    ax.set_ylabel("X Model Index", fontsize=13, fontweight="bold")
-    ax.set_title(
-        "AUC Heatmap: Model Combination Performance",
-        fontsize=15,
-        fontweight="bold",
-        pad=20,
-    )
-
-    # Grid
-    ax.set_xticks(np.arange(len(pivot_data.columns)) - 0.5, minor=True)
-    ax.set_yticks(np.arange(len(pivot_data.index)) - 0.5, minor=True)
-    ax.grid(which="minor", color="gray", linestyle="-", linewidth=0.5)
-    ax.tick_params(which="minor", size=0)
-
-    plt.tight_layout()
-
     heatmap_path = (
         f"{args.models_dir}/{args.models_idx}/AUC_heatmap_case{learning_case}.png"
     )
-    plt.savefig(heatmap_path, dpi=200, bbox_inches="tight")
-    plt.close()
-
-    print(f"AUC heatmap saved to: {heatmap_path}\n")
+    draw_auc_heatmap(csv_path, heatmap_path)
 
 print("\n✓ All model combinations tested successfully!")

@@ -3423,3 +3423,98 @@ def get_rmse_stats_from_error(error_array):
     rmse_std = np.std(sample_rmse)  # RMSE 표준편차
 
     return total_rmse, rmse_std
+
+
+def draw_auc_heatmap(csv_path, save_path, title_suffix=""):
+    """
+    Draws AUC heatmap from a CSV file containing 'u_model_idx', 'x_model_idx', and 'AUC' columns.
+    """
+    # Read the CSV
+    if not os.path.exists(csv_path):
+        print(f"Error: CSV file not found at {csv_path}")
+        return
+
+    print(f"Loading AUC results from {csv_path} for heatmap...")
+    auc_df = pd.read_csv(csv_path)
+    print(f"Loaded {len(auc_df)} model combination results")
+
+    required_columns = ["u_model_idx", "x_model_idx", "AUC"]
+    if not all(col in auc_df.columns for col in required_columns):
+        print(f"Error: CSV must contain {required_columns} columns.")
+        return
+
+    print("Creating AUC heatmap...")
+
+    # Create pivot table for heatmap
+    pivot_data = auc_df.pivot(index="x_model_idx", columns="u_model_idx", values="AUC")
+
+    # Sort indices for better visualization
+    pivot_data = pivot_data.sort_index(axis=0).sort_index(axis=1)
+
+    u_indices = pivot_data.columns
+    x_indices = pivot_data.index
+
+    # Create heatmap
+    fig, ax = plt.subplots(
+        figsize=(
+            max(10, len(u_indices) * 0.8),
+            max(8, len(x_indices) * 0.6),
+        )
+    )
+
+    # Use a colormap (viridis is good for AUC values)
+    im = ax.imshow(pivot_data.values, cmap="viridis", aspect="auto", vmin=0.5, vmax=1.0)
+
+    # Set ticks and labels
+    ax.set_xticks(np.arange(len(pivot_data.columns)))
+    ax.set_yticks(np.arange(len(pivot_data.index)))
+    ax.set_xticklabels(pivot_data.columns)
+    ax.set_yticklabels(pivot_data.index)
+
+    # Rotate x labels for better readability
+    plt.setp(ax.get_xticklabels(), rotation=45, ha="right", rotation_mode="anchor")
+
+    # Add colorbar
+    cbar = plt.colorbar(im, ax=ax)
+    cbar.set_label("AUC Score", rotation=270, labelpad=20, fontsize=12)
+
+    # Add text annotations with AUC values
+    for i in range(len(pivot_data.index)):
+        for j in range(len(pivot_data.columns)):
+            val = pivot_data.values[i, j]
+            if not np.isnan(val):
+                text_color = "white" if val < 0.75 else "black"
+                ax.text(
+                    j,
+                    i,
+                    f"{val:.3f}",
+                    ha="center",
+                    va="center",
+                    color=text_color,
+                    fontsize=9,
+                )
+
+    # Labels and title
+    ax.set_xlabel("U Model Index", fontsize=13, fontweight="bold")
+    ax.set_ylabel("X Model Index", fontsize=13, fontweight="bold")
+    ax.set_title(
+        f"AUC Heatmap: Model Combination Performance {title_suffix}",
+        fontsize=15,
+        fontweight="bold",
+        pad=20,
+    )
+
+    # Grid
+    ax.set_xticks(np.arange(len(pivot_data.columns)) - 0.5, minor=True)
+    ax.set_yticks(np.arange(len(pivot_data.index)) - 0.5, minor=True)
+    ax.grid(which="minor", color="gray", linestyle="-", linewidth=0.5)
+    ax.tick_params(which="minor", size=0)
+
+    plt.tight_layout()
+
+    # Ensure directory exists
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+
+    plt.savefig(save_path, dpi=200, bbox_inches="tight")
+    plt.close()
+    print(f"AUC heatmap saved to: {save_path}\n")
