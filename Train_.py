@@ -145,6 +145,10 @@ train_list = (
 )
 # train_list = [0]
 # validate_list = [0]
+
+vehicle_tensors = []
+vehicle_tensorsx = []
+
 count = 0
 for i in train_list:
     count += 1
@@ -208,13 +212,19 @@ for i in train_list:
         normalize_val=args.normalize_val,
     )
 
-    if FIRST_LOAD:
-        FIRST_LOAD = False
-        combined_tensor = tensor
-        combined_tensorx = tensorx
-    else:
-        combined_tensor = torch.cat((combined_tensor, tensor), dim=0)
-        combined_tensorx = torch.cat((combined_tensorx, tensorx), dim=0)
+    vehicle_tensors.append(tensor)
+    vehicle_tensorsx.append(tensorx)
+
+if len(vehicle_tensors) > 0:
+    combined_tensor = torch.cat(vehicle_tensors, dim=0)
+    combined_tensorx = torch.cat(vehicle_tensorsx, dim=0)
+else:
+    # 데이터가 없는 경우 처리
+    combined_tensor = torch.empty(0)
+    combined_tensorx = torch.empty(0)
+
+# 메모리 해제
+del vehicle_tensors, vehicle_tensorsx
 
 
 # ----------------------------------------Training for MC-AE--------------------------
@@ -239,6 +249,9 @@ q_recovered2 = combined_tensorx[:, dim_dict["x2"] + dim_dict["y2"] + dim_dict["z
 # ----------------------------------------Validation Data Loading ------------------------------
 FIRST_LOAD = True
 count = 0
+v_vehicle_tensors = []
+v_vehicle_tensorsx = []
+
 for i in validate_list:
     count += 1
     if count % 10 == 0:
@@ -259,13 +272,18 @@ for i in validate_list:
         normalize_dx=args.normalize_dx,
         normalize_val=args.normalize_val,
     )
-    if FIRST_LOAD:
-        FIRST_LOAD = False
-        v_combined_tensor = v_tensor
-        v_combined_tensorx = v_tensorx
-    else:
-        v_combined_tensor = torch.cat((v_combined_tensor, v_tensor), dim=0)
-        v_combined_tensorx = torch.cat((v_combined_tensorx, v_tensorx), dim=0)
+
+    v_vehicle_tensors.append(v_tensor)
+    v_vehicle_tensorsx.append(v_tensorx)
+
+if len(v_vehicle_tensors) > 0:
+    v_combined_tensor = torch.cat(v_vehicle_tensors, dim=0)
+    v_combined_tensorx = torch.cat(v_vehicle_tensorsx, dim=0)
+else:
+    v_combined_tensor = torch.empty(0)
+    v_combined_tensorx = torch.empty(0)
+
+del v_vehicle_tensors, v_vehicle_tensorsx
 
 v_x_recovered = v_combined_tensor[:, : dim_dict["x"]]  # 0~1
 v_y_recovered = v_combined_tensor[
@@ -316,16 +334,23 @@ AE_U_BATCHSIZE = args.ae_u_batchsize
 
 class Dataset(Dataset):
     def __init__(self, x, y, z, q):
-        self.x = x.to(torch.double)
-        self.y = y.to(torch.double)
-        self.z = z.to(torch.double)
-        self.q = q.to(torch.double)
+        # Keep referencing original tensors (likely float32) to save memory
+        self.x = x
+        self.y = y
+        self.z = z
+        self.q = q
 
     def __len__(self):
         return len(self.x)
 
     def __getitem__(self, idx):
-        return self.x[idx], self.y[idx], self.z[idx], self.q[idx]
+        # Cast to double only when fetching a batch
+        return (
+            self.x[idx].to(torch.double),
+            self.y[idx].to(torch.double),
+            self.z[idx].to(torch.double),
+            self.q[idx].to(torch.double),
+        )
 
 
 train_loader_u = DataLoader(
@@ -443,21 +468,30 @@ if len(val_loss_points_u) > 0:
 
 save_net_state(model=net, models_dir=f"{model_path}/", filename="net.pth")
 
+# Optimization: Compute error in batches to avoid OOM
 train_loader2 = DataLoader(
     Dataset(x_recovered, y_recovered, z_recovered, q_recovered),
-    batch_size=len(x_recovered),
+    batch_size=4096,  # Use a safe batch size
     shuffle=False,
 )
-for iteration, (x, y, z, q) in enumerate(train_loader2):
-    x = x.to(device)
-    y = y.to(device)
-    z = z.to(device)
-    q = q.to(device)
-    net = net.double()
-    recon_imtest, recon = net(x, z, q)
-AA = recon_imtest.cpu().detach().numpy()
-yTrainU = y_recovered.cpu().detach().numpy()
-ERRORU = np.abs(AA - yTrainU) if use_abs_err else AA - yTrainU
+net.eval()
+error_list = []
+with torch.no_grad():
+    for x, y, z, q in train_loader2:
+        x = x.to(device)
+        y = y.to(device)
+        z = z.to(device)
+        q = q.to(device)
+        recon_imtest, _ = net(x, z, q)
+
+        # Calculate error batch-wise
+        aa = recon_imtest.cpu().numpy()
+        yy = y.cpu().numpy()
+        error_batch = np.abs(aa - yy) if use_abs_err else aa - yy
+        error_list.append(error_batch)
+
+ERRORU = np.concatenate(error_list, axis=0)
+del train_loader2, error_list
 
 ## ================= Training MC-AE for SOC reconstruction ================= ##
 AE_X_EPOCH = args.ae_x_epochs
@@ -550,22 +584,29 @@ if len(val_loss_points_x) > 0:
     )
 save_net_state(model=netx, models_dir=f"{model_path}/", filename="netx.pth")
 
+# Optimization: Compute error in batches to avoid OOM
 train_loaderx2 = DataLoader(
     Dataset(x_recovered2, y_recovered2, z_recovered2, q_recovered2),
-    batch_size=len(x_recovered2),
+    batch_size=4096,
     shuffle=False,
 )
-for iteration, (x, y, z, q) in enumerate(train_loaderx2):
-    x = x.to(device)
-    y = y.to(device)
-    z = z.to(device)
-    q = q.to(device)
-    netx = netx.double()
-    recon_imtestx, z = netx(x, z, q)
+netx.eval()
+error_list_x = []
+with torch.no_grad():
+    for x, y, z, q in train_loaderx2:
+        x = x.to(device)
+        y = y.to(device)
+        z = z.to(device)
+        q = q.to(device)
+        recon_imtestx, _ = netx(x, z, q)
 
-BB = recon_imtestx.cpu().detach().numpy()
-yTrainX = y_recovered2.cpu().detach().numpy()
-ERRORX = np.abs(BB - yTrainX) if use_abs_err else BB - yTrainX
+        bb = recon_imtestx.cpu().numpy()
+        yy = y.cpu().numpy()
+        error_batch = np.abs(bb - yy) if use_abs_err else bb - yy
+        error_list_x.append(error_batch)
+
+ERRORX = np.concatenate(error_list_x, axis=0)
+del train_loaderx2, error_list_x
 
 df_data, _ = DiagnosisFeature(ERRORU, ERRORX)
 
