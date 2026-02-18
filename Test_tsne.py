@@ -63,6 +63,9 @@ parser.add_argument(
     ),
 )
 
+parser.add_argument("--u-model-idx", type=int, default=10)
+parser.add_argument("--x-model-idx", type=int, default=10)
+
 parser.add_argument("--x-start", type=int, default=20)
 parser.add_argument("--x-tick-step", type=int, default=3000)
 parser.add_argument("--normalize-dx", action="store_true")
@@ -73,7 +76,7 @@ parser.add_argument(
     "--thr",
     nargs=2,
     type=float,
-    default=[18.7, 28.7],
+    default=[10.4, 87.5],
     metavar=("THR0", "THR1"),
     help="CI threshold 2개 지정. 예) --thr 18.7 28.7",
 )
@@ -194,9 +197,61 @@ fault_list = (
 
 
 ## =================== Load training data  =================== ##
-loads = load_pca_results(
-    f"{args.models_dir}/{args.models_idx}", load_data_nor=False, validate_shapes=False
-)
+import pickle
+
+# Attempt to load feature cache for the specified u/x models
+cache_dir = f"{args.models_dir}/{args.models_idx}/temp_cache"
+u_feat_path = os.path.join(cache_dir, f"feat_u_{args.u_model_idx}.pkl")
+x_feat_path = os.path.join(cache_dir, f"feat_x_{args.x_model_idx}.pkl")
+loads = None
+
+if os.path.exists(u_feat_path) and os.path.exists(x_feat_path):
+    try:
+        print(f"Loading cached training features for PCA setup:")
+        print(f"  U: {u_feat_path}")
+        print(f"  X: {x_feat_path}")
+
+        with open(u_feat_path, "rb") as f:
+            u_feat = pickle.load(f)
+        with open(x_feat_path, "rb") as f:
+            x_feat = pickle.load(f)
+
+        # Structure: max_diff_ERRORU, max_diff_ERRORX, Z_U, Z_X, Z_U_smoothed, Z_X_smoothed
+        df_data_train = pd.concat(
+            [
+                u_feat[0],  # max_diff_ERRORU
+                x_feat[0],  # max_diff_ERRORX
+                u_feat[1],  # Z_U
+                x_feat[1],  # Z_X
+                u_feat[2],  # Z_U_smoothed
+                x_feat[2],  # Z_X_smoothed
+            ],
+            axis=1,
+        )
+
+        print("Computing PCA directly from cached training features...")
+        loads = Custom_PCA(df_data_train, 0.99, 0.99)
+
+        # Optimization: discard large arrays
+        loads_list = list(loads)
+        loads_list[13] = None  # Discard X (scores)
+        loads_list[14] = None  # Discard data_nor
+        loads = tuple(loads_list)
+
+        del df_data_train, u_feat, x_feat
+
+    except Exception as e:
+        print(f"Error processing cached features: {e}.")
+        loads = None
+
+if loads is None:
+    print("Cached features not found or error. Falling back to saved 'pca_arrays.npz'.")
+    loads = load_pca_results(
+        f"{args.models_dir}/{args.models_idx}",
+        load_data_nor=False,
+        validate_shapes=False,
+    )
+
 (
     v_I,
     v,
@@ -234,12 +289,14 @@ netx_loaded = CombinedAE(
     use_dx_in_forward=use_dx,
     add_one_output_layer=add_one_output_layer,
 ).to(device)
+u_model_idx = "net" if args.u_model_idx == -1 else f"net_e{args.u_model_idx}"
+x_model_idx = "netx" if args.x_model_idx == -1 else f"netx_e{args.x_model_idx}"
 net_state_dict = torch.load(
-    os.path.join(f"{args.models_dir}/{args.models_idx}/artifact/", "net.pth")
+    os.path.join(f"{args.models_dir}/{args.models_idx}/artifact/", f"{u_model_idx}.pth")
 )
 net_loaded.load_state_dict(net_state_dict)
 netx_state_dict = torch.load(
-    os.path.join(f"{args.models_dir}/{args.models_idx}/artifact/", "netx.pth")
+    os.path.join(f"{args.models_dir}/{args.models_idx}/artifact/", f"{x_model_idx}.pth")
 )
 netx_loaded.load_state_dict(netx_state_dict)
 
@@ -356,6 +413,16 @@ def collect_vehicle_points(
         alarmed_idx_lo = np.where(
             (CI_array > thresholds[0]) & (CI_array <= thresholds[1])
         )[0]
+
+        # Limit valid alarms to 100 to avoid overcrowding the plot
+        if len(alarmed_idx_hi) > 100:
+            alarmed_idx_hi = np.random.default_rng(0).choice(
+                alarmed_idx_hi, 100, replace=False
+            )
+        if len(alarmed_idx_lo) > 100:
+            alarmed_idx_lo = np.random.default_rng(0).choice(
+                alarmed_idx_lo, 100, replace=False
+            )
 
         idx = np.random.default_rng(0).choice(
             y_recovered.shape[0],

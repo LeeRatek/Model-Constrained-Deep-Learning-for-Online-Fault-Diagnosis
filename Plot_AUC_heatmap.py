@@ -21,7 +21,7 @@ parser.add_argument(
 parser.add_argument(
     "--models-idx",
     type=str,
-    default="260209_105821",  # 260206_084839, 260209_105821
+    default="260209_105821",  # 260206_084839, 260209_105821, 260210_081156
     help="Model timestamp/index folder (e.g. 260206_084839).",
 )
 parser.add_argument(

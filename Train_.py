@@ -64,6 +64,7 @@ parser.add_argument("--vin3-start", type=int, default=0)
 parser.add_argument("--ae-u-scale", type=float, default=1.8)
 parser.add_argument("--ae-u-shift", type=float, default=2.5)
 parser.add_argument("--ae-u-epochs", type=int, default=10)  # default 300
+parser.add_argument("--ae-u-save-per", type=int, default=10)  # default 300
 parser.add_argument(
     "--ae-u-lr", type=float, default=5e-4
 )  # based on original manuscript
@@ -71,6 +72,7 @@ parser.add_argument("--ae-u-batchsize", type=int, default=100)
 parser.add_argument("--ae-x-scale", type=float, default=1.0)
 parser.add_argument("--ae-x-shift", type=float, default=0)
 parser.add_argument("--ae-x-epochs", type=int, default=300)  # default 300
+parser.add_argument("--ae-x-save-per", type=int, default=10)  # default 300
 parser.add_argument(
     "--ae-x-lr", type=float, default=5e-4
 )  # based on original manuscript
@@ -385,7 +387,7 @@ for epoch in range(AE_U_EPOCH):
         optimizer.step()
     avg_loss = total_loss / num_batches
     avg_loss_list_u.append(avg_loss)
-    if epoch % 10 == 0:
+    if epoch % args.ae_u_save_per == 0:
         # Validation (fast: no grad)
         net.eval()
         v_total = 0.0
@@ -495,7 +497,7 @@ for epoch in range(AE_X_EPOCH):
         optimizer.step()
     avg_loss = total_loss / num_batches
     avg_loss_list_x.append(avg_loss)
-    if epoch % 10 == 0:
+    if epoch % args.ae_x_save_per == 0:
         netx.eval()
         v_total = 0.0
         v_batches = 0

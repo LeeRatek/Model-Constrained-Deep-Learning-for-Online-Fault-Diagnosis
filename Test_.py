@@ -31,7 +31,7 @@ parser = argparse.ArgumentParser(
 parser.add_argument(
     "--models-dir", type=str, default="./models"
 )  # 260206_084839 & 260211_163108
-parser.add_argument("--models-folder", type=str, default="260211_163108")
+parser.add_argument("--models-folder", type=str, default="260206_084839")
 parser.add_argument(
     "--source-data-dir",
     type=str,
@@ -44,8 +44,8 @@ parser.add_argument(
 parser.add_argument("--x-start", type=int, default=20)
 parser.add_argument("--x-tick-step", type=int, default=3000)
 parser.add_argument("--sigma-levels", type=str, default="3,4.5,6")
-parser.add_argument("--u-model-idx", type=int, default=30)
-parser.add_argument("--x-model-idx", type=int, default=130)
+parser.add_argument("--u-model-idx", type=int, default=10)
+parser.add_argument("--x-model-idx", type=int, default=10)
 args = parser.parse_args()
 
 vals = read_values_from_sim_config(
@@ -83,9 +83,9 @@ PREPROCESSING, SKIP_CHARGE_READY = get_preprocessing_and_skip_charge_ready(
 )
 # SKIP_CHARGE_READY = False
 dim_dict = get_input_dimensions(BATTERY_TYPE)
-AUC_ANALYSIS = True
+AUC_ANALYSIS = False
 if not AUC_ANALYSIS:
-    thresholds = [18.7, 28.7]
+    thresholds = [10.4, 87.5]
     # thresholds = [20, 30]
 analyse_ae_output = False
 
@@ -139,19 +139,60 @@ y_true = np.zeros(total_test_vehicles, dtype=np.int8)  # normal=0, fault=1
 
 ## =================== Load training data  =================== ##
 start_pca_load = time.perf_counter()
-if args.u_model_idx == -1:
+# Attempt to load feature cache for the specified u/x models
+cache_dir = f"{args.models_dir}/{args.models_folder}/temp_cache"
+u_feat_path = os.path.join(cache_dir, f"feat_u_{args.u_model_idx}.pkl")
+x_feat_path = os.path.join(cache_dir, f"feat_x_{args.x_model_idx}.pkl")
+loads = None
+
+if os.path.exists(u_feat_path) and os.path.exists(x_feat_path):
+    try:
+        print(f"Loading cached training features for PCA setup:")
+        print(f"  U: {u_feat_path}")
+        print(f"  X: {x_feat_path}")
+
+        with open(u_feat_path, "rb") as f:
+            u_feat = pickle.load(f)
+        with open(x_feat_path, "rb") as f:
+            x_feat = pickle.load(f)
+
+        # Structure: max_diff_ERRORU, max_diff_ERRORX, Z_U, Z_X, Z_U_smoothed, Z_X_smoothed
+        df_data_train = pd.concat(
+            [
+                u_feat[0],  # max_diff_ERRORU
+                x_feat[0],  # max_diff_ERRORX
+                u_feat[1],  # Z_U
+                x_feat[1],  # Z_X
+                u_feat[2],  # Z_U_smoothed
+                x_feat[2],  # Z_X_smoothed
+            ],
+            axis=1,
+        )
+
+        print("Computing PCA directly from cached training features...")
+        loads = Custom_PCA(df_data_train, 0.99, 0.99)
+        del df_data_train, u_feat, x_feat
+
+    except Exception as e:
+        print(f"Error processing cached features: {e}.")
+        loads = None
+
+if loads is None and args.u_model_idx == -1:
+    print("Cached features not found or error. Falling back to saved 'pca_arrays.npz'.")
     loads = load_pca_results(
-        f"{args.models_dir}/{args.models_folder}",
-        load_data_nor=True,
+        f"{args.models_dir}/{args.models_idx}",
+        load_data_nor=False,
         validate_shapes=False,
     )
-else:
+elif loads is None:
     vals.u_model_idx = args.u_model_idx
     vals.x_model_idx = args.x_model_idx
     vals.models_dir = args.models_dir
     vals.models_folder = args.models_folder
     vals.source_data_dir = args.source_data_dir
-    loads = train_pca_only(vals, device, save=False)
+    loads = train_pca_only(
+        args, device, save=False, inference_batch_size=65536
+    )  # Large batch for faster processing
 (
     v_I,
     v,
@@ -270,7 +311,7 @@ start = time.perf_counter()
 test_idx = 0
 for label, vehicle_ids in enumerate(test_list):
     for i in vehicle_ids:
-        # i = 382
+        i = 46  # 3, 46, 351, 362, 382
         print(f"Processing label={label} with vehicle ID={i}...")
         elapsed = time.perf_counter() - start
         h, rem = divmod(elapsed, 3600)
@@ -365,12 +406,12 @@ for label, vehicle_ids in enumerate(test_list):
         # for i in range(len(title)):
         #     plot_testX_timeseries(t2_contrib[:, i].to_numpy().reshape(df_data2.shape[0],1), feature_names=title[i], title=title[i], figsize=(6, 3), show=True, seperate=False, start_idx=0, _range=[0,0])
 
-        # plot_testX_timeseries(df_data.iloc[:,0].to_numpy().reshape(df_data.shape[0],1), feature_names="$zu_2$", title="$zu_2$", figsize=(6, 3), show=True, seperate=False, start_idx=0, _range=[0,0])
-        # plot_testX_timeseries(df_data.iloc[:,1].to_numpy().reshape(df_data.shape[0],1), feature_names="$zx_2$", title="$zx_2$", figsize=(6, 3), show=True, seperate=False, start_idx=0, _range=[0,0])
-        # plot_testX_timeseries(df_data.iloc[:,2].to_numpy().reshape(df_data.shape[0],1), feature_names="$zu_1$", title="$zu_1$", figsize=(6, 3), show=True, seperate=False, start_idx=0, _range=[0,0])
-        # plot_testX_timeseries(df_data.iloc[:,3].to_numpy().reshape(df_data.shape[0],1), feature_names="$zx_1$", title="$zx_1$", figsize=(6, 3), show=True, seperate=False, start_idx=0, _range=[0,0])
-        # plot_testX_timeseries(df_data.iloc[:,4].to_numpy().reshape(df_data.shape[0],1), feature_names="$ewu$", title="$ewu$", figsize=(6, 3), show=True, seperate=False, start_idx=0, _range=[0,0])
-        # plot_testX_timeseries(df_data.iloc[:,5].to_numpy().reshape(df_data.shape[0],1), feature_names="$ewx$", title="$ewx$", figsize=(6, 3), show=True, seperate=False, start_idx=0, _range=[0,0])
+        # plot_testX_timeseries(df_data2.iloc[:,0].to_numpy().reshape(df_data2.shape[0],1), feature_names="$zu_2$", title="$zu_2$", figsize=(6, 3), show=True, seperate=False, start_idx=0, _range=[0,0])
+        # plot_testX_timeseries(df_data2.iloc[:,1].to_numpy().reshape(df_data2.shape[0],1), feature_names="$zx_2$", title="$zx_2$", figsize=(6, 3), show=True, seperate=False, start_idx=0, _range=[0,0])
+        # plot_testX_timeseries(df_data2.iloc[:,2].to_numpy().reshape(df_data2.shape[0],1), feature_names="$zu_1$", title="$zu_1$", figsize=(6, 3), show=True, seperate=False, start_idx=0, _range=[0,0])
+        # plot_testX_timeseries(df_data2.iloc[:,3].to_numpy().reshape(df_data2.shape[0],1), feature_names="$zx_1$", title="$zx_1$", figsize=(6, 3), show=True, seperate=False, start_idx=0, _range=[0,0])
+        # plot_testX_timeseries(df_data2.iloc[:,4].to_numpy().reshape(df_data2.shape[0],1), feature_names="$ewu$", title="$ewu$", figsize=(6, 3), show=True, seperate=False, start_idx=0, _range=[0,0])
+        # plot_testX_timeseries(df_data2.iloc[:,5].to_numpy().reshape(df_data2.shape[0],1), feature_names="$ewx$", title="$ewx$", figsize=(6, 3), show=True, seperate=False, start_idx=0, _range=[0,0])
         # df_origin = (data_nor * data_std) + data_mean
 
         # plot_testX_timeseries(z_recovered, feature_names="$\Delta{U}$", title="$\Delta{U}$", figsize=(6, 3), show=True, seperate=False, start_idx=0, _range=[0,0])
@@ -381,7 +422,7 @@ for label, vehicle_ids in enumerate(test_list):
         df_data, df_data2 = DiagnosisFeature(
             ERRORU, ERRORX, get_true_feature=analyse_ae_output
         )
-        plot_ae_output_distribution(df_data2, do_plot=analyse_ae_output)
+        # plot_ae_output_distribution(df_data2, do_plot=analyse_ae_output)
 
         # u_max_idx = find_max_idx_from_array(df_data2.iloc[:,0])[0][0]
         # ci_max_idx = find_max_idx_from_array(CI_array)[0][0]
