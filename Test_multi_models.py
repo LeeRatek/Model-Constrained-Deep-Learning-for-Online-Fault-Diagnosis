@@ -128,7 +128,9 @@ def scan_model_indices(artifact_dir, model_prefix):
                 # Exclude indices -1 and 0
                 if idx > 0:
                     indices.append(idx)
-            # Skip net.pth (idx=-1)
+            else:
+                # net.pth (idx=-1)
+                indices.append(-1)
 
     return sorted(set(indices))  # Remove duplicates and sort
 
@@ -421,7 +423,10 @@ models_u = {}
 models_x = {}
 
 for u_idx in u_model_indices:
-    u_model_idx = f"net_e{u_idx}"
+    if u_idx == -1:
+        u_model_idx = "net"
+    else:
+        u_model_idx = f"net_e{u_idx}"
     net_loaded = CombinedAE(
         input_size=dim_dict["x"],
         encode2_input_size=dim_dict["q"],
@@ -794,8 +799,8 @@ if torch.cuda.is_available():
     torch.cuda.empty_cache()
 
 # Iterate over all u_model and x_model combinations
-for u_idx in u_model_indices:
-    for x_idx in x_model_indices:
+for x_idx in x_model_indices:
+    for u_idx in u_model_indices:
 
         # SKIP LOGIC for RESUME
         if (u_idx, x_idx) in completed_combinations:

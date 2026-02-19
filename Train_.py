@@ -20,6 +20,21 @@ from torch import nn
 import time
 import argparse
 from contextlib import redirect_stdout
+import random
+
+
+def set_seed(seed):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+
+# set_seed(42) # Moved to after args parsing
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
@@ -96,8 +111,12 @@ parser.add_argument("--no-use-dx", action="store_true")
 parser.add_argument("--no-abs-err", action="store_true")
 parser.add_argument("--add-one-output-layer", action="store_true")
 parser.add_argument("--no-save", action="store_true")
+parser.add_argument(
+    "--seed", type=int, default=42, help="Random seed for reproducibility"
+)
 args = parser.parse_args()
 
+set_seed(args.seed)
 
 LSTM_TRAINING = args.lstm_training
 LSTM_LOAD = args.lstm_load if args.lstm_training else args.lstm_load
