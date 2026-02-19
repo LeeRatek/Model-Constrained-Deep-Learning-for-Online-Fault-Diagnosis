@@ -454,7 +454,10 @@ for u_idx in u_model_indices:
     print(f"  Loaded U model: {u_model_idx}")
 
 for x_idx in x_model_indices:
-    x_model_idx = f"netx_e{x_idx}"
+    if x_idx == -1:
+        x_model_idx = "netx"
+    else:
+        x_model_idx = f"netx_e{x_idx}"
     netx_loaded = CombinedAE(
         input_size=dim_dict["x2"],
         encode2_input_size=dim_dict["q2"],
