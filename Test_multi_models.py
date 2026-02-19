@@ -137,7 +137,7 @@ def scan_model_indices(artifact_dir, model_prefix):
     if -1 in unique_indices:
         unique_indices.remove(-1)
         unique_indices.append(-1)
-    
+
     return unique_indices
 
 
@@ -440,7 +440,7 @@ for u_idx in u_model_indices:
         activation_fn=(
             CustomSigmoidFunc(scale=ae_u_scale, shift=ae_u_shift)
             if PREPROCESSING == False
-            else torch.sigmoid
+            else CustomSigmoidFunc(scale=1, shift=0)
         ),
         use_dx_in_forward=use_dx,
         add_one_output_layer=add_one_output_layer,
@@ -468,7 +468,11 @@ for x_idx in x_model_indices:
         input_size=dim_dict["x2"],
         encode2_input_size=dim_dict["q2"],
         output_size=dim_dict["y2"],
-        activation_fn=CustomSigmoidFunc(scale=ae_x_scale, shift=ae_x_shift),
+        activation_fn=(
+            CustomSigmoidFunc(scale=ae_x_scale, shift=ae_x_shift)
+            if PREPROCESSING == False
+            else CustomSigmoidFunc(scale=1, shift=0)
+        ),
         use_dx_in_forward=use_dx,
         add_one_output_layer=add_one_output_layer,
     ).to(device)

@@ -16,7 +16,13 @@ from monitering import *
 
 
 def train_pca_only(
-    args, device, save=True, net=None, netx=None, preloaded_train_data=None, inference_batch_size=None
+    args,
+    device,
+    save=True,
+    net=None,
+    netx=None,
+    preloaded_train_data=None,
+    inference_batch_size=None,
 ):
     from torch.utils.data import Dataset
 
@@ -43,7 +49,7 @@ def train_pca_only(
             activation_fn=(
                 CustomSigmoidFunc(scale=args.ae_u_scale, shift=args.ae_u_shift)
                 if PREPROCESSING == False
-                else torch.sigmoid
+                else CustomSigmoidFunc(scale=1, shift=0)
             ),
             use_dx_in_forward=use_dx_in_forward,
             add_one_output_layer=add_one_output_layer,
@@ -64,8 +70,10 @@ def train_pca_only(
             input_size=dim_dict["x2"],
             encode2_input_size=dim_dict["q2"],
             output_size=dim_dict["y2"],
-            activation_fn=CustomSigmoidFunc(
-                scale=args.ae_x_scale, shift=args.ae_x_shift
+            activation_fn=(
+                CustomSigmoidFunc(scale=args.ae_x_scale, shift=args.ae_x_shift)
+                if PREPROCESSING == False
+                else CustomSigmoidFunc(scale=1, shift=0)
             ),
             use_dx_in_forward=use_dx_in_forward,
             add_one_output_layer=add_one_output_layer,
@@ -180,7 +188,9 @@ def train_pca_only(
     # Optimize for both CPU and GPU environments
     # Use provided batch size or default for large datasets
     if inference_batch_size is None:
-        INFERENCE_BATCH_SIZE = 65536  # Default: optimized for 50GB RAM with 6.3M samples
+        INFERENCE_BATCH_SIZE = (
+            65536  # Default: optimized for 50GB RAM with 6.3M samples
+        )
     else:
         INFERENCE_BATCH_SIZE = inference_batch_size
 

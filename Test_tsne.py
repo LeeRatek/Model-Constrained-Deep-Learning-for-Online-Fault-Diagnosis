@@ -276,7 +276,7 @@ net_loaded = CombinedAE(
     activation_fn=(
         CustomSigmoidFunc(scale=ae_u_scale, shift=ae_u_shift)
         if PREPROCESSING == False
-        else torch.sigmoid
+        else CustomSigmoidFunc(scale=1, shift=0)
     ),
     use_dx_in_forward=use_dx,
     add_one_output_layer=add_one_output_layer,
@@ -285,7 +285,11 @@ netx_loaded = CombinedAE(
     input_size=dim_dict["x2"],
     encode2_input_size=dim_dict["q2"],
     output_size=dim_dict["y2"],
-    activation_fn=CustomSigmoidFunc(scale=ae_x_scale, shift=ae_x_shift),
+    activation_fn=(
+        CustomSigmoidFunc(scale=ae_x_scale, shift=ae_x_shift)
+        if PREPROCESSING == False
+        else CustomSigmoidFunc(scale=1, shift=0)
+    ),
     use_dx_in_forward=use_dx,
     add_one_output_layer=add_one_output_layer,
 ).to(device)

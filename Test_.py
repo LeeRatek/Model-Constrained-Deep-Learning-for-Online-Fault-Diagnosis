@@ -31,7 +31,7 @@ parser = argparse.ArgumentParser(
 parser.add_argument(
     "--models-dir", type=str, default="./models"
 )  # 260206_084839 & 260211_163108
-parser.add_argument("--models-folder", type=str, default="260206_084839")
+parser.add_argument("--models-folder", type=str, default="260219_080044")
 parser.add_argument(
     "--source-data-dir",
     type=str,
@@ -44,8 +44,8 @@ parser.add_argument(
 parser.add_argument("--x-start", type=int, default=20)
 parser.add_argument("--x-tick-step", type=int, default=3000)
 parser.add_argument("--sigma-levels", type=str, default="3,4.5,6")
-parser.add_argument("--u-model-idx", type=int, default=10)
-parser.add_argument("--x-model-idx", type=int, default=10)
+parser.add_argument("--u-model-idx", type=int, default=-1)
+parser.add_argument("--x-model-idx", type=int, default=-1)
 args = parser.parse_args()
 
 vals = read_values_from_sim_config(
@@ -83,7 +83,7 @@ PREPROCESSING, SKIP_CHARGE_READY = get_preprocessing_and_skip_charge_ready(
 )
 # SKIP_CHARGE_READY = False
 dim_dict = get_input_dimensions(BATTERY_TYPE)
-AUC_ANALYSIS = False
+AUC_ANALYSIS = True
 if not AUC_ANALYSIS:
     thresholds = [10.4, 87.5]
     # thresholds = [20, 30]
@@ -101,12 +101,6 @@ print_sim_config(
         "add_one_output_layer": add_one_output_layer,
     },
 )
-
-
-try:
-    plot_loss_curve_all(args)
-except Exception as e:
-    print(f"Error plotting loss curve: {e}")
 
 
 ## =================== DTI fault index range = [77~79] ===================
@@ -145,6 +139,11 @@ u_feat_path = os.path.join(cache_dir, f"feat_u_{args.u_model_idx}.pkl")
 x_feat_path = os.path.join(cache_dir, f"feat_x_{args.x_model_idx}.pkl")
 loads = None
 
+try:
+    plot_loss_curve_all(path=f"{args.models_dir}/{args.models_folder}")
+except Exception as e:
+    print(f"Error plotting loss curve: {e}")
+
 if os.path.exists(u_feat_path) and os.path.exists(x_feat_path):
     try:
         print(f"Loading cached training features for PCA setup:")
@@ -180,7 +179,7 @@ if os.path.exists(u_feat_path) and os.path.exists(x_feat_path):
 if loads is None and args.u_model_idx == -1:
     print("Cached features not found or error. Falling back to saved 'pca_arrays.npz'.")
     loads = load_pca_results(
-        f"{args.models_dir}/{args.models_idx}",
+        f"{args.models_dir}/{args.models_folder}",
         load_data_nor=False,
         validate_shapes=False,
     )
@@ -220,7 +219,7 @@ net_loaded = CombinedAE(
     activation_fn=(
         CustomSigmoidFunc(scale=ae_u_scale, shift=ae_u_shift)
         if PREPROCESSING == False
-        else torch.sigmoid
+        else CustomSigmoidFunc(scale=1, shift=0)
     ),
     use_dx_in_forward=use_dx,
     add_one_output_layer=add_one_output_layer,
@@ -229,7 +228,11 @@ netx_loaded = CombinedAE(
     input_size=dim_dict["x2"],
     encode2_input_size=dim_dict["q2"],
     output_size=dim_dict["y2"],
-    activation_fn=CustomSigmoidFunc(scale=ae_x_scale, shift=ae_x_shift),
+    activation_fn=(
+        CustomSigmoidFunc(scale=ae_x_scale, shift=ae_x_shift)
+        if PREPROCESSING == False
+        else CustomSigmoidFunc(scale=1, shift=0)
+    ),
     use_dx_in_forward=use_dx,
     add_one_output_layer=add_one_output_layer,
 ).to(device)
@@ -311,7 +314,7 @@ start = time.perf_counter()
 test_idx = 0
 for label, vehicle_ids in enumerate(test_list):
     for i in vehicle_ids:
-        i = 46  # 3, 46, 351, 362, 382
+        # i = 46  # 3, 46, 351, 362, 382
         print(f"Processing label={label} with vehicle ID={i}...")
         elapsed = time.perf_counter() - start
         h, rem = divmod(elapsed, 3600)
