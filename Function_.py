@@ -949,46 +949,54 @@ def plot_loss_curve(
     return epochs, losses
 
 
-def plot_loss_curve_all(args):
-    plot_loss_curve(
-        loss_csv_path=f"{args.models_dir}/loss_net.csv",
-        title="Voltage train loss",
-        save_path=f"{args.models_dir}/loss_net.png",
-        show=False,  # 저장만 하고 창은 안 띄움
-        dpi=200,
-        downsample=1,  # 1이면 전체 epoch 표시
-        tight_layout=False,
-        png_compress_level=9,
-        # yscale="log",
-    )
+def plot_loss_curve_all(path):
+    save_path = f"{path}/loss_net.png"
+    if not os.path.exists(save_path):
+        plot_loss_curve(
+            loss_csv_path=f"{path}/loss_net.csv",
+            title="Voltage train loss",
+            save_path=save_path,
+            show=False,  # 저장만 하고 창은 안 띄움
+            dpi=200,
+            downsample=1,  # 1이면 전체 epoch 표시
+            tight_layout=False,
+            png_compress_level=9,
+            # yscale="log",
+        )
 
-    plot_loss_curve(
-        loss_csv_path=f"{args.models_dir}/loss_netx.csv",
-        title="SoC train loss",
-        save_path=f"{args.models_dir}/loss_netx.png",
-        show=False,  # 저장만 하고 창은 안 띄움
-        dpi=200,
-        downsample=1,  # 1이면 전체 epoch 표시
-        tight_layout=False,
-        png_compress_level=9,
-        # yscale="log",
-    )
+    save_path = f"{path}/loss_netx.png"
+    if not os.path.exists(save_path):
+        plot_loss_curve(
+            loss_csv_path=f"{path}/loss_netx.csv",
+            title="SoC train loss",
+            save_path=save_path,
+            show=False,  # 저장만 하고 창은 안 띄움
+            dpi=200,
+            downsample=1,  # 1이면 전체 epoch 표시
+            tight_layout=False,
+            png_compress_level=9,
+            # yscale="log",
+        )
 
-    plot_loss_curve(
-        loss_csv_path=f"{args.models_dir}/loss_net_val.csv",
-        title="Voltage validation loss (every 10 epochs)",
-        save_path=f"{args.models_dir}/loss_net_val.png",
-        show=False,
-        downsample=1,
-    )
+    save_path = f"{path}/loss_net_val.png"
+    if not os.path.exists(save_path):
+        plot_loss_curve(
+            loss_csv_path=f"{path}/loss_net_val.csv",
+            title="Voltage validation loss (every 10 epochs)",
+            save_path=save_path,
+            show=False,
+            downsample=1,
+        )
 
-    plot_loss_curve(
-        loss_csv_path=f"{args.models_dir}/loss_netx_val.csv",
-        title="SoC validation loss (every 10 epochs)",
-        save_path=f"{args.models_dir}/loss_netx_val.png",
-        show=False,
-        downsample=1,
-    )
+    save_path = f"{path}/loss_netx_val.png"
+    if not os.path.exists(save_path):
+        plot_loss_curve(
+            loss_csv_path=f"{path}/loss_netx_val.csv",
+            title="SoC validation loss (every 10 epochs)",
+            save_path=save_path,
+            show=False,
+            downsample=1,
+        )
 
 
 def plot_auc_roc_curve_from_threshold_matrix(

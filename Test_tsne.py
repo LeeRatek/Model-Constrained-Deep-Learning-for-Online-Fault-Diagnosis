@@ -178,7 +178,7 @@ print_sim_config(
 )
 
 try:
-    plot_loss_curve_all(args)
+    plot_loss_curve_all(path=f"{args.models_dir}/{args.models_idx}")
 except Exception as e:
     print(f"Error plotting loss curve: {e}")
 

@@ -132,7 +132,13 @@ def scan_model_indices(artifact_dir, model_prefix):
                 # net.pth (idx=-1)
                 indices.append(-1)
 
-    return sorted(set(indices))  # Remove duplicates and sort
+    # Sort: positive indices ascending, then -1 at the end
+    unique_indices = sorted(set(indices))
+    if -1 in unique_indices:
+        unique_indices.remove(-1)
+        unique_indices.append(-1)
+    
+    return unique_indices
 
 
 def sliding_average_np(s, n: int):
@@ -364,7 +370,7 @@ print_sim_config(
 )
 
 try:
-    plot_loss_curve_all(args)
+    plot_loss_curve_all(path=f"{args.models_dir}/{args.models_idx}")
 except Exception as e:
     print(f"Error plotting loss curve: {e}")
 
@@ -485,115 +491,149 @@ print(
     f"All models loaded successfully. Total: {len(models_u)} U models, {len(models_x)} X models\n"
 )
 
+# ================= Check if all error/feature files already exist ================= #
+# If we are using disk cache and all files exist, we can skip loading combined_tensor_train.
+all_files_exist = False
+if args.cache_strategy == "disk":
+    temp_cache_dir_check = os.path.join(
+        f"{args.models_dir}/{args.models_idx}", "temp_cache"
+    )
+    if os.path.exists(temp_cache_dir_check):
+        missing_u = []
+        for u_idx in u_model_indices:
+            fpath = os.path.join(temp_cache_dir_check, f"feat_u_{u_idx}.pkl")
+            if not os.path.exists(fpath):
+                missing_u.append(u_idx)
+
+        missing_x = []
+        for x_idx in x_model_indices:
+            fpath = os.path.join(temp_cache_dir_check, f"feat_x_{x_idx}.pkl")
+            if not os.path.exists(fpath):
+                missing_x.append(x_idx)
+
+        if not missing_u and not missing_x:
+            all_files_exist = True
+            print(
+                "All required feature files found in disk cache. Skipping training data loading."
+            )
+        else:
+            print(
+                f"Missing cached files: U={missing_u}, X={missing_x}. Will load training data."
+            )
+
 # Pre-load training data once to avoid repeated loading in train_pca_only
-print("Pre-loading training data...")
-train_list = (
-    np.load(f"./{BATTERY_TYPE}_filtered_vehicle_ids_train.npy")
-    .astype(np.int64)
-    .tolist()
-)
+if not all_files_exist:
+    print("Pre-loading training data...")
+    train_list = (
+        np.load(f"./{BATTERY_TYPE}_filtered_vehicle_ids_train.npy")
+        .astype(np.int64)
+        .tolist()
+    )
 
-# Apply vehicle range if specified in vals
-vehicle_start = vals.vehicle_start if hasattr(vals, "vehicle_start") else 0
-vehicle_end = vals.vehicle_end if hasattr(vals, "vehicle_end") else -1
-train_list = (
-    train_list[vehicle_start : vehicle_end + 1]
-    if vehicle_end != -1
-    else train_list[vehicle_start:]
-)
+    # Apply vehicle range if specified in vals
+    vehicle_start = vals.vehicle_start if hasattr(vals, "vehicle_start") else 0
+    vehicle_end = vals.vehicle_end if hasattr(vals, "vehicle_end") else -1
+    train_list = (
+        train_list[vehicle_start : vehicle_end + 1]
+        if vehicle_end != -1
+        else train_list[vehicle_start:]
+    )
 
-# ================= Check Cache for Combined Data ================= #
-normalize_dx_flag = vals.normalize_dx if hasattr(vals, "normalize_dx") else False
+    # ================= Check Cache for Combined Data ================= #
+    normalize_dx_flag = vals.normalize_dx if hasattr(vals, "normalize_dx") else False
 
-# Generate unique hash for this configuration
-config_dict = {
-    "train_list": train_list,
-    "battery_type": BATTERY_TYPE,
-    "preprocessing": PREPROCESSING,
-    "skip_charge_ready": SKIP_CHARGE_READY,
-    "normalize_dx": normalize_dx_flag,
-}
-config_str = json.dumps(config_dict, sort_keys=True)
-config_hash = hashlib.md5(config_str.encode("utf-8")).hexdigest()
+    # Generate unique hash for this configuration
+    config_dict = {
+        "train_list": train_list,
+        "battery_type": BATTERY_TYPE,
+        "preprocessing": PREPROCESSING,
+        "skip_charge_ready": SKIP_CHARGE_READY,
+        "normalize_dx": normalize_dx_flag,
+    }
+    config_str = json.dumps(config_dict, sort_keys=True)
+    config_hash = hashlib.md5(config_str.encode("utf-8")).hexdigest()
 
-cache_filename = f"combined_train_data_{BATTERY_TYPE}_{config_hash}.pt"
-cache_path = os.path.join(args.source_data_dir, cache_filename)
+    cache_filename = f"combined_train_data_{BATTERY_TYPE}_{config_hash}.pt"
+    cache_path = os.path.join(args.source_data_dir, cache_filename)
 
-combined_tensor_train = None
-combined_tensorx_train = None
+    combined_tensor_train = None
+    combined_tensorx_train = None
 
-if os.path.exists(cache_path):
-    print(f"Found cached training data: {cache_path}")
-    print("Loading...")
-    try:
-        cache_data = torch.load(cache_path)
-        combined_tensor_train = cache_data["tensor"]
-        combined_tensorx_train = cache_data["tensorx"]
-        del cache_data
-        print("Successfully loaded cached training data.")
-    except Exception as e:
-        print(f"Error loading cache: {e}. Will regenerate.")
+    if os.path.exists(cache_path):
+        print(f"Found cached training data: {cache_path}")
+        print("Loading...")
+        try:
+            cache_data = torch.load(cache_path)
+            combined_tensor_train = cache_data["tensor"]
+            combined_tensorx_train = cache_data["tensorx"]
+            del cache_data
+            print("Successfully loaded cached training data.")
+        except Exception as e:
+            print(f"Error loading cache: {e}. Will regenerate.")
 
-if combined_tensor_train is None:
-    print("Cache miss or error. Processing raw pickle files...")
-    combined_tensor_list = []
-    combined_tensorx_list = []
+    if combined_tensor_train is None:
+        print("Cache miss or error. Processing raw pickle files...")
+        combined_tensor_list = []
+        combined_tensorx_list = []
 
-    count = 0
-    for i in train_list:
-        count += 1
-        if count % 10 == 0:
-            print(f"  Processing vehicle {count}/{len(train_list)}")
-        VEHICLE_ID = f"{i}"
+        count = 0
+        for i in train_list:
+            count += 1
+            if count % 10 == 0:
+                print(f"  Processing vehicle {count}/{len(train_list)}")
+            VEHICLE_ID = f"{i}"
 
-        tensor = safe_load(
-            f"{args.source_data_dir}/{BATTERY_TYPE}/{VEHICLE_ID}/vin_2.pkl",
-            verbose=False,
-        )
-        tensorx = safe_load(
-            f"{args.source_data_dir}/{BATTERY_TYPE}/{VEHICLE_ID}/vin_3.pkl",
-            verbose=False,
-        )
+            tensor = safe_load(
+                f"{args.source_data_dir}/{BATTERY_TYPE}/{VEHICLE_ID}/vin_2.pkl",
+                verbose=False,
+            )
+            tensorx = safe_load(
+                f"{args.source_data_dir}/{BATTERY_TYPE}/{VEHICLE_ID}/vin_3.pkl",
+                verbose=False,
+            )
 
-        tensor, tensorx = preprocess_loaded_tensor(
-            tensor,
-            tensorx,
-            dim_dict,
-            BATTERY_TYPE,
-            PREPROCESSING,
-            SKIP_CHARGE_READY,
-            normalize_dx=normalize_dx_flag,
-        )
+            tensor, tensorx = preprocess_loaded_tensor(
+                tensor,
+                tensorx,
+                dim_dict,
+                BATTERY_TYPE,
+                PREPROCESSING,
+                SKIP_CHARGE_READY,
+                normalize_dx=normalize_dx_flag,
+            )
 
-        combined_tensor_list.append(tensor)
-        combined_tensorx_list.append(tensorx)
+            combined_tensor_list.append(tensor)
+            combined_tensorx_list.append(tensorx)
 
-    if len(combined_tensor_list) > 0:
-        # Revert to Double (Float64) for precision accuracy
-        combined_tensor_train = torch.cat(combined_tensor_list, dim=0).double()
-        combined_tensorx_train = torch.cat(combined_tensorx_list, dim=0).double()
-        del combined_tensor_list, combined_tensorx_list
-    else:
-        combined_tensor_train = torch.empty(0)
-        combined_tensorx_train = torch.empty(0)
+        if len(combined_tensor_list) > 0:
+            # Revert to Double (Float64) for precision accuracy
+            combined_tensor_train = torch.cat(combined_tensor_list, dim=0).double()
+            combined_tensorx_train = torch.cat(combined_tensorx_list, dim=0).double()
+            del combined_tensor_list, combined_tensorx_list
+        else:
+            combined_tensor_train = torch.empty(0)
+            combined_tensorx_train = torch.empty(0)
 
-    # Save to cache
-    print(f"Saving combined training data to cache: {cache_path}")
-    try:
-        torch.save(
-            {
-                "tensor": combined_tensor_train,
-                "tensorx": combined_tensorx_train,
-            },
-            cache_path,
-        )
-        print("Cache saved successfully.")
-    except Exception as e:
-        print(f"Warning: Could not save cache to {cache_path}: {e}")
+        # Save to cache
+        print(f"Saving combined training data to cache: {cache_path}")
+        try:
+            torch.save(
+                {
+                    "tensor": combined_tensor_train,
+                    "tensorx": combined_tensorx_train,
+                },
+                cache_path,
+            )
+            print("Cache saved successfully.")
+        except Exception as e:
+            print(f"Warning: Could not save cache to {cache_path}: {e}")
 
-print(
-    f"Training data loaded: {combined_tensor_train.shape[0]} samples (Double precision)\n"
-)
+    print(
+        f"Training data loaded: {combined_tensor_train.shape[0]} samples (Double precision)\n"
+    )
+else:
+    # Just needed to skip the loading block
+    pass
 
 # Pre-load all test data once to avoid repeated loading
 print("Pre-loading test data...")
@@ -797,7 +837,8 @@ for x_idx in x_model_indices:
 
 # Critical: Release original training data to free up RAM before PCA loop
 print("Releasing training data from memory...")
-del combined_tensor_train, combined_tensorx_train
+if not all_files_exist:
+    del combined_tensor_train, combined_tensorx_train
 if torch.cuda.is_available():
     torch.cuda.empty_cache()
 

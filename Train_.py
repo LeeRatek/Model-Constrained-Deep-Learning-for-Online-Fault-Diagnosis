@@ -51,7 +51,7 @@ parser.add_argument(
     help="Filtered normal vehicle ID 시작 인덱스",
 )
 parser.add_argument(
-    "--vehicle-end", type=int, default=1, help="Filtered normal vehicle ID 끝 인덱스"
+    "--vehicle-end", type=int, default=-1, help="Filtered normal vehicle ID 끝 인덱스"
 )
 parser.add_argument("--lstm-training", action="store_true")
 parser.add_argument("--lstm-load", action="store_true")
@@ -83,6 +83,7 @@ parser.add_argument("--ae-u-save-per", type=int, default=10)  # default 300
 parser.add_argument(
     "--ae-u-lr", type=float, default=5e-4
 )  # based on original manuscript
+parser.add_argument("--ae-u-shuffle", action="store_true")
 parser.add_argument("--ae-u-batchsize", type=int, default=100)
 parser.add_argument("--ae-x-scale", type=float, default=1.0)
 parser.add_argument("--ae-x-shift", type=float, default=0)
@@ -91,11 +92,13 @@ parser.add_argument("--ae-x-save-per", type=int, default=10)  # default 300
 parser.add_argument(
     "--ae-x-lr", type=float, default=5e-4
 )  # based on original manuscript
+parser.add_argument("--ae-x-shuffle", action="store_true")
 parser.add_argument("--ae-x-batchsize", type=int, default=100)
 parser.add_argument("--lstm-epochs", type=int, default=300)
 parser.add_argument(
     "--lstm-lr", type=float, default=1e-4
 )  # based on original manuscript
+
 parser.add_argument(
     "--lstm-batchsize", type=int, default=100
 )  # based on original manuscript
@@ -104,7 +107,7 @@ parser.add_argument("--normalize-val", type=int, default=4)
 parser.add_argument(
     "--learning-case",
     type=int,
-    default=2,
+    default=1,
     help="1: Skip and no nomalization, 2: Skip but doing normalization, 3: No skip but doing normalization, 4: No skip and no normalization.",
 )
 parser.add_argument("--no-use-dx", action="store_true")
@@ -583,26 +586,6 @@ class VirtualDatasetVal(Dataset):
         )
 
 
-# Use Virtual Datasets
-train_loader_u = DataLoader(
-    VirtualDatasetU(vehicle_tensors, dim_dict),
-    batch_size=AE_U_BATCHSIZE,
-    shuffle=True,  # Shuffle is important for training
-)
-# For validation, we need separate loaders or one combined loader.
-# The original code iterated validate_loader_u which yielded (vx,vy,vz,vq).
-# But later for NETX, it iterated validate_loader_soc.
-# Let's keep them separate or use the combined one intelligently.
-# To minimize code changes in the loop, let's create specific loaders.
-
-# Validation loader for U (returns vx, vy, vz, vq)
-# We can reuse VirtualDatasetU for validation data if we pass validation tensor list
-validate_loader_u = DataLoader(
-    VirtualDatasetU(v_vehicle_tensors, dim_dict),
-    batch_size=AE_U_BATCHSIZE,
-    shuffle=False,
-)
-
 # Instantiate the networks
 net = CombinedAE(
     input_size=dim_dict["x"],
@@ -638,7 +621,11 @@ val_loss_points_u = []  # list of (epoch, avg_val_loss)
 # double casting은 반복 호출할 필요가 없어 루프 밖에서 1회만 수행
 net = net.double()
 
-# Define validation loader for U model using the VirtualDatasetU we created (reusing v_vehicle_tensors)
+train_loader_u = DataLoader(
+    VirtualDatasetU(vehicle_tensors, dim_dict),
+    batch_size=AE_U_BATCHSIZE,
+    shuffle=args.ae_u_shuffle,  # Shuffle is important for training
+)
 validate_loader_u = DataLoader(
     VirtualDatasetU(v_vehicle_tensors, dim_dict),
     batch_size=AE_U_BATCHSIZE,
@@ -725,8 +712,9 @@ if not args.no_save:
 train_loader2 = DataLoader(
     VirtualDatasetU(vehicle_tensors, dim_dict),
     batch_size=4096,  # Use a safe batch size
-    shuffle=False,
+    shuffle=False,  # Shuffle if it was used in training, else keep consistent
 )
+
 net.eval()
 error_list = []
 with torch.no_grad():
@@ -753,7 +741,7 @@ AE_X_BATCHSIZE = args.ae_x_batchsize
 train_loader_soc = DataLoader(
     VirtualDatasetX(vehicle_tensorsx, dim_dict),
     batch_size=AE_X_BATCHSIZE,
-    shuffle=True,  # Shuffle for training
+    shuffle=args.ae_x_shuffle,  # Shuffle for training
 )
 validate_loader_soc = DataLoader(
     VirtualDatasetX(v_vehicle_tensorsx, dim_dict),
