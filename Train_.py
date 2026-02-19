@@ -215,35 +215,151 @@ for i in train_list:
     vehicle_tensors.append(tensor)
     vehicle_tensorsx.append(tensorx)
 
-if len(vehicle_tensors) > 0:
-    combined_tensor = torch.cat(vehicle_tensors, dim=0)
-    combined_tensorx = torch.cat(vehicle_tensorsx, dim=0)
-else:
-    # 데이터가 없는 경우 처리
-    combined_tensor = torch.empty(0)
-    combined_tensorx = torch.empty(0)
-
-# 메모리 해제
-del vehicle_tensors, vehicle_tensorsx
+# combined_tensor를 생성하지 않고 리스트만 유지하여 메모리 피크 방지
+# combined_tensor = torch.cat(vehicle_tensors, dim=0)
+# combined_tensorx = torch.cat(vehicle_tensorsx, dim=0)
+# del vehicle_tensors, vehicle_tensorsx # 기존 코드 주석 처리
 
 
 # ----------------------------------------Training for MC-AE--------------------------
-x_recovered = combined_tensor[:, : dim_dict["x"]]  # 0~1
-y_recovered = combined_tensor[:, dim_dict["x"] : dim_dict["x"] + dim_dict["y"]]  # 2~111
-z_recovered = combined_tensor[
-    :, dim_dict["x"] + dim_dict["y"] : dim_dict["x"] + dim_dict["y"] + dim_dict["z"]
-]  # 112~221
-q_recovered = combined_tensor[
-    :, dim_dict["x"] + dim_dict["y"] + dim_dict["z"] :
-]  # 222~
+# 리스트 상태로 Dataset 생성 (메모리 효율화)
+class VirtualConcatDataset(Dataset):
+    def __init__(self, tensor_list_u, tensor_list_x, dim_dict):
+        self.tensor_list_u = tensor_list_u
+        self.tensor_list_x = tensor_list_x
+        self.dim_dict = dim_dict
 
-x_recovered2 = combined_tensorx[:, : dim_dict["x2"]]
-y_recovered2 = combined_tensorx[:, dim_dict["x2"] : dim_dict["x2"] + dim_dict["y2"]]
-z_recovered2 = combined_tensorx[
-    :,
-    dim_dict["x2"] + dim_dict["y2"] : dim_dict["x2"] + dim_dict["y2"] + dim_dict["z2"],
-]
-q_recovered2 = combined_tensorx[:, dim_dict["x2"] + dim_dict["y2"] + dim_dict["z2"] :]
+        # 각 텐서의 길이와 누적 인덱스 계산
+        self.lengths = [t.shape[0] for t in tensor_list_u]
+        self.cumulative_lengths = np.cumsum([0] + self.lengths)
+        self.total_length = self.cumulative_lengths[-1]
+
+    def __len__(self):
+        return self.total_length
+
+    def __getitem__(self, idx):
+        # 이진 탐색으로 어떤 텐서에 속하는지 찾기
+        bin_idx = np.searchsorted(self.cumulative_lengths, idx, side="right") - 1
+        local_idx = idx - self.cumulative_lengths[bin_idx]
+
+        # 해당 텐서 가져오기
+        tensor_u = self.tensor_list_u[bin_idx][local_idx]
+        tensor_x = self.tensor_list_x[bin_idx][local_idx]
+
+        # 슬라이싱 (여기서 필요한 부분만 추출)
+        # U-Model Inputs
+        x = tensor_u[: self.dim_dict["x"]]
+        y = tensor_u[self.dim_dict["x"] : self.dim_dict["x"] + self.dim_dict["y"]]
+        z = tensor_u[
+            self.dim_dict["x"]
+            + self.dim_dict["y"] : self.dim_dict["x"]
+            + self.dim_dict["y"]
+            + self.dim_dict["z"]
+        ]
+        q = tensor_u[self.dim_dict["x"] + self.dim_dict["y"] + self.dim_dict["z"] :]
+
+        # X-Model Inputs (필요 시 반환하도록 수정 가능, 현재 구조상 4개만 반환하므로 U모델용만 반환)
+        # X 모델용 데이터가 필요할 땐 별도 Dataset 또는 item 반환 구조 변경 필요
+        # 현재 코드 구조상 train_loader_u는 x,y,z,q만 씀.
+
+        return (
+            x.to(torch.double),
+            y.to(torch.double),
+            z.to(torch.double),
+            q.to(torch.double),
+        )
+
+
+class VirtualConcatDatasetX(Dataset):
+    def __init__(self, tensor_list_x, dim_dict):
+        self.tensor_list_x = tensor_list_x
+        self.dim_dict = dim_dict
+        self.lengths = [t.shape[0] for t in tensor_list_x]
+        self.cumulative_lengths = np.cumsum([0] + self.lengths)
+        self.total_length = self.cumulative_lengths[-1]
+
+    def __len__(self):
+        return self.total_length
+
+    def __getitem__(self, idx):
+        bin_idx = np.searchsorted(self.cumulative_lengths, idx, side="right") - 1
+        local_idx = idx - self.cumulative_lengths[bin_idx]
+        tensor_x = self.tensor_list_x[bin_idx][local_idx]
+
+        x2 = tensor_x[: self.dim_dict["x2"]]
+        y2 = tensor_x[self.dim_dict["x2"] : self.dim_dict["x2"] + self.dim_dict["y2"]]
+        z2 = tensor_x[
+            self.dim_dict["x2"]
+            + self.dim_dict["y2"] : self.dim_dict["x2"]
+            + self.dim_dict["y2"]
+            + self.dim_dict["z2"]
+        ]
+        q2 = tensor_x[self.dim_dict["x2"] + self.dim_dict["y2"] + self.dim_dict["z2"] :]
+
+        return (
+            x2.to(torch.double),
+            y2.to(torch.double),
+            z2.to(torch.double),
+            q2.to(torch.double),
+        )
+
+
+# 검증 데이터용
+class VirtualConcatDatasetVal(Dataset):
+    def __init__(self, tensor_list_u, tensor_list_x, dim_dict):
+        self.tensor_list_u = tensor_list_u
+        self.tensor_list_x = tensor_list_x
+        self.dim_dict = dim_dict
+        self.lengths = [t.shape[0] for t in tensor_list_u]
+        self.cumulative_lengths = np.cumsum([0] + self.lengths)
+        self.total_length = self.cumulative_lengths[-1]
+
+    def __len__(self):
+        return self.total_length
+
+    def __getitem__(self, idx):
+        bin_idx = np.searchsorted(self.cumulative_lengths, idx, side="right") - 1
+        local_idx = idx - self.cumulative_lengths[bin_idx]
+
+        t_u = self.tensor_list_u[bin_idx][local_idx]
+        t_x = self.tensor_list_x[bin_idx][local_idx]
+
+        # U Inputs
+        vx = t_u[: self.dim_dict["x"]]
+        vy = t_u[self.dim_dict["x"] : self.dim_dict["x"] + self.dim_dict["y"]]
+        vz = t_u[
+            self.dim_dict["x"]
+            + self.dim_dict["y"] : self.dim_dict["x"]
+            + self.dim_dict["y"]
+            + self.dim_dict["z"]
+        ]
+        vq = t_u[self.dim_dict["x"] + self.dim_dict["y"] + self.dim_dict["z"] :]
+
+        # X Inputs
+        vx2 = t_x[: self.dim_dict["x2"]]
+        vy2 = t_x[self.dim_dict["x2"] : self.dim_dict["x2"] + self.dim_dict["y2"]]
+        vz2 = t_x[
+            self.dim_dict["x2"]
+            + self.dim_dict["y2"] : self.dim_dict["x2"]
+            + self.dim_dict["y2"]
+            + self.dim_dict["z2"]
+        ]
+        vq2 = t_x[self.dim_dict["x2"] + self.dim_dict["y2"] + self.dim_dict["z2"] :]
+
+        return (
+            vx.to(torch.double),
+            vy.to(torch.double),
+            vz.to(torch.double),
+            vq.to(torch.double),
+            vx2.to(torch.double),
+            vy2.to(torch.double),
+            vz2.to(torch.double),
+            vq2.to(torch.double),
+        )
+
+
+# Total training samples calculation
+total_train_samples = sum(len(t) for t in vehicle_tensors)
 
 
 # ----------------------------------------Validation Data Loading ------------------------------
@@ -276,35 +392,20 @@ for i in validate_list:
     v_vehicle_tensors.append(v_tensor)
     v_vehicle_tensorsx.append(v_tensorx)
 
-if len(v_vehicle_tensors) > 0:
-    v_combined_tensor = torch.cat(v_vehicle_tensors, dim=0)
-    v_combined_tensorx = torch.cat(v_vehicle_tensorsx, dim=0)
-else:
-    v_combined_tensor = torch.empty(0)
-    v_combined_tensorx = torch.empty(0)
+# combined_tensor 생성 제거
+# if len(v_vehicle_tensors) > 0:
+#     v_combined_tensor = torch.cat(v_vehicle_tensors, dim=0)
+#     v_combined_tensorx = torch.cat(v_vehicle_tensorsx, dim=0)
+# else:
+#     v_combined_tensor = torch.empty(0)
+#     v_combined_tensorx = torch.empty(0)
 
-del v_vehicle_tensors, v_vehicle_tensorsx
+# del v_vehicle_tensors, v_vehicle_tensorsx
 
-v_x_recovered = v_combined_tensor[:, : dim_dict["x"]]  # 0~1
-v_y_recovered = v_combined_tensor[
-    :, dim_dict["x"] : dim_dict["x"] + dim_dict["y"]
-]  # 2~111
-v_z_recovered = v_combined_tensor[
-    :, dim_dict["x"] + dim_dict["y"] : dim_dict["x"] + dim_dict["y"] + dim_dict["z"]
-]  # 112~221
-v_q_recovered = v_combined_tensor[
-    :, dim_dict["x"] + dim_dict["y"] + dim_dict["z"] :
-]  # 222~
+# v_x_recovered = v_combined_tensor[:, : dim_dict["x"]]  # 0~1
+# ... (슬라이싱 제거)
 
-v_x_recovered2 = v_combined_tensorx[:, : dim_dict["x2"]]
-v_y_recovered2 = v_combined_tensorx[:, dim_dict["x2"] : dim_dict["x2"] + dim_dict["y2"]]
-v_z_recovered2 = v_combined_tensorx[
-    :,
-    dim_dict["x2"] + dim_dict["y2"] : dim_dict["x2"] + dim_dict["y2"] + dim_dict["z2"],
-]
-v_q_recovered2 = v_combined_tensorx[
-    :, dim_dict["x2"] + dim_dict["y2"] + dim_dict["z2"] :
-]
+total_val_samples = sum(len(t) for t in v_vehicle_tensors)
 
 buf = io.StringIO()
 with redirect_stdout(buf):
@@ -314,7 +415,7 @@ with redirect_stdout(buf):
         extra={
             "device": str(device),
             "Vehicle IDs used for training": vehicle_idxes,
-            "Amount of data used for training": combined_tensor.shape[0],
+            "Amount of data used for training": total_train_samples,
             "PREPROCESSING": PREPROCESSING,
             "SKIP_CHARGE_READY": SKIP_CHARGE_READY,
         },
@@ -332,34 +433,152 @@ AE_U_LR = args.ae_u_lr
 AE_U_BATCHSIZE = args.ae_u_batchsize
 
 
-class Dataset(Dataset):
-    def __init__(self, x, y, z, q):
-        # Keep referencing original tensors (likely float32) to save memory
-        self.x = x
-        self.y = y
-        self.z = z
-        self.q = q
+# ---------------------------------------- Dataset Class for Virtual Concat ----------------------------------------
+class VirtualDatasetU(Dataset):
+    def __init__(self, tensor_list, dim_dict):
+        self.tensor_list = tensor_list
+        self.dim_list = [t.shape[0] for t in tensor_list]
+        self.cumulative_dim = np.cumsum([0] + self.dim_list)
+        self.total_len = self.cumulative_dim[-1]
+
+        # Dimensions
+        self.dx = dim_dict["x"]
+        self.dy = dim_dict["y"]
+        self.dz = dim_dict["z"]
+        self.dq = dim_dict["q"]  # Not used but for consistency
 
     def __len__(self):
-        return len(self.x)
+        return self.total_len
 
     def __getitem__(self, idx):
-        # Cast to double only when fetching a batch
+        # Binary search
+        bin_idx = np.searchsorted(self.cumulative_dim, idx, side="right") - 1
+        local_idx = idx - self.cumulative_dim[bin_idx]
+
+        # Get raw tensor
+        raw = self.tensor_list[bin_idx][local_idx]
+
+        # Slice on the fly
+        x = raw[: self.dx]
+        y = raw[self.dx : self.dx + self.dy]
+        z = raw[self.dx + self.dy : self.dx + self.dy + self.dz]
+        q = raw[self.dx + self.dy + self.dz :]
+
         return (
-            self.x[idx].to(torch.double),
-            self.y[idx].to(torch.double),
-            self.z[idx].to(torch.double),
-            self.q[idx].to(torch.double),
+            x.to(torch.double),
+            y.to(torch.double),
+            z.to(torch.double),
+            q.to(torch.double),
         )
 
 
+class VirtualDatasetX(Dataset):
+    def __init__(self, tensor_list, dim_dict):
+        self.tensor_list = tensor_list
+        # Precompute cumulative lengths
+        self.dim_list = [t.shape[0] for t in tensor_list]
+        self.cumulative_dim = np.cumsum([0] + self.dim_list)
+        self.total_len = self.cumulative_dim[-1]
+
+        # Dimensions
+        self.dx = dim_dict["x2"]
+        self.dy = dim_dict["y2"]
+        self.dz = dim_dict["z2"]
+        # self.dq is rest
+
+    def __len__(self):
+        return self.total_len
+
+    def __getitem__(self, idx):
+        # Binary search
+        bin_idx = np.searchsorted(self.cumulative_dim, idx, side="right") - 1
+        local_idx = idx - self.cumulative_dim[bin_idx]
+
+        raw = self.tensor_list[bin_idx][local_idx]
+
+        # Slice on the fly
+        x = raw[: self.dx]
+        y = raw[self.dx : self.dx + self.dy]
+        z = raw[self.dx + self.dy : self.dx + self.dy + self.dz]
+        q = raw[self.dx + self.dy + self.dz :]
+
+        return (
+            x.to(torch.double),
+            y.to(torch.double),
+            z.to(torch.double),
+            q.to(torch.double),
+        )
+
+
+class VirtualDatasetVal(Dataset):
+    def __init__(self, tensor_list_u, tensor_list_x, dim_dict):
+        self.tensor_list_u = tensor_list_u
+        self.tensor_list_x = tensor_list_x
+        self.dim_list = [t.shape[0] for t in tensor_list_u]
+        self.cumulative_dim = np.cumsum([0] + self.dim_list)
+        self.total_len = self.cumulative_dim[-1]
+        self.dim_dict = dim_dict
+
+    def __len__(self):
+        return self.total_len
+
+    def __getitem__(self, idx):
+        bin_idx = np.searchsorted(self.cumulative_dim, idx, side="right") - 1
+        local_idx = idx - self.cumulative_dim[bin_idx]
+
+        raw_u = self.tensor_list_u[bin_idx][local_idx]
+        raw_x = self.tensor_list_x[bin_idx][local_idx]
+
+        # U
+        vx = raw_u[: self.dim_dict["x"]]
+        vy = raw_u[self.dim_dict["x"] : self.dim_dict["x"] + self.dim_dict["y"]]
+        vz = raw_u[
+            self.dim_dict["x"]
+            + self.dim_dict["y"] : self.dim_dict["x"]
+            + self.dim_dict["y"]
+            + self.dim_dict["z"]
+        ]
+        vq = raw_u[self.dim_dict["x"] + self.dim_dict["y"] + self.dim_dict["z"] :]
+
+        # X
+        vx2 = raw_x[: self.dim_dict["x2"]]
+        vy2 = raw_x[self.dim_dict["x2"] : self.dim_dict["x2"] + self.dim_dict["y2"]]
+        vz2 = raw_x[
+            self.dim_dict["x2"]
+            + self.dim_dict["y2"] : self.dim_dict["x2"]
+            + self.dim_dict["y2"]
+            + self.dim_dict["z2"]
+        ]
+        vq2 = raw_x[self.dim_dict["x2"] + self.dim_dict["y2"] + self.dim_dict["z2"] :]
+
+        return (
+            vx.to(torch.double),
+            vy.to(torch.double),
+            vz.to(torch.double),
+            vq.to(torch.double),
+            vx2.to(torch.double),
+            vy2.to(torch.double),
+            vz2.to(torch.double),
+            vq2.to(torch.double),
+        )
+
+
+# Use Virtual Datasets
 train_loader_u = DataLoader(
-    Dataset(x_recovered, y_recovered, z_recovered, q_recovered),
+    VirtualDatasetU(vehicle_tensors, dim_dict),
     batch_size=AE_U_BATCHSIZE,
-    shuffle=False,
+    shuffle=True,  # Shuffle is important for training
 )
+# For validation, we need separate loaders or one combined loader.
+# The original code iterated validate_loader_u which yielded (vx,vy,vz,vq).
+# But later for NETX, it iterated validate_loader_soc.
+# Let's keep them separate or use the combined one intelligently.
+# To minimize code changes in the loop, let's create specific loaders.
+
+# Validation loader for U (returns vx, vy, vz, vq)
+# We can reuse VirtualDatasetU for validation data if we pass validation tensor list
 validate_loader_u = DataLoader(
-    Dataset(v_x_recovered, v_y_recovered, v_z_recovered, v_q_recovered),
+    VirtualDatasetU(v_vehicle_tensors, dim_dict),
     batch_size=AE_U_BATCHSIZE,
     shuffle=False,
 )
@@ -394,6 +613,14 @@ val_loss_points_u = []  # list of (epoch, avg_val_loss)
 
 # double casting은 반복 호출할 필요가 없어 루프 밖에서 1회만 수행
 net = net.double()
+
+# Define validation loader for U model using the VirtualDatasetU we created (reusing v_vehicle_tensors)
+validate_loader_u = DataLoader(
+    VirtualDatasetU(v_vehicle_tensors, dim_dict),
+    batch_size=AE_U_BATCHSIZE,
+    shuffle=False,
+)
+
 for epoch in range(AE_U_EPOCH):
     total_loss = 0
     num_batches = 0
@@ -468,9 +695,9 @@ if len(val_loss_points_u) > 0:
 
 save_net_state(model=net, models_dir=f"{model_path}/", filename="net.pth")
 
-# Optimization: Compute error in batches to avoid OOM
+# Optimization: Compute error in batches using VirtualDataset directly
 train_loader2 = DataLoader(
-    Dataset(x_recovered, y_recovered, z_recovered, q_recovered),
+    VirtualDatasetU(vehicle_tensors, dim_dict),
     batch_size=4096,  # Use a safe batch size
     shuffle=False,
 )
@@ -498,12 +725,12 @@ AE_X_EPOCH = args.ae_x_epochs
 AE_X_LR = args.ae_x_lr
 AE_X_BATCHSIZE = args.ae_x_batchsize
 train_loader_soc = DataLoader(
-    Dataset(x_recovered2, y_recovered2, z_recovered2, q_recovered2),
+    VirtualDatasetX(vehicle_tensorsx, dim_dict),
     batch_size=AE_X_BATCHSIZE,
-    shuffle=False,
+    shuffle=True,  # Shuffle for training
 )
 validate_loader_soc = DataLoader(
-    Dataset(v_x_recovered2, v_y_recovered2, v_z_recovered2, v_q_recovered2),
+    VirtualDatasetX(v_vehicle_tensorsx, dim_dict),
     batch_size=AE_X_BATCHSIZE,
     shuffle=False,
 )
@@ -584,9 +811,9 @@ if len(val_loss_points_x) > 0:
     )
 save_net_state(model=netx, models_dir=f"{model_path}/", filename="netx.pth")
 
-# Optimization: Compute error in batches to avoid OOM
+# Optimization: Compute error in batches using VirtualDatasetX directly
 train_loaderx2 = DataLoader(
-    Dataset(x_recovered2, y_recovered2, z_recovered2, q_recovered2),
+    VirtualDatasetX(vehicle_tensorsx, dim_dict),
     batch_size=4096,
     shuffle=False,
 )
