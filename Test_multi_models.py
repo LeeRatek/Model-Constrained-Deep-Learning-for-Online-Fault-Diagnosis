@@ -97,6 +97,11 @@ parser.add_argument(
     action="store_true",
     help="Convert error matrices to float32 (Single Precision) to save memory/disk (approx 50% reduction). Optional optimization.",
 )
+parser.add_argument(
+    "--fast-search",
+    action="store_true",
+    help="Optimize search: 1. Find best U using last X model. 2. Sweep X models using best U. Reduces combinations from N*M to N+M.",
+)
 args = parser.parse_args()
 
 
@@ -846,276 +851,327 @@ if not all_files_exist:
 if torch.cuda.is_available():
     torch.cuda.empty_cache()
 
-# Iterate over all u_model and x_model combinations
-for x_idx in x_model_indices:
-    for u_idx in u_model_indices:
+# Determine the list of combinations to process based on fast-search strategy or full search
+combinations_to_run = []
 
-        # SKIP LOGIC for RESUME
-        if (u_idx, x_idx) in completed_combinations:
-            print(f"Skipping cached combination: u={u_idx}, x={x_idx}")
-            continue
+if args.fast_search and len(x_model_indices) > 0 and len(u_model_indices) > 0:
+    print(f"\n{'='*80}")
+    print("FAST SEARCH MODE ENABLED")
+    print("Step 1: Finding best U model using the last X model...")
+    print(f"{'='*80}\n")
+    
+    last_x_idx = x_model_indices[-1]
+    
+    # Step 1: Run all U models against the last X model
+    step1_results = []
+    
+    # Check if we already have results for this step to avoid re-calculation if possible,
+    # but we need the AUC values to sort. We'll rely on the resume logic inside the loop 
+    # or just let the main loop handle it, but here we need to enforce the order.
+    
+    # We will generate a list of (u, x) tuples to run in order.
+    # However, fast search requires the RESULT of step 1 to proceed to step 2.
+    # So we cannot pre-generate the full list. We must run the loop in two phases.
+    
+    # PHASE 1 LOOP
+    combinations_phase1 = [(u, last_x_idx) for u in u_model_indices]
+else:
+    # Standard full grid search
+    combinations_phase1 = [(u_idx, x_idx) for x_idx in x_model_indices for u_idx in u_model_indices]
 
-        print(f"\n{'='*80}")
-        print(f"Testing model combination: u_model_idx={u_idx}, x_model_idx={x_idx}")
-        print(f"{'='*80}\n")
 
-        # Initialize prediction results for this combination
-        predict_results = np.zeros(
-            (total_test_vehicles, len(predict_thresholds)), dtype=np.int8
-        )
-        y_true = np.zeros(total_test_vehicles, dtype=np.int8)  # normal=0, fault=1
+# Function to process a single combination (refactored from original loop)
+def process_combination(u_idx, x_idx):
+    global predict_thresholds, total_test_vehicles, completed_combinations, all_roc_results
+    
+    # SKIP LOGIC for RESUME (if result already in CSV)
+    if (u_idx, x_idx) in completed_combinations:
+        print(f"Skipping cached combination: u={u_idx}, x={x_idx}")
+        # We need to retrieve the AUC if we are in fast search mode to determine the winner
+        # Try to read from all_roc_results if available (populated from CSV earlier?)
+        # Since we didn't populate all_roc_results from CSV, we might miss it.
+        # But for fast search Step 1, we critically need the AUC.
+        # If resuming, we should ideally read the AUC from the CSV file row.
+        
+        auc_val = 0.0
+        if args.fast_search:
+            # Try to find AUC in existing CSV data
+            try:
+                if os.path.exists(csv_path):
+                    existing_df = pd.read_csv(csv_path)
+                    match = existing_df[(existing_df["u_model_idx"] == u_idx) & (existing_df["x_model_idx"] == x_idx)]
+                    if not match.empty:
+                        auc_val = float(match.iloc[0]["AUC"])
+            except:
+                pass
+        return auc_val
 
-        ## =================== Load PCA data for each combination  =================== ##
-        start_pca_load = time.perf_counter()
+    print(f"\n{'='*80}")
+    print(f"Testing model combination: u_model_idx={u_idx}, x_model_idx={x_idx}")
+    print(f"{'='*80}\n")
 
-        # Load cached features (fast!)
-        if cache_strategy == "disk":
-            import pickle
+    # Initialize prediction results for this combination
+    predict_results = np.zeros(
+        (total_test_vehicles, len(predict_thresholds)), dtype=np.int8
+    )
+    y_true = np.zeros(total_test_vehicles, dtype=np.int8)  # normal=0, fault=1
 
-            print("  Loading pre-computed FEATURES from disk...")
-            with open(u_error_files[u_idx], "rb") as f:
-                u_feat = pickle.load(f)
-            with open(x_error_files[x_idx], "rb") as f:
-                x_feat = pickle.load(f)
-        else:
-            print("  Using pre-computed FEATURES from memory...")
-            u_feat = u_error_cache[u_idx]
-            x_feat = x_error_cache[x_idx]
+    ## =================== Load PCA data for each combination  =================== ##
+    start_pca_load = time.perf_counter()
 
-        # Construct df_data directly from features
-        # Structure: max_diff_ERRORU, max_diff_ERRORX, Z_U, Z_X, Z_U_smoothed, Z_X_smoothed
-        # u_feat = (max_diff, Z, Z_smoothed)
-        # x_feat = (max_diff_slid, Z_slid, Z_smoothed_slid)
+    # Load cached features (fast!)
+    if cache_strategy == "disk":
+        import pickle
 
-        df_data = pd.concat(
-            [
-                u_feat[0],  # max_diff_ERRORU
-                x_feat[0],  # max_diff_ERRORX
-                u_feat[1],  # Z_U
-                x_feat[1],  # Z_X
-                u_feat[2],  # Z_U_smoothed
-                x_feat[2],  # Z_X_smoothed
-            ],
-            axis=1,
-        )
+        print("  Loading pre-computed FEATURES from disk...")
+        with open(u_error_files[u_idx], "rb") as f:
+            u_feat = pickle.load(f)
+        with open(x_error_files[x_idx], "rb") as f:
+            x_feat = pickle.load(f)
+    else:
+        print("  Using pre-computed FEATURES from memory...")
+        u_feat = u_error_cache[u_idx]
+        x_feat = x_error_cache[x_idx]
 
-        # Run PCA on features
-        loads = Custom_PCA(df_data, 0.99, 0.99)
+    # Construct df_data directly from features
+    df_data = pd.concat(
+        [
+            u_feat[0],  # max_diff_ERRORU
+            x_feat[0],  # max_diff_ERRORX
+            u_feat[1],  # Z_U
+            x_feat[1],  # Z_X
+            u_feat[2],  # Z_U_smoothed
+            x_feat[2],  # Z_X_smoothed
+        ],
+        axis=1,
+    )
 
-        # OPTIMIZATION: Discard large arrays from loads (data_nor, X)
-        # loads structure: v_I, v, v_ratio, p_k, data_mean, data_std, T_95, T_99, SPE_95, SPE_99, P, k, P_t, X, data_nor
-        # Indices:         0    1  2        3    4          5         6     7     8       9       10 11 12   13 14
+    # Run PCA on features
+    loads = Custom_PCA(df_data, 0.99, 0.99)
+    
+    # Clean up large PCA artifacts
+    loads_list = list(loads)
+    loads_list[13] = None  # Discard X (scores)
+    loads_list[14] = None  # Discard data_nor
+    loads = tuple(loads_list)
 
-        # Convert to list to modify
-        loads_list = list(loads)
-        loads_list[13] = None  # Discard X (scores)
-        loads_list[14] = None  # Discard data_nor (normalized training data)
-        loads = tuple(loads_list)
+    # Explicitly delete temporary df_data to save memory
+    del df_data, u_feat, x_feat
 
-        # Explicitly delete temporary df_data to save memory
-        del df_data, u_feat, x_feat
+    (
+        v_I, v, v_ratio, p_k, data_mean, data_std,
+        T_95_limit, T_99_limit, SPE_95_limit, SPE_99_limit,
+        P, k, P_t, X, data_nor,
+    ) = loads
 
-        (
-            v_I,
-            v,
-            v_ratio,
-            p_k,
-            data_mean,
-            data_std,
-            T_95_limit,
-            T_99_limit,
-            SPE_95_limit,
-            SPE_99_limit,
-            P,
-            k,
-            P_t,
-            X,
-            data_nor,
-        ) = loads
+    del X, data_nor, loads
+    elapsed_pca_load = time.perf_counter() - start_pca_load
+    print(f"PCA results loading/computing time: {elapsed_pca_load:.3f} seconds")
 
-        # Explicitly delete large unused arrays (X and data_nor)
-        del X, data_nor, loads
+    # Use pre-loaded models
+    net_loaded = models_u[u_idx]
+    netx_loaded = models_x[x_idx]
 
-        elapsed_pca_load = time.perf_counter() - start_pca_load
-        print(f"PCA results loading/computing time: {elapsed_pca_load:.3f} seconds")
-
-        # Use pre-loaded models
-        net_loaded = models_u[u_idx]
-        netx_loaded = models_x[x_idx]
-
-        start = time.perf_counter()
-        test_idx = 0
-        for label, vehicle_ids in enumerate(test_list):
-            for i in vehicle_ids:
-                if test_idx % 10 == 0:
-                    elapsed = time.perf_counter() - start
-                    h, rem = divmod(elapsed, 3600)
-                    m, s = divmod(rem, 60)
-                    print(
-                        f"Processing vehicle {test_idx}/{total_test_vehicles} | Elapsed: {int(h)}h {int(m)}m {s:.1f}s"
-                    )
-
-                # Use pre-loaded test data
-                tensor, tensor_x = test_data_cache[i]
-
-                # Use indexing to separate
-                x_recovered = tensor[:, : dim_dict["x"]]
-                y_recovered = tensor[:, dim_dict["x"] : dim_dict["x"] + dim_dict["y"]]
-                z_recovered = tensor[
-                    :,
-                    dim_dict["x"]
-                    + dim_dict["y"] : dim_dict["x"]
-                    + dim_dict["y"]
-                    + dim_dict["z"],
-                ]
-                q_recovered = tensor[:, dim_dict["x"] + dim_dict["y"] + dim_dict["z"] :]
-
-                # Use indexing to separate
-                x_recovered2 = tensor_x[:, : dim_dict["x2"]]
-                y_recovered2 = tensor_x[
-                    :, dim_dict["x2"] : dim_dict["x2"] + dim_dict["y2"]
-                ]
-                z_recovered2 = tensor_x[
-                    :,
-                    dim_dict["x2"]
-                    + dim_dict["y2"] : dim_dict["x2"]
-                    + dim_dict["y2"]
-                    + dim_dict["z2"],
-                ]
-                q_recovered2 = tensor_x[
-                    :, dim_dict["x2"] + dim_dict["y2"] + dim_dict["z2"] :
-                ]
-
-                # Revert inputs to double (Float64) to match Double precision model weights
-                x_recovered = x_recovered.double()
-                y_recovered = y_recovered.double()
-                z_recovered = z_recovered.double()
-                q_recovered = q_recovered.double()
-
-                x_recovered2 = x_recovered2.double()
-                y_recovered2 = y_recovered2.double()
-                z_recovered2 = z_recovered2.double()
-                q_recovered2 = q_recovered2.double()
-
-                with torch.inference_mode():
-                    recon_imtest = net_loaded(
-                        x_recovered, z_recovered, q_recovered, y_recovered
-                    )
-                    reconx_imtest = netx_loaded(
-                        x_recovered2, z_recovered2, q_recovered2, y_recovered2
-                    )
-
-                    # Compute errors on GPU and move to CPU once
-                    ERRORU = torch.abs(recon_imtest[0] - y_recovered).cpu().numpy()
-                    ERRORX = torch.abs(reconx_imtest[0] - y_recovered2).cpu().numpy()
-
-                    # Free GPU tensors immediately
-                    del recon_imtest, reconx_imtest
-
-                df_data, _ = DiagnosisFeature(ERRORU, ERRORX)
-
-                ## =================== Testing Diagnosis =================== ##
-                t2_array, _ = T2_array(df_data, data_mean, data_std, p_k, v_I)
-                spe_array, _ = SPE_array(df_data, data_mean, data_std, p_k)
-                CI_array = (spe_array / SPE_95_limit) + (t2_array / T_95_limit)
-
-                ci_max = float(np.nanmax(np.asarray(CI_array, dtype=float)))
-                predict_results[test_idx, :] = (ci_max > predict_thresholds).astype(
-                    np.int8
+    start = time.perf_counter()
+    test_idx = 0
+    for label, vehicle_ids in enumerate(test_list):
+        for i in vehicle_ids:
+            if test_idx % 10 == 0:
+                elapsed = time.perf_counter() - start
+                h, rem = divmod(elapsed, 3600)
+                m, s = divmod(rem, 60)
+                print(
+                    f"Processing vehicle {test_idx}/{total_test_vehicles} | Elapsed: {int(h)}h {int(m)}m {s:.1f}s"
                 )
-                y_true[test_idx] = np.int8(label)
-                test_idx += 1
 
-                # Free memory after processing each vehicle
-                del x_recovered, y_recovered, z_recovered, q_recovered
-                del x_recovered2, y_recovered2, z_recovered2, q_recovered2
-                del ERRORU, ERRORX, df_data
-                del t2_array, spe_array, CI_array
+            # Use pre-loaded test data
+            tensor, tensor_x = test_data_cache[i]
 
-        elapsed = time.perf_counter() - start
-        h, rem = divmod(elapsed, 3600)
-        m, s = divmod(rem, 60)
-        print(
-            f"\nCombination (u={u_idx}, x={x_idx}) completed: {int(h)}h {int(m)}m {s:.3f}s\n"
-        )
-
-        # Clear CUDA cache between combinations
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-
-        # =================== ROC / AUC ===================
-        roc = compute_roc_auc_from_threshold_matrix(
-            y_true, predict_results, predict_thresholds
-        )
-        opt = compute_optimal_thresholds_from_roc(
-            roc["fpr"],
-            roc["tpr"],
-            roc["thresholds"],
-            candidate_idx=roc["candidate_idx"],
-        )
-
-        print(f"AUC = {roc['auc']:.4f}")
-        print(
-            f"Best threshold (Youden J) ≈ {opt['best']['threshold']:.6g} @ (FPR={opt['best']['fpr']:.4f}, TPR={opt['best']['tpr']:.4f})"
-        )
-        print(
-            f"Closest to (0,1) ≈ {opt['closest_to_01']['threshold']:.6g} @ (FPR={opt['closest_to_01']['fpr']:.4f}, TPR={opt['closest_to_01']['tpr']:.4f}), dist={opt['closest_to_01']['distance']:.4f}"
-        )
-
-        # Save individual ROC curve
-        roc_save_path = f"{args.models_dir}/{args.models_idx}/results/AUC_ROC_u{u_idx}_x{x_idx}_case{learning_case}.png"
-        plot_roc_curve(
-            roc["fpr"],
-            roc["tpr"],
-            roc["auc"],
-            best_point=opt["best"],
-            closest_to_01_point=opt["closest_to_01"],
-            save_path=roc_save_path,
-            title=f"AUC-ROC Curve (u_model={u_idx}, x_model={x_idx})",
-            figsize=(6, 6),
-            show=False,
-            dpi=200,
-        )
-        print(f"ROC curve saved to: {roc_save_path}\n")
-
-        # Store results for combined plot
-        all_roc_results.append(
-            {
-                "u_idx": u_idx,
-                "x_idx": x_idx,
-                "fpr": roc["fpr"],
-                "tpr": roc["tpr"],
-                "auc": roc["auc"],
-                "best": opt["best"],
-                "closest_to_01": opt["closest_to_01"],
-            }
-        )
-
-        # =================== Save AUC result immediately to CSV =================== ##
-        auc_record = pd.DataFrame(
-            [
-                {
-                    "u_model_idx": u_idx,
-                    "x_model_idx": x_idx,
-                    "AUC": roc["auc"],
-                    "best_threshold": opt["best"]["threshold"],
-                    "best_TPR": opt["best"]["tpr"],
-                    "best_FPR": opt["best"]["fpr"],
-                    "closest_01_threshold": opt["closest_to_01"]["threshold"],
-                    "closest_01_TPR": opt["closest_to_01"]["tpr"],
-                    "closest_01_FPR": opt["closest_to_01"]["fpr"],
-                    "closest_01_distance": opt["closest_to_01"]["distance"],
-                }
+            # Use indexing to separate
+            x_recovered = tensor[:, : dim_dict["x"]]
+            y_recovered = tensor[:, dim_dict["x"] : dim_dict["x"] + dim_dict["y"]]
+            z_recovered = tensor[
+                :,
+                dim_dict["x"]
+                + dim_dict["y"] : dim_dict["x"]
+                + dim_dict["y"]
+                + dim_dict["z"],
             ]
-        )
+            q_recovered = tensor[:, dim_dict["x"] + dim_dict["y"] + dim_dict["z"] :]
 
-        # Append to CSV (write header only for first entry)
-        if not os.path.exists(csv_path):
-            auc_record.to_csv(csv_path, mode="w", header=True, index=False)
-            print(f"AUC result saved to: {csv_path}")
-        else:
-            auc_record.to_csv(csv_path, mode="a", header=False, index=False)
-            print(f"AUC result appended to: {csv_path}")
+            # Use indexing to separate
+            x_recovered2 = tensor_x[:, : dim_dict["x2"]]
+            y_recovered2 = tensor_x[
+                :, dim_dict["x2"] : dim_dict["x2"] + dim_dict["y2"]
+            ]
+            z_recovered2 = tensor_x[
+                :,
+                dim_dict["x2"]
+                + dim_dict["y2"] : dim_dict["x2"]
+                + dim_dict["y2"]
+                + dim_dict["z2"],
+            ]
+            q_recovered2 = tensor_x[
+                :, dim_dict["x2"] + dim_dict["y2"] + dim_dict["z2"] :
+            ]
+
+            # Revert inputs to double
+            x_recovered = x_recovered.double()
+            y_recovered = y_recovered.double()
+            z_recovered = z_recovered.double()
+            q_recovered = q_recovered.double()
+
+            x_recovered2 = x_recovered2.double()
+            y_recovered2 = y_recovered2.double()
+            z_recovered2 = z_recovered2.double()
+            q_recovered2 = q_recovered2.double()
+
+            with torch.inference_mode():
+                recon_imtest = net_loaded(
+                    x_recovered, z_recovered, q_recovered, y_recovered
+                )
+                reconx_imtest = netx_loaded(
+                    x_recovered2, z_recovered2, q_recovered2, y_recovered2
+                )
+
+                ERRORU = torch.abs(recon_imtest[0] - y_recovered).cpu().numpy()
+                ERRORX = torch.abs(reconx_imtest[0] - y_recovered2).cpu().numpy()
+
+                del recon_imtest, reconx_imtest
+
+            df_data, _ = DiagnosisFeature(ERRORU, ERRORX)
+
+            ## =================== Testing Diagnosis =================== ##
+            t2_array, _ = T2_array(df_data, data_mean, data_std, p_k, v_I)
+            spe_array, _ = SPE_array(df_data, data_mean, data_std, p_k)
+            CI_array = (spe_array / SPE_95_limit) + (t2_array / T_95_limit)
+
+            ci_max = float(np.nanmax(np.asarray(CI_array, dtype=float)))
+            predict_results[test_idx, :] = (ci_max > predict_thresholds).astype(
+                np.int8
+            )
+            y_true[test_idx] = np.int8(label)
+            test_idx += 1
+
+            del x_recovered, y_recovered, z_recovered, q_recovered
+            del x_recovered2, y_recovered2, z_recovered2, q_recovered2
+            del ERRORU, ERRORX, df_data
+            del t2_array, spe_array, CI_array
+
+    elapsed = time.perf_counter() - start
+    h, rem = divmod(elapsed, 3600)
+    m, s = divmod(rem, 60)
+    print(
+        f"\nCombination (u={u_idx}, x={x_idx}) completed: {int(h)}h {int(m)}m {s:.3f}s\n"
+    )
+
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+    # =================== ROC / AUC ===================
+    roc = compute_roc_auc_from_threshold_matrix(
+        y_true, predict_results, predict_thresholds
+    )
+    opt = compute_optimal_thresholds_from_roc(
+        roc["fpr"],
+        roc["tpr"],
+        roc["thresholds"],
+        candidate_idx=roc["candidate_idx"],
+    )
+
+    print(f"AUC = {roc['auc']:.4f}")
+    
+    # Save individual ROC curve
+    roc_save_path = f"{args.models_dir}/{args.models_idx}/results/AUC_ROC_u{u_idx}_x{x_idx}_case{learning_case}.png"
+    plot_roc_curve(
+        roc["fpr"], roc["tpr"], roc["auc"],
+        best_point=opt["best"],
+        closest_to_01_point=opt["closest_to_01"],
+        save_path=roc_save_path,
+        title=f"AUC-ROC Curve (u_model={u_idx}, x_model={x_idx})",
+        figsize=(6, 6), show=False, dpi=200,
+    )
+    print(f"ROC curve saved to: {roc_save_path}\n")
+
+    # Store results for combined plot
+    all_roc_results.append(
+        {
+            "u_idx": u_idx,
+            "x_idx": x_idx,
+            "fpr": roc["fpr"],
+            "tpr": roc["tpr"],
+            "auc": roc["auc"],
+            "best": opt["best"],
+            "closest_to_01": opt["closest_to_01"],
+        }
+    )
+
+    # =================== Save AUC result immediately to CSV =================== ##
+    auc_record = pd.DataFrame(
+        [
+            {
+                "u_model_idx": u_idx,
+                "x_model_idx": x_idx,
+                "AUC": roc["auc"],
+                "best_threshold": opt["best"]["threshold"],
+                "best_TPR": opt["best"]["tpr"],
+                "best_FPR": opt["best"]["fpr"],
+                "closest_01_threshold": opt["closest_to_01"]["threshold"],
+                "closest_01_TPR": opt["closest_to_01"]["tpr"],
+                "closest_01_FPR": opt["closest_to_01"]["fpr"],
+                "closest_01_distance": opt["closest_to_01"]["distance"],
+            }
+        ]
+    )
+
+    if not os.path.exists(csv_path):
+        auc_record.to_csv(csv_path, mode="w", header=True, index=False)
+    else:
+        auc_record.to_csv(csv_path, mode="a", header=False, index=False)
+        
+    # Mark as completed
+    completed_combinations.add((u_idx, x_idx))
+    
+    return roc['auc']
+
+
+# Run Logic
+best_u_idx = None
+
+# Phase 1
+for (u_idx, x_idx) in combinations_phase1:
+    auc = process_combination(u_idx, x_idx)
+    # Track best U if in fast search mode
+    if args.fast_search and "step1_results" in locals():
+        step1_results.append((u_idx, auc))
+
+# Phase 2 (Only for Fast Search)
+if args.fast_search and step1_results:
+    # Find best U
+    best_u_tuple = max(step1_results, key=lambda item: item[1])
+    best_u_idx = best_u_tuple[0]
+    best_auc = best_u_tuple[1]
+    
+    print(f"\n{'='*80}")
+    print(f"Step 1 Complete. Best U model: u={best_u_idx} (AUC={best_auc:.4f})")
+    print("Step 2: Sweeping all X models using the best U model...")
+    print(f"{'='*80}\n")
+    
+    # Remove duplicates if last_x_idx search overlaps (it's already done)
+    # But usually we just sweep all X for this U
+    combinations_phase2 = [(best_u_idx, x) for x in x_model_indices if x != combinations_phase1[0][1]]
+    
+    # In fast search phase 1 we did all U against LAST X.
+    # Now we do BEST U against ALL X.
+    # Note: (best_u_idx, last_x_idx) is already done in phase 1.
+    
+    last_x_idx = x_model_indices[-1]
+    combinations_phase2 = [(best_u_idx, x) for x in x_model_indices if (best_u_idx, x) not in completed_combinations]
+
+    for (u_idx, x_idx) in combinations_phase2:
+        process_combination(u_idx, x_idx)
+
+original_loop_code_marker = False # Just a marker to ensure we broke the original loop flow structure
 
 
 # Cleanup temp files if disk strategy was used and keep_cache is False
