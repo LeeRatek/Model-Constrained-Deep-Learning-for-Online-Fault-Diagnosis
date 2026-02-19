@@ -130,8 +130,8 @@ def scan_model_indices(artifact_dir, model_prefix):
         if match:
             if match.group(1):  # net_e{idx}.pth
                 idx = int(match.group(1))
-                # Exclude indices -1 and 0
-                if idx > 0:
+                # Include index 0 as well
+                if idx >= 0:
                     indices.append(idx)
             else:
                 # net.pth (idx=-1)
@@ -859,31 +859,33 @@ if args.fast_search and len(x_model_indices) > 0 and len(u_model_indices) > 0:
     print("FAST SEARCH MODE ENABLED")
     print("Step 1: Finding best U model using the last X model...")
     print(f"{'='*80}\n")
-    
+
     last_x_idx = x_model_indices[-1]
-    
+
     # Step 1: Run all U models against the last X model
     step1_results = []
-    
+
     # Check if we already have results for this step to avoid re-calculation if possible,
-    # but we need the AUC values to sort. We'll rely on the resume logic inside the loop 
+    # but we need the AUC values to sort. We'll rely on the resume logic inside the loop
     # or just let the main loop handle it, but here we need to enforce the order.
-    
+
     # We will generate a list of (u, x) tuples to run in order.
     # However, fast search requires the RESULT of step 1 to proceed to step 2.
     # So we cannot pre-generate the full list. We must run the loop in two phases.
-    
+
     # PHASE 1 LOOP
     combinations_phase1 = [(u, last_x_idx) for u in u_model_indices]
 else:
     # Standard full grid search
-    combinations_phase1 = [(u_idx, x_idx) for x_idx in x_model_indices for u_idx in u_model_indices]
+    combinations_phase1 = [
+        (u_idx, x_idx) for x_idx in x_model_indices for u_idx in u_model_indices
+    ]
 
 
 # Function to process a single combination (refactored from original loop)
 def process_combination(u_idx, x_idx):
     global predict_thresholds, total_test_vehicles, completed_combinations, all_roc_results
-    
+
     # SKIP LOGIC for RESUME (if result already in CSV)
     if (u_idx, x_idx) in completed_combinations:
         print(f"Skipping cached combination: u={u_idx}, x={x_idx}")
@@ -892,14 +894,17 @@ def process_combination(u_idx, x_idx):
         # Since we didn't populate all_roc_results from CSV, we might miss it.
         # But for fast search Step 1, we critically need the AUC.
         # If resuming, we should ideally read the AUC from the CSV file row.
-        
+
         auc_val = 0.0
         if args.fast_search:
             # Try to find AUC in existing CSV data
             try:
                 if os.path.exists(csv_path):
                     existing_df = pd.read_csv(csv_path)
-                    match = existing_df[(existing_df["u_model_idx"] == u_idx) & (existing_df["x_model_idx"] == x_idx)]
+                    match = existing_df[
+                        (existing_df["u_model_idx"] == u_idx)
+                        & (existing_df["x_model_idx"] == x_idx)
+                    ]
                     if not match.empty:
                         auc_val = float(match.iloc[0]["AUC"])
             except:
@@ -948,7 +953,7 @@ def process_combination(u_idx, x_idx):
 
     # Run PCA on features
     loads = Custom_PCA(df_data, 0.99, 0.99)
-    
+
     # Clean up large PCA artifacts
     loads_list = list(loads)
     loads_list[13] = None  # Discard X (scores)
@@ -959,9 +964,21 @@ def process_combination(u_idx, x_idx):
     del df_data, u_feat, x_feat
 
     (
-        v_I, v, v_ratio, p_k, data_mean, data_std,
-        T_95_limit, T_99_limit, SPE_95_limit, SPE_99_limit,
-        P, k, P_t, X, data_nor,
+        v_I,
+        v,
+        v_ratio,
+        p_k,
+        data_mean,
+        data_std,
+        T_95_limit,
+        T_99_limit,
+        SPE_95_limit,
+        SPE_99_limit,
+        P,
+        k,
+        P_t,
+        X,
+        data_nor,
     ) = loads
 
     del X, data_nor, loads
@@ -1001,9 +1018,7 @@ def process_combination(u_idx, x_idx):
 
             # Use indexing to separate
             x_recovered2 = tensor_x[:, : dim_dict["x2"]]
-            y_recovered2 = tensor_x[
-                :, dim_dict["x2"] : dim_dict["x2"] + dim_dict["y2"]
-            ]
+            y_recovered2 = tensor_x[:, dim_dict["x2"] : dim_dict["x2"] + dim_dict["y2"]]
             z_recovered2 = tensor_x[
                 :,
                 dim_dict["x2"]
@@ -1047,9 +1062,7 @@ def process_combination(u_idx, x_idx):
             CI_array = (spe_array / SPE_95_limit) + (t2_array / T_95_limit)
 
             ci_max = float(np.nanmax(np.asarray(CI_array, dtype=float)))
-            predict_results[test_idx, :] = (ci_max > predict_thresholds).astype(
-                np.int8
-            )
+            predict_results[test_idx, :] = (ci_max > predict_thresholds).astype(np.int8)
             y_true[test_idx] = np.int8(label)
             test_idx += 1
 
@@ -1080,16 +1093,20 @@ def process_combination(u_idx, x_idx):
     )
 
     print(f"AUC = {roc['auc']:.4f}")
-    
+
     # Save individual ROC curve
     roc_save_path = f"{args.models_dir}/{args.models_idx}/results/AUC_ROC_u{u_idx}_x{x_idx}_case{learning_case}.png"
     plot_roc_curve(
-        roc["fpr"], roc["tpr"], roc["auc"],
+        roc["fpr"],
+        roc["tpr"],
+        roc["auc"],
         best_point=opt["best"],
         closest_to_01_point=opt["closest_to_01"],
         save_path=roc_save_path,
         title=f"AUC-ROC Curve (u_model={u_idx}, x_model={x_idx})",
-        figsize=(6, 6), show=False, dpi=200,
+        figsize=(6, 6),
+        show=False,
+        dpi=200,
     )
     print(f"ROC curve saved to: {roc_save_path}\n")
 
@@ -1128,18 +1145,18 @@ def process_combination(u_idx, x_idx):
         auc_record.to_csv(csv_path, mode="w", header=True, index=False)
     else:
         auc_record.to_csv(csv_path, mode="a", header=False, index=False)
-        
+
     # Mark as completed
     completed_combinations.add((u_idx, x_idx))
-    
-    return roc['auc']
+
+    return roc["auc"]
 
 
 # Run Logic
 best_u_idx = None
 
 # Phase 1
-for (u_idx, x_idx) in combinations_phase1:
+for u_idx, x_idx in combinations_phase1:
     auc = process_combination(u_idx, x_idx)
     # Track best U if in fast search mode
     if args.fast_search and "step1_results" in locals():
@@ -1151,27 +1168,35 @@ if args.fast_search and step1_results:
     best_u_tuple = max(step1_results, key=lambda item: item[1])
     best_u_idx = best_u_tuple[0]
     best_auc = best_u_tuple[1]
-    
+
     print(f"\n{'='*80}")
     print(f"Step 1 Complete. Best U model: u={best_u_idx} (AUC={best_auc:.4f})")
     print("Step 2: Sweeping all X models using the best U model...")
     print(f"{'='*80}\n")
-    
+
     # Remove duplicates if last_x_idx search overlaps (it's already done)
     # But usually we just sweep all X for this U
-    combinations_phase2 = [(best_u_idx, x) for x in x_model_indices if x != combinations_phase1[0][1]]
-    
+    combinations_phase2 = [
+        (best_u_idx, x) for x in x_model_indices if x != combinations_phase1[0][1]
+    ]
+
     # In fast search phase 1 we did all U against LAST X.
     # Now we do BEST U against ALL X.
     # Note: (best_u_idx, last_x_idx) is already done in phase 1.
-    
-    last_x_idx = x_model_indices[-1]
-    combinations_phase2 = [(best_u_idx, x) for x in x_model_indices if (best_u_idx, x) not in completed_combinations]
 
-    for (u_idx, x_idx) in combinations_phase2:
+    last_x_idx = x_model_indices[-1]
+    combinations_phase2 = [
+        (best_u_idx, x)
+        for x in x_model_indices
+        if (best_u_idx, x) not in completed_combinations
+    ]
+
+    for u_idx, x_idx in combinations_phase2:
         process_combination(u_idx, x_idx)
 
-original_loop_code_marker = False # Just a marker to ensure we broke the original loop flow structure
+original_loop_code_marker = (
+    False  # Just a marker to ensure we broke the original loop flow structure
+)
 
 
 # Cleanup temp files if disk strategy was used and keep_cache is False
