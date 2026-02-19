@@ -28,7 +28,7 @@ print(torch.cuda.device_count())
 warnings.filterwarnings("ignore")
 
 parser = argparse.ArgumentParser(description="Run MC-AE training with CLI options")
-parser.add_argument("--battery-type", choices=["QAS", "DTI"], default="DTI")
+parser.add_argument("--battery-type", choices=["QAS", "DTI"], default="QAS")
 parser.add_argument(
     "--vehicle-start",
     type=int,
@@ -36,7 +36,7 @@ parser.add_argument(
     help="Filtered normal vehicle ID 시작 인덱스",
 )
 parser.add_argument(
-    "--vehicle-end", type=int, default=-1, help="Filtered normal vehicle ID 끝 인덱스"
+    "--vehicle-end", type=int, default=1, help="Filtered normal vehicle ID 끝 인덱스"
 )
 parser.add_argument("--lstm-training", action="store_true")
 parser.add_argument("--lstm-load", action="store_true")
@@ -89,12 +89,13 @@ parser.add_argument("--normalize-val", type=int, default=4)
 parser.add_argument(
     "--learning-case",
     type=int,
-    default=1,
+    default=2,
     help="1: Skip and no nomalization, 2: Skip but doing normalization, 3: No skip but doing normalization, 4: No skip and no normalization.",
 )
 parser.add_argument("--no-use-dx", action="store_true")
 parser.add_argument("--no-abs-err", action="store_true")
 parser.add_argument("--add-one-output-layer", action="store_true")
+parser.add_argument("--no-save", action="store_true")
 args = parser.parse_args()
 
 
@@ -591,7 +592,7 @@ net = CombinedAE(
     activation_fn=(
         CustomSigmoidFunc(scale=args.ae_u_scale, shift=args.ae_u_shift)
         if PREPROCESSING == False
-        else torch.sigmoid
+        else CustomSigmoidFunc(scale=1, shift=0)
     ),
     use_dx_in_forward=use_dx_in_forward,
     add_one_output_layer=add_one_output_layer,
@@ -600,7 +601,11 @@ netx = CombinedAE(
     input_size=dim_dict["x2"],
     encode2_input_size=dim_dict["q2"],
     output_size=dim_dict["y2"],
-    activation_fn=CustomSigmoidFunc(scale=args.ae_x_scale, shift=args.ae_x_shift),
+    activation_fn=(
+        CustomSigmoidFunc(scale=args.ae_x_scale, shift=args.ae_x_shift)
+        if PREPROCESSING == False
+        else CustomSigmoidFunc(scale=1, shift=0)
+    ),
     use_dx_in_forward=use_dx_in_forward,
     add_one_output_layer=add_one_output_layer,
 ).to(device)
@@ -663,9 +668,10 @@ for epoch in range(AE_U_EPOCH):
             )
         )
         # checkpoint (indexed)
-        save_net_state(
-            model=net, models_dir=f"{model_path}/", filename=f"net_e{epoch}.pth"
-        )
+        if not args.no_save:
+            save_net_state(
+                model=net, models_dir=f"{model_path}/", filename=f"net_e{epoch}.pth"
+            )
 
 # Save loss log (fast: dump once per model)
 np.savetxt(
@@ -693,7 +699,8 @@ if len(val_loss_points_u) > 0:
         comments="",
     )
 
-save_net_state(model=net, models_dir=f"{model_path}/", filename="net.pth")
+if not args.no_save:
+    save_net_state(model=net, models_dir=f"{model_path}/", filename="net.pth")
 
 # Optimization: Compute error in batches using VirtualDataset directly
 train_loader2 = DataLoader(
@@ -781,9 +788,10 @@ for epoch in range(AE_X_EPOCH):
             )
         )
         # checkpoint (indexed)
-        save_net_state(
-            model=netx, models_dir=f"{model_path}/", filename=f"netx_e{epoch}.pth"
-        )
+        if not args.no_save:
+            save_net_state(
+                model=netx, models_dir=f"{model_path}/", filename=f"netx_e{epoch}.pth"
+            )
 
 # Save loss log (fast: dump once per model)
 np.savetxt(
@@ -809,7 +817,9 @@ if len(val_loss_points_x) > 0:
         header="epoch,avg_loss",
         comments="",
     )
-save_net_state(model=netx, models_dir=f"{model_path}/", filename="netx.pth")
+
+if not args.no_save:
+    save_net_state(model=netx, models_dir=f"{model_path}/", filename="netx.pth")
 
 # Optimization: Compute error in batches using VirtualDatasetX directly
 train_loaderx2 = DataLoader(
