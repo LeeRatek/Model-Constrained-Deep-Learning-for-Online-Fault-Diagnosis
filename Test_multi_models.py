@@ -348,6 +348,7 @@ ae_u_scale = vals.ae_u_scale if hasattr(vals, "ae_u_scale") else 1.8
 ae_u_shift = vals.ae_u_shift if hasattr(vals, "ae_u_shift") else 2.5
 ae_x_scale = vals.ae_x_scale if hasattr(vals, "ae_x_scale") else 1.0
 ae_x_shift = vals.ae_x_shift if hasattr(vals, "ae_x_shift") else 0
+normalize_dx_flag = vals.normalize_dx if hasattr(vals, "normalize_dx") else False
 
 # 플롯 결과 저장 폴더는 한 번만 생성
 os.makedirs(f"{args.models_dir}/{args.models_idx}/results", exist_ok=True)
@@ -549,7 +550,6 @@ if not all_files_exist:
     )
 
     # ================= Check Cache for Combined Data ================= #
-    normalize_dx_flag = vals.normalize_dx if hasattr(vals, "normalize_dx") else False
 
     # Generate unique hash for this configuration
     config_dict = {
