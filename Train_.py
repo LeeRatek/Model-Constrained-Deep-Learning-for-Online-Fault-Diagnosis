@@ -708,31 +708,7 @@ if len(val_loss_points_u) > 0:
 if not args.no_save:
     save_net_state(model=net, models_dir=f"{model_path}/", filename="net.pth")
 
-# Optimization: Compute error in batches using VirtualDataset directly
-train_loader2 = DataLoader(
-    VirtualDatasetU(vehicle_tensors, dim_dict),
-    batch_size=4096,  # Use a safe batch size
-    shuffle=False,  # Shuffle if it was used in training, else keep consistent
-)
-
-net.eval()
-error_list = []
-with torch.no_grad():
-    for x, y, z, q in train_loader2:
-        x = x.to(device)
-        y = y.to(device)
-        z = z.to(device)
-        q = q.to(device)
-        recon_imtest, _ = net(x, z, q)
-
-        # Calculate error batch-wise
-        aa = recon_imtest.cpu().numpy()
-        yy = y.cpu().numpy()
-        error_batch = np.abs(aa - yy) if use_abs_err else aa - yy
-        error_list.append(error_batch)
-
-ERRORU = np.concatenate(error_list, axis=0)
-del train_loader2, error_list
+# ERRORU calculation moved to the end to process per-vehicle
 
 ## ================= Training MC-AE for SOC reconstruction ================= ##
 AE_X_EPOCH = args.ae_x_epochs
@@ -828,31 +804,91 @@ if len(val_loss_points_x) > 0:
 if not args.no_save:
     save_net_state(model=netx, models_dir=f"{model_path}/", filename="netx.pth")
 
-# Optimization: Compute error in batches using VirtualDatasetX directly
-train_loaderx2 = DataLoader(
-    VirtualDatasetX(vehicle_tensorsx, dim_dict),
-    batch_size=4096,
-    shuffle=False,
-)
+# Optimization: Calculate Diagnosis Features Per Vehicle to handle variance differences
+print("Calculating features per vehicle...")
+net.eval()
 netx.eval()
-error_list_x = []
+
+df_data_list = []
+
 with torch.no_grad():
-    for x, y, z, q in train_loaderx2:
-        x = x.to(device)
-        y = y.to(device)
-        z = z.to(device)
-        q = q.to(device)
-        recon_imtestx, _ = netx(x, z, q)
+    for i, (t_u, t_x) in enumerate(zip(vehicle_tensors, vehicle_tensorsx)):
+        # Calculate ERROR U for specific vehicle
+        # Batching for safety if vehicle data is large (though usually fits in memory)
+        batch_size = 4096
 
-        bb = recon_imtestx.cpu().numpy()
-        yy = y.cpu().numpy()
-        error_batch = np.abs(bb - yy) if use_abs_err else bb - yy
-        error_list_x.append(error_batch)
+        # U-Model
+        x_u = t_u[:, : dim_dict["x"]]
+        y_u = t_u[:, dim_dict["x"] : dim_dict["x"] + dim_dict["y"]]
+        z_u = t_u[
+            :,
+            dim_dict["x"]
+            + dim_dict["y"] : dim_dict["x"]
+            + dim_dict["y"]
+            + dim_dict["z"],
+        ]
+        q_u = t_u[:, dim_dict["x"] + dim_dict["y"] + dim_dict["z"] :]
 
-ERRORX = np.concatenate(error_list_x, axis=0)
-del train_loaderx2, error_list_x
+        # X-Model
+        x_x = t_x[:, : dim_dict["x2"]]
+        y_x = t_x[:, dim_dict["x2"] : dim_dict["x2"] + dim_dict["y2"]]
+        z_x = t_x[
+            :,
+            dim_dict["x2"]
+            + dim_dict["y2"] : dim_dict["x2"]
+            + dim_dict["y2"]
+            + dim_dict["z2"],
+        ]
+        q_x = t_x[:, dim_dict["x2"] + dim_dict["y2"] + dim_dict["z2"] :]
 
-df_data, _ = DiagnosisFeature(ERRORU, ERRORX)
+        num_samples = t_u.shape[0]
+        error_u_list = []
+        error_x_list = []
+
+        for start_idx in range(0, num_samples, batch_size):
+            end_idx = min(start_idx + batch_size, num_samples)
+
+            # Prepare batch for U
+            b_x_u = x_u[start_idx:end_idx].to(device).double()
+            b_y_u = y_u[start_idx:end_idx].to(device).double()
+            b_z_u = z_u[start_idx:end_idx].to(device).double()
+            b_q_u = q_u[start_idx:end_idx].to(device).double()
+
+            recon_u, _ = net(b_x_u, b_z_u, b_q_u)
+
+            aa = recon_u.cpu().numpy()
+            yy = b_y_u.cpu().numpy()
+            e_u = np.abs(aa - yy) if use_abs_err else aa - yy
+            error_u_list.append(e_u)
+
+            # Prepare batch for X
+            b_x_x = x_x[start_idx:end_idx].to(device).double()
+            b_y_x = y_x[start_idx:end_idx].to(device).double()
+            b_z_x = z_x[start_idx:end_idx].to(device).double()
+            b_q_x = q_x[start_idx:end_idx].to(device).double()
+
+            recon_x, _ = netx(b_x_x, b_z_x, b_q_x)
+
+            bb = recon_x.cpu().numpy()
+            yy_x = b_y_x.cpu().numpy()
+            e_x = np.abs(bb - yy_x) if use_abs_err else bb - yy_x
+            error_x_list.append(e_x)
+
+        # Concatenate errors for this vehicle
+        ERRORU_veh = np.concatenate(error_u_list, axis=0)
+        ERRORX_veh = np.concatenate(error_x_list, axis=0)
+
+        # Calculate Diagnosis Feature specifically for this vehicle
+        # This handles variance per vehicle
+        df_veh, _ = DiagnosisFeature(ERRORU_veh, ERRORX_veh)
+        df_data_list.append(df_veh)
+
+# Concatenate all features
+if df_data_list:
+    df_data = pd.concat(df_data_list, axis=0, ignore_index=True)
+else:
+    print("Warning: No data to process!")
+    df_data = pd.DataFrame()  # Empty fallback
 
 results = Custom_PCA(df_data, 0.99, 0.99)
 
