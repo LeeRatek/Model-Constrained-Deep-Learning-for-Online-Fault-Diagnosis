@@ -3219,7 +3219,7 @@ def plot_tsne_before_after_ci(
     CI_array,
     thresholds,
     args,
-    fault_vehicle_idx,
+    vehicle_idx,
 ):
     # ===== 리스트 -> 배열로 변환 (행 단위로 쌓였다는 가정) =====
     X_before = np.vstack(X_list_before).astype(float)  # (M1, D)
@@ -3396,7 +3396,9 @@ def plot_tsne_before_after_ci(
     axes[1].legend(loc="best")
     plt.tight_layout()
     if args.save:
-        save_path = f"{args.models_dir}/{args.models_idx}/results_tsne/tSNE_{fault_vehicle_idx}.png"
+        save_path = (
+            f"{args.models_dir}/{args.models_idx}/results_tsne/tSNE_{vehicle_idx}.png"
+        )
         if save_path is not None and fig is not None:
             dir_ = os.path.dirname(save_path)
             if dir_:
@@ -3473,15 +3475,15 @@ def draw_auc_heatmap(csv_path, save_path, title_suffix=""):
     # Calculate vmin/vmax based on data to enhance contrast
     data_values = pivot_data.values
     valid_values = data_values[~np.isnan(data_values)]
-    
+
     if len(valid_values) > 0:
         val_min = np.min(valid_values)
         val_max = np.max(valid_values)
         # Add a tiny padding to avoid single-value issues
         if val_max == val_min:
-             val_min -= 0.01
-             val_max += 0.01
-        
+            val_min -= 0.01
+            val_max += 0.01
+
         # Use dynamic range instead of fixed 0.5-1.0
         vmin = val_min
         vmax = val_max
@@ -3490,7 +3492,9 @@ def draw_auc_heatmap(csv_path, save_path, title_suffix=""):
         vmax = 1.0
 
     # Use a colormap (viridis is good for AUC values)
-    im = ax.imshow(pivot_data.values, cmap="viridis", aspect="auto", vmin=vmin, vmax=vmax)
+    im = ax.imshow(
+        pivot_data.values, cmap="viridis", aspect="auto", vmin=vmin, vmax=vmax
+    )
 
     # Set ticks and labels
     ax.set_xticks(np.arange(len(pivot_data.columns)))

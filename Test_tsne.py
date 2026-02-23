@@ -185,6 +185,11 @@ except Exception as e:
 
 ## =================== DTI fault index range = [77~79] ===================
 ## =================== QAS fault index range = [335~392] ===================
+validate_list = (
+    np.load(f"./{BATTERY_TYPE}_filtered_vehicle_ids_validate.npy")
+    .astype(np.int64)
+    .tolist()
+)
 normal_list = (
     np.load(f"./{BATTERY_TYPE}_filtered_vehicle_ids_test.npy").astype(np.int64).tolist()
 )
@@ -502,13 +507,14 @@ start = time.perf_counter()
 # cnt_max = 6
 cnt_max = args.cnt_max
 per_vehicle = args.per_vehicle
-normal_but_faulty = [46, 184, 252]  # [46, 184, 252, 301]
-normal = np.array(normal_list)[
-    np.asarray(np.isin(normal_list, normal_but_faulty), dtype=bool)
-].tolist()
+# normal_but_faulty = [46, 184, 252]  # [46, 184, 252, 301]
+# normal = np.array(normal_list)[
+#     np.asarray(np.isin(normal_list, normal_but_faulty), dtype=bool)
+# ].tolist()
 
 # label=0(정상) 차량은 1회만 고정 수집
-normal_vehicle_ids = [*normal_list[0:cnt_max], *normal]
+# normal_vehicle_ids = [*normal_list[0:cnt_max], *normal]
+normal_vehicle_ids = validate_list[0:cnt_max]
 normal_pack, _ = collect_vehicle_points(
     vehicle_ids=normal_vehicle_ids,
     label=0,
@@ -530,11 +536,13 @@ normal_pack, _ = collect_vehicle_points(
 )
 
 # label=1(고장) 차량 인덱스는 바꿔가며 반복 플롯
-fault_idx = np.arange(335, 393) if args.fault_idx == -1 else [args.fault_idx]
-fault_vehicle_idxs = fault_idx
-for fault_vehicle_idx in fault_vehicle_idxs:
+
+test_list = [*normal_list, *fault_list]
+test_idx = test_list if args.fault_idx == -1 else [args.fault_idx]
+test_vehicle_idxs = test_idx
+for test_vehicle_idx in test_vehicle_idxs:
     fault_pack, CI_fault = collect_vehicle_points(
-        vehicle_ids=[fault_vehicle_idx],
+        vehicle_ids=[test_vehicle_idx],
         label=1,
         per_vehicle=per_vehicle,
         args=args,
@@ -564,7 +572,7 @@ for fault_vehicle_idx in fault_vehicle_idxs:
         + fault_pack["alarm_masks"]["after"],
     }
 
-    print(f"\n=== Plotting fault_vehicle_idx={fault_vehicle_idx} ===")
+    print(f"\n=== Plotting test_vehicle_idx={test_vehicle_idx} ===")
     fig, axes = plot_tsne_before_after_ci(
         X_list_before=X_list_before,
         Y_list_before=Y_list_before,
@@ -574,7 +582,7 @@ for fault_vehicle_idx in fault_vehicle_idxs:
         CI_array=CI_fault,
         thresholds=thresholds,
         args=args,
-        fault_vehicle_idx=fault_vehicle_idx,
+        vehicle_idx=test_vehicle_idx,
     )
 
 elapsed = time.perf_counter() - start
