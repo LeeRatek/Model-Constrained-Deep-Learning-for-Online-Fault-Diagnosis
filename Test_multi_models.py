@@ -562,28 +562,24 @@ if not all_files_exist:
     config_str = json.dumps(config_dict, sort_keys=True)
     config_hash = hashlib.md5(config_str.encode("utf-8")).hexdigest()
 
-    cache_filename = f"combined_train_data_{BATTERY_TYPE}_{config_hash}.pt"
+    # Changed to list cache
+    cache_filename = f"train_data_list_{BATTERY_TYPE}_{config_hash}.pt"
     cache_path = os.path.join(args.source_data_dir, cache_filename)
 
-    combined_tensor_train = None
-    combined_tensorx_train = None
+    train_data_cache = None  # List of (tensor, tensorx)
 
     if os.path.exists(cache_path):
-        print(f"Found cached training data: {cache_path}")
+        print(f"Found cached training data (list): {cache_path}")
         print("Loading...")
         try:
-            cache_data = torch.load(cache_path)
-            combined_tensor_train = cache_data["tensor"]
-            combined_tensorx_train = cache_data["tensorx"]
-            del cache_data
+            train_data_cache = torch.load(cache_path)
             print("Successfully loaded cached training data.")
         except Exception as e:
             print(f"Error loading cache: {e}. Will regenerate.")
 
-    if combined_tensor_train is None:
+    if train_data_cache is None:
         print("Cache miss or error. Processing raw pickle files...")
-        combined_tensor_list = []
-        combined_tensorx_list = []
+        train_data_cache = []
 
         count = 0
         for i in train_list:
@@ -611,34 +607,23 @@ if not all_files_exist:
                 normalize_dx=normalize_dx_flag,
             )
 
-            combined_tensor_list.append(tensor)
-            combined_tensorx_list.append(tensorx)
+            # Keep as Double
+            tensor = tensor.double()
+            tensorx = tensorx.double()
 
-        if len(combined_tensor_list) > 0:
-            # Revert to Double (Float64) for precision accuracy
-            combined_tensor_train = torch.cat(combined_tensor_list, dim=0).double()
-            combined_tensorx_train = torch.cat(combined_tensorx_list, dim=0).double()
-            del combined_tensor_list, combined_tensorx_list
-        else:
-            combined_tensor_train = torch.empty(0)
-            combined_tensorx_train = torch.empty(0)
+            train_data_cache.append((tensor, tensorx))
 
         # Save to cache
-        print(f"Saving combined training data to cache: {cache_path}")
+        print(f"Saving training data list to cache: {cache_path}")
         try:
-            torch.save(
-                {
-                    "tensor": combined_tensor_train,
-                    "tensorx": combined_tensorx_train,
-                },
-                cache_path,
-            )
+            torch.save(train_data_cache, cache_path)
             print("Cache saved successfully.")
         except Exception as e:
             print(f"Warning: Could not save cache to {cache_path}: {e}")
 
+    total_samples = sum(t[0].shape[0] for t in train_data_cache)
     print(
-        f"Training data loaded: {combined_tensor_train.shape[0]} samples (Double precision)\n"
+        f"Training data loaded: {len(train_data_cache)} vehicles, {total_samples} total samples (Double precision)\n"
     )
 else:
     # Just needed to skip the loading block
@@ -764,73 +749,114 @@ inference_batch_size = args.inference_batch_size
 # Phase 1: Compute and Cache U FEATURES (Extracted from errors)
 print(f"\nPhase 1: Computing and caching U FEATURES to {cache_strategy}...")
 for u_idx in u_model_indices:
-    # Check for existing cache if resuming
-    if cache_strategy == "disk" and args.resume:
-        fpath = os.path.join(temp_cache_dir, f"feat_u_{u_idx}.pkl")
-        if os.path.exists(fpath):
-            print(
-                f"  [Resume] Found cached U features for model {u_idx}, skipping computation."
-            )
-            u_error_files[u_idx] = fpath
-            continue
+    # Check for existing cache if resuming OR if we determined all files exist (which implies we should respect them even if resume flag not explicitly set, though likely it is set if we are here)
+    # Actually, if all_files_exist is True, it means we found everything. We should just verify specific file exists.
 
-    print(f"  Computing training features for U model {u_idx}...")
-    error_u = run_model_inference(
-        models_u[u_idx],
-        combined_tensor_train,
-        dim_dict,
-        inference_batch_size,
-        device,
-        is_x_model=False,
-        use_abs_err=use_abs_err,
-        use_float32=args.use_float32,
+    fpath = os.path.join(temp_cache_dir, f"feat_u_{u_idx}.pkl")
+    if cache_strategy == "disk" and os.path.exists(fpath):
+        print(f"  Found cached U features for model {u_idx}, skipping computation.")
+        u_error_files[u_idx] = fpath
+        continue
+
+    # If we are here, we MUST compute.
+    # If 'all_files_exist' was True but we are here, something is wrong (file deleted in between?) OR we are not using disk cache?
+    # Whatever, if we are here, we need train_data_cache.
+    # If all_files_exist was True, train_data_cache is NOT loaded.
+    if "train_data_cache" not in locals() or train_data_cache is None:
+        raise RuntimeError(
+            "Training data not loaded but feature computation needed! (Cache inconsistency)"
+        )
+
+    print(
+        f"  Computing training features for U model {u_idx} (Per-vehicle processing)..."
     )
 
-    # Extract features (small size)
-    feat_u_tuple = extract_features_from_error("u", error_u)
-    del error_u  # Must delete raw error matrix immediately
+    # Process per vehicle
+    feat_u_list = []
+
+    for v_tensor, _ in train_data_cache:
+        error_u_veh = run_model_inference(
+            models_u[u_idx],
+            v_tensor,
+            dim_dict,
+            inference_batch_size,
+            device,
+            is_x_model=False,
+            use_abs_err=use_abs_err,
+            use_float32=args.use_float32,
+        )
+        # Extract features for this vehicle
+        feat_veh_tuple = extract_features_from_error("u", error_u_veh)
+        feat_u_list.append(feat_veh_tuple)
+        del error_u_veh
+
+    # Concatenate features
+    if feat_u_list:
+        feat_u_final = (
+            pd.concat([t[0] for t in feat_u_list], ignore_index=True),
+            pd.concat([t[1] for t in feat_u_list], ignore_index=True),
+            pd.concat([t[2] for t in feat_u_list], ignore_index=True),
+        )
+    else:
+        feat_u_final = (pd.Series(), pd.Series(), pd.Series())
 
     if cache_strategy == "disk":
         # Save to disk as pickle (pd.Series tuple)
         fpath = os.path.join(temp_cache_dir, f"feat_u_{u_idx}.pkl")
-        # Use pickle for tuple/series
         with open(fpath, "wb") as f:
             import pickle
 
-            pickle.dump(feat_u_tuple, f)
+            pickle.dump(feat_u_final, f)
         u_error_files[u_idx] = fpath
     else:
         # Keep in memory
-        u_error_cache[u_idx] = feat_u_tuple
+        u_error_cache[u_idx] = feat_u_final
 
 # Phase 2: Compute and Cache X FEATURES
 print(f"\nPhase 2: Computing and caching X FEATURES to {cache_strategy}...")
 for x_idx in x_model_indices:
-    # Check for existing cache if resuming
-    if cache_strategy == "disk" and args.resume:
-        fpath = os.path.join(temp_cache_dir, f"feat_x_{x_idx}.pkl")
-        if os.path.exists(fpath):
-            print(
-                f"  [Resume] Found cached X features for model {x_idx}, skipping computation."
-            )
-            x_error_files[x_idx] = fpath
-            continue
+    fpath = os.path.join(temp_cache_dir, f"feat_x_{x_idx}.pkl")
+    if cache_strategy == "disk" and os.path.exists(fpath):
+        print(f"  Found cached X features for model {x_idx}, skipping computation.")
+        x_error_files[x_idx] = fpath
+        continue
 
-    print(f"  Computing training features for X model {x_idx}...")
-    error_x = run_model_inference(
-        models_x[x_idx],
-        combined_tensorx_train,
-        dim_dict,
-        inference_batch_size,
-        device,
-        is_x_model=True,
-        use_abs_err=use_abs_err,
-        use_float32=args.use_float32,
+    if "train_data_cache" not in locals() or train_data_cache is None:
+        raise RuntimeError("Training data not loaded but feature computation needed!")
+
+    print(
+        f"  Computing training features for X model {x_idx} (Per-vehicle processing)..."
     )
 
-    # Extract features (small size)
-    feat_x_tuple = extract_features_from_error("x", error_x)
-    del error_x  # Must delete raw error matrix immediately
+    # Process per vehicle
+    feat_x_list = []
+
+    for _, v_tensorx in train_data_cache:
+        error_x_veh = run_model_inference(
+            models_x[x_idx],
+            v_tensorx,
+            dim_dict,
+            inference_batch_size,
+            device,
+            is_x_model=True,
+            use_abs_err=use_abs_err,
+            use_float32=args.use_float32,
+        )
+
+        # Extract features for this vehicle
+        feat_veh_tuple = extract_features_from_error("x", error_x_veh)
+        feat_x_list.append(feat_veh_tuple)
+        del error_x_veh
+
+    # Concatenate features
+    if feat_x_list:
+        feat_x_final = (
+            pd.concat([t[0] for t in feat_x_list], ignore_index=True),
+            pd.concat([t[1] for t in feat_x_list], ignore_index=True),
+            pd.concat([t[2] for t in feat_x_list], ignore_index=True),
+        )
+    else:
+        feat_x_final = (pd.Series(), pd.Series(), pd.Series())
 
     if cache_strategy == "disk":
         # Save to disk
@@ -838,16 +864,16 @@ for x_idx in x_model_indices:
         with open(fpath, "wb") as f:
             import pickle
 
-            pickle.dump(feat_x_tuple, f)
+            pickle.dump(feat_x_final, f)
         x_error_files[x_idx] = fpath
     else:
         # Keep in memory
-        x_error_cache[x_idx] = feat_x_tuple
+        x_error_cache[x_idx] = feat_x_final
 
 # Critical: Release original training data to free up RAM before PCA loop
 print("Releasing training data from memory...")
-if not all_files_exist:
-    del combined_tensor_train, combined_tensorx_train
+if "train_data_cache" in locals() and train_data_cache is not None:
+    del train_data_cache
 if torch.cuda.is_available():
     torch.cuda.empty_cache()
 
