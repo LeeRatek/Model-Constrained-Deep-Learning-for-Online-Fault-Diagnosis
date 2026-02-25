@@ -117,7 +117,7 @@ class CombinedAE(nn.Module):
     def analyze_outputs(
         self,
         x,
-        dx,
+        z,
         q,
         re,
         y=None,
@@ -200,7 +200,7 @@ class CombinedAE(nn.Module):
                 _range=[0, 0],
             )
             plot_testX_timeseries(
-                self.encode(x) + self.encode2(q) + dx,
+                z,
                 feature_names=f"Latent information of {cell_idx+1}th cell",
                 title=f"Latent information of {cell_idx+1}th cell",
                 figsize=figsize,
@@ -242,11 +242,11 @@ class CombinedAE(nn.Module):
         items = [
             (x, "Kalman prediction", [0, 0]),
             (x, "LSTM prediction", [1, 1]),
-            (self.encode2(q), "Encode vechile information", [0, 0]),
             (self.encode(x), "Encode Kalman + LSTM prediction", [0, 0]),
+            (self.encode2(q), "Encode vechile information", [0, 0]),
             (self.encode(x) + self.encode2(q), "Sum of all system information", [0, 0]),
             (
-                self.encode(x) + self.encode2(q) + dx,
+                z,
                 f"Latent information of {cell_idx+1}th cell",
                 [cell_idx, cell_idx],
             ),

@@ -30,8 +30,8 @@ parser = argparse.ArgumentParser(
 
 parser.add_argument(
     "--models-dir", type=str, default="./models"
-)  # 260206_084839 & 260211_163108
-parser.add_argument("--models-folder", type=str, default="260219_080044")
+)  # 260206_084839 & 260211_163108 & 260219_111732 & 260224_090359
+parser.add_argument("--models-folder", type=str, default="260224_090359")
 parser.add_argument(
     "--source-data-dir",
     type=str,
@@ -73,6 +73,14 @@ ae_u_scale = vals.ae_u_scale if hasattr(vals, "ae_u_scale") else 1.8
 ae_u_shift = vals.ae_u_shift if hasattr(vals, "ae_u_shift") else 2.5
 ae_x_scale = vals.ae_x_scale if hasattr(vals, "ae_x_scale") else 1.0
 ae_x_shift = vals.ae_x_shift if hasattr(vals, "ae_x_shift") else 0
+
+# 디버그 모드인지 확인 (sys.gettrace() 또는 debugpy 모듈 로드 여부)
+is_debug = sys.gettrace() is not None or "debugpy" in sys.modules
+
+if is_debug:
+    u_model_idx = f"net_e{2}"
+    x_model_idx = f"netx_e{1}"
+    print("현재 디버그 모드로 실행 중입니다.")
 
 # 플롯 결과 저장 폴더는 한 번만 생성
 os.makedirs(f"{args.models_dir}/{args.models_folder}/results", exist_ok=True)
@@ -314,7 +322,8 @@ start = time.perf_counter()
 test_idx = 0
 for label, vehicle_ids in enumerate(test_list):
     for i in vehicle_ids:
-        # i = 46  # 3, 46, 351, 362, 382
+        if is_debug:
+            i = 338  # 3, 46, 351, 362, 382
         print(f"Processing label={label} with vehicle ID={i}...")
         elapsed = time.perf_counter() - start
         h, rem = divmod(elapsed, 3600)
@@ -392,6 +401,17 @@ for label, vehicle_ids in enumerate(test_list):
             ERRORX = np.abs(reconx_imtest[0] - y_recovered2).cpu().numpy()
             # ERRORU = (recon_imtest[0] - y_recovered).cpu().numpy()
             # ERRORX = (reconx_imtest[0] - y_recovered2).cpu().numpy()
+        # interest_order = 5
+        # do_show = False
+        # time_idx = find_max_idx_from_array(np.asarray(ERRORU, dtype=float).max(axis=1), interest_order)[0][0]
+        # print(f"Max ERRORU at time index {time_idx}, value: {ERRORU[time_idx].max():.4f}")
+        # cell_idx = np.where(ERRORU[time_idx] == ERRORU[time_idx].max())[0][0]
+        # print(f"Max ERRORU at cell index {cell_idx}, value: {ERRORU[time_idx][cell_idx]:.4f}")
+        # if do_show:
+        #     net_loaded.analyze_outputs(x_recovered, recon_imtest[1], q_recovered, recon_imtest[0], y_recovered, cell_idx=cell_idx, combine=True, ncols=3, fill="spiral")
+        #     netx_loaded.analyze_outputs(x_recovered2, reconx_imtest[1], q_recovered2, reconx_imtest[0], y_recovered2, cell_idx=cell_idx, combine=True, ncols=3, fill="spiral")
+        #     plot_testX_timeseries(ERRORU, feature_names="|U - $\hat{U}|$", title="|U - $\hat{U}|$", figsize=(6, 3), show=True, seperate=False, start_idx=0, _range=[cell_idx,cell_idx])
+        #     plot_testX_timeseries(ERRORX, feature_names="|X - $\hat{X}|$", title="|X - $\hat{X}|$", figsize=(6, 3), show=True, seperate=False, start_idx=0, _range=[cell_idx,cell_idx])
 
         # plot_testX_timeseries(y_recovered, feature_names="U", title="U", figsize=(6, 3), show=True, seperate=False, start_idx=0, _range=[0,0])
         # plot_testX_timeseries(y_recovered2, feature_names="X", title="X", figsize=(6, 3), show=True, seperate=False, start_idx=0, _range=[0,0])

@@ -2953,20 +2953,36 @@ def plot_net_layer_params_by_index(
             plt.close(fig)
 
 
-def find_max_idx_from_array(array):
+def find_max_idx_from_array(array, k=1):
+    """
+    k: k-th largest value index (1-based)
+    k=1 -> Max value
+    k=2 -> 2nd Max value
+    """
     dv = 0.00001
+    arr_flat = np.asarray(array, dtype=float).flatten()
+    unique_vals = np.unique(arr_flat)
+    
+    # Check if k is valid
+    if k < 1:
+        raise ValueError("k must be >= 1")
+    
+    # Get k-th max value
+    if len(unique_vals) >= k:
+        target_val = unique_vals[-k]
+    else:
+        # If not enough unique values, fallback to the smallest available (or handled as error)
+        # Assuming user wants the 'min' if k exceeds unique count, or reuse max?
+        # Let's fallback to the smallest available unique value (which is index 0)
+        target_val = unique_vals[0]
+
     if array.ndim == 1:
-        max_err = np.asarray(array, dtype=float).max()
-        max_err_time = np.where(np.asarray(array, dtype=float) > (max_err - dv))
-        return max_err_time
+        max_time = np.where(np.abs(array - target_val) < dv)
+        return max_time
     elif array.ndim == 2:
-        max_array = np.asarray(array, dtype=float).max(axis=1)
-        max_err = max_array.max()
-        max_err_time = np.where(max_array > (max_err - dv))
-        max_err_idx = np.where(
-            np.asarray(array[max_err_time], dtype=float) > (max_err - dv)
-        )
-        return max_err_time, max_err_idx
+        max_err_time, max_err_idx = np.where(np.abs(array - target_val) < dv)
+        # Return as tuple of arrays to match original format
+        return (max_err_time,), (max_err_idx,)
     else:
         raise ValueError("Input array must be 1D or 2D.")
 

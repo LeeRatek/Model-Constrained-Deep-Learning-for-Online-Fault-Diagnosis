@@ -130,6 +130,14 @@ PREPROCESSING, SKIP_CHARGE_READY = get_preprocessing_and_skip_charge_ready(
 use_dx_in_forward = not args.no_use_dx
 use_abs_err = not args.no_abs_err
 add_one_output_layer = args.add_one_output_layer
+
+# 디버그 모드인지 확인 (sys.gettrace() 또는 debugpy 모듈 로드 여부)
+is_debug = sys.gettrace() is not None or "debugpy" in sys.modules
+
+if is_debug:
+    use_dx_in_forward = False
+    print("현재 디버그 모드로 실행 중입니다.")
+
 # use_dx_in_forward = False
 dim_dict = get_input_dimensions(BATTERY_TYPE)
 
@@ -237,6 +245,8 @@ for i in train_list:
 
     vehicle_tensors.append(tensor)
     vehicle_tensorsx.append(tensorx)
+    if is_debug:
+        break
 
 # combined_tensor를 생성하지 않고 리스트만 유지하여 메모리 피크 방지
 # combined_tensor = torch.cat(vehicle_tensors, dim=0)
@@ -414,6 +424,8 @@ for i in validate_list:
 
     v_vehicle_tensors.append(v_tensor)
     v_vehicle_tensorsx.append(v_tensorx)
+    if is_debug:
+        break
 
 # combined_tensor 생성 제거
 # if len(v_vehicle_tensors) > 0:
@@ -430,26 +442,27 @@ for i in validate_list:
 
 total_val_samples = sum(len(t) for t in v_vehicle_tensors)
 
-buf = io.StringIO()
-with redirect_stdout(buf):
-    print_sim_config(
-        title="Train Run",
-        config=args,
-        extra={
-            "device": str(device),
-            "Vehicle IDs used for training": vehicle_idxes,
-            "Amount of data used for training": total_train_samples,
-            "PREPROCESSING": PREPROCESSING,
-            "SKIP_CHARGE_READY": SKIP_CHARGE_READY,
-        },
-        # exclude=["password", "token"],  # 민감정보 방지용
-    )
+if not is_debug:
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        print_sim_config(
+            title="Train Run",
+            config=args,
+            extra={
+                "device": str(device),
+                "Vehicle IDs used for training": vehicle_idxes,
+                "Amount of data used for training": total_train_samples,
+                "PREPROCESSING": PREPROCESSING,
+                "SKIP_CHARGE_READY": SKIP_CHARGE_READY,
+            },
+            # exclude=["password", "token"],  # 민감정보 방지용
+        )
 
-text = buf.getvalue()
-print(text, end="")  # 콘솔 출력
-os.makedirs(data_path, exist_ok=True)
-with open(f"{data_path}/sim_config.txt", "w", encoding="utf-8") as f:
-    f.write(text)  # 파일 저장
+    text = buf.getvalue()
+    print(text, end="")  # 콘솔 출력
+    os.makedirs(data_path, exist_ok=True)
+    with open(f"{data_path}/sim_config.txt", "w", encoding="utf-8") as f:
+        f.write(text)  # 파일 저장
 
 AE_U_EPOCH = args.ae_u_epochs
 AE_U_LR = args.ae_u_lr
