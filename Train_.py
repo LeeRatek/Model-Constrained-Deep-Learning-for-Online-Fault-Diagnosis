@@ -110,11 +110,19 @@ parser.add_argument(
     default=1,
     help="1: Skip and no nomalization, 2: Skip but doing normalization, 3: No skip but doing normalization, 4: No skip and no normalization.",
 )
-parser.add_argument("--dataset-name", type=str, default=None, help="Name of the dataset folder (e.g. 'train_0.5_seed42') to load from ./datasets/")
+parser.add_argument(
+    "--dataset-name",
+    type=str,
+    default=None,
+    help="Name of the dataset folder (e.g. 'train_0.5_seed42') to load from ./datasets/",
+)
 parser.add_argument("--no-use-dx", action="store_true")
 parser.add_argument("--no-abs-err", action="store_true")
 parser.add_argument("--add-one-output-layer", action="store_true")
 parser.add_argument("--no-save", action="store_true")
+parser.add_argument(
+    "--no-validation", action="store_true", help="Skip validation process"
+)
 parser.add_argument(
     "--seed", type=int, default=42, help="Random seed for reproducibility"
 )
@@ -152,23 +160,24 @@ start = time.perf_counter()
 if args.dataset_name:
     dataset_base_path = f"./datasets/{args.dataset_name}"
     print(f"Dataset path: {dataset_base_path}")
-    train_file_path = f"{dataset_base_path}/{BATTERY_TYPE}_filtered_vehicle_ids_train.npy"
-    val_file_path = f"{dataset_base_path}/{BATTERY_TYPE}_filtered_vehicle_ids_validate.npy"
+    train_file_path = (
+        f"{dataset_base_path}/{BATTERY_TYPE}_filtered_vehicle_ids_train.npy"
+    )
+    val_file_path = (
+        f"{dataset_base_path}/{BATTERY_TYPE}_filtered_vehicle_ids_validate.npy"
+    )
 else:
     print("Dataset path: . (Legacy)")
     train_file_path = f"./{BATTERY_TYPE}_filtered_vehicle_ids_train.npy"
     val_file_path = f"./{BATTERY_TYPE}_filtered_vehicle_ids_validate.npy"
 
-train_list = (
-    np.load(train_file_path)
-    .astype(np.int64)
-    .tolist()
-)
-validate_list = (
-    np.load(val_file_path)
-    .astype(np.int64)
-    .tolist()
-)
+train_list = np.load(train_file_path).astype(np.int64).tolist()
+if not args.no_validation:
+    validate_list = np.load(val_file_path).astype(np.int64).tolist()
+else:
+    print("Validation skipped by user request.")
+    validate_list = []
+
 vehicle_idxes = []
 FIRST_LOAD = True
 
@@ -406,37 +415,41 @@ class VirtualConcatDatasetVal(Dataset):
 total_train_samples = sum(len(t) for t in vehicle_tensors)
 
 
-# ----------------------------------------Validation Data Loading ------------------------------
-FIRST_LOAD = True
-count = 0
 v_vehicle_tensors = []
 v_vehicle_tensorsx = []
 
-for i in validate_list:
-    count += 1
-    if count % 10 == 0:
-        print(f"Processing validation vehicle {count}/{len(validate_list)}")
-    v_tensor = safe_load(
-        f"{args.source_data_dir}/{BATTERY_TYPE}/{i}/vin_2.pkl", verbose=False
-    )
-    v_tensorx = safe_load(
-        f"{args.source_data_dir}/{BATTERY_TYPE}/{i}/vin_3.pkl", verbose=False
-    )
-    v_tensor, v_tensorx = preprocess_loaded_tensor(
-        v_tensor,
-        v_tensorx,
-        dim_dict,
-        BATTERY_TYPE,
-        PREPROCESSING,
-        SKIP_CHARGE_READY,
-        normalize_dx=args.normalize_dx,
-        normalize_val=args.normalize_val,
-    )
+if args.no_validation:
+    print("Skipping validation.")
+else:
+    # ----------------------------------------Validation Data Loading ------------------------------
+    FIRST_LOAD = True
+    count = 0
 
-    v_vehicle_tensors.append(v_tensor)
-    v_vehicle_tensorsx.append(v_tensorx)
-    if is_debug:
-        break
+    for i in validate_list:
+        count += 1
+        if count % 10 == 0:
+            print(f"Processing validation vehicle {count}/{len(validate_list)}")
+        v_tensor = safe_load(
+            f"{args.source_data_dir}/{BATTERY_TYPE}/{i}/vin_2.pkl", verbose=False
+        )
+        v_tensorx = safe_load(
+            f"{args.source_data_dir}/{BATTERY_TYPE}/{i}/vin_3.pkl", verbose=False
+        )
+        v_tensor, v_tensorx = preprocess_loaded_tensor(
+            v_tensor,
+            v_tensorx,
+            dim_dict,
+            BATTERY_TYPE,
+            PREPROCESSING,
+            SKIP_CHARGE_READY,
+            normalize_dx=args.normalize_dx,
+            normalize_val=args.normalize_val,
+        )
+
+        v_vehicle_tensors.append(v_tensor)
+        v_vehicle_tensorsx.append(v_tensorx)
+        if is_debug:
+            break
 
 # combined_tensor 생성 제거
 # if len(v_vehicle_tensors) > 0:
@@ -650,11 +663,15 @@ train_loader_u = DataLoader(
     batch_size=AE_U_BATCHSIZE,
     shuffle=args.ae_u_shuffle,  # Shuffle is important for training
 )
-validate_loader_u = DataLoader(
-    VirtualDatasetU(v_vehicle_tensors, dim_dict),
-    batch_size=AE_U_BATCHSIZE,
-    shuffle=False,
-)
+if args.no_validation:
+    # Use empty tensors if validation is disabled
+    validate_loader_u = []
+else:
+    validate_loader_u = DataLoader(
+        VirtualDatasetU(v_vehicle_tensors, dim_dict),
+        batch_size=AE_U_BATCHSIZE,
+        shuffle=False,
+    )
 
 for epoch in range(AE_U_EPOCH):
     total_loss = 0
@@ -743,11 +760,14 @@ train_loader_soc = DataLoader(
     batch_size=AE_X_BATCHSIZE,
     shuffle=args.ae_x_shuffle,  # Shuffle for training
 )
-validate_loader_soc = DataLoader(
-    VirtualDatasetX(v_vehicle_tensorsx, dim_dict),
-    batch_size=AE_X_BATCHSIZE,
-    shuffle=False,
-)
+if args.no_validation:
+    validate_loader_soc = []
+else:
+    validate_loader_soc = DataLoader(
+        VirtualDatasetX(v_vehicle_tensorsx, dim_dict),
+        batch_size=AE_X_BATCHSIZE,
+        shuffle=False,
+    )
 optimizer = torch.optim.Adam(netx.parameters(), lr=AE_X_LR)
 loss_f = nn.MSELoss()
 avg_loss_list_x = []
