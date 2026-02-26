@@ -1,7 +1,7 @@
-Dataset Name: debug
+Dataset Name: 10
 Battery Type: QAS
 Seed: 42
-Train Count: 30 (9.71%)
-Val Count: 139 (44.98%)
-Test Count: 140 (45.31%)
-Fault Count: 50
+Train Count: 30 (9.71%), Samples: 920891 (9.76%)
+Val Count: 139 (44.98%), Samples: 4194354 (44.47%)
+Test Count: 140 (45.31%), Samples: 4317059 (45.77%)
+Fault Count: 50, Samples: 2133257

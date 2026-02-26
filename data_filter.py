@@ -85,6 +85,7 @@ else:
 
 # "QAS" = [0~392], "DTI" = [0~79]
 filtered_vehicle_ids = np.array([])
+vehicle_data_counts = {}  # Store sample count for each vehicle
 (vin1_start, vin2_start, vin3_start) = (0, 0, 0)
 
 start_idxes = []
@@ -121,6 +122,7 @@ for i in range(0, max_idx + 1):
         print(f"Vehicle ID {i} is filtered out due to abnormal data.")
         continue
     filtered_vehicle_ids = np.append(filtered_vehicle_ids, i)  # TBD
+    vehicle_data_counts[i] = tensor.shape[0]  # Store data count
 
     # ---------------------------------------- Data normalization ------------------------------
     if mode == MODE.PLOT_MODE:
@@ -274,6 +276,12 @@ if mode == MODE.FILTER_MODE:
     test_list = [vid for vid in remain_list if vid not in set(validate_list)]
     test_list.sort()
 
+    # Calculate total data points for each split
+    train_data_count = sum(vehicle_data_counts[vid] for vid in train_list)
+    val_data_count = sum(vehicle_data_counts[vid] for vid in validate_list)
+    test_data_count = sum(vehicle_data_counts[vid] for vid in test_list)
+    fault_data_count = sum(vehicle_data_counts[vid] for vid in fault_list)
+
     np.save(
         f"{save_path}/{BATTERY_TYPE}_filtered_vehicle_ids_train.npy",
         np.array(train_list),
@@ -287,18 +295,21 @@ if mode == MODE.FILTER_MODE:
     )
 
     # Save dataset info for traceability
+    total_samples = train_data_count + val_data_count + test_data_count
     with open(f"{save_path}/dataset_info_{BATTERY_TYPE}.txt", "w") as f:
         f.write(f"Dataset Name: {args.dataset_name}\n")
         f.write(f"Battery Type: {BATTERY_TYPE}\n")
         f.write(f"Seed: {args.seed}\n")
         f.write(
-            f"Train Count: {len(train_list)} ({len(train_list)/total_normal:.2%})\n"
+            f"Train Count: {len(train_list)} ({len(train_list)/total_normal:.2%}), Samples: {train_data_count} ({train_data_count/total_samples:.2%})\n"
         )
         f.write(
-            f"Val Count: {len(validate_list)} ({len(validate_list)/total_normal:.2%})\n"
+            f"Val Count: {len(validate_list)} ({len(validate_list)/total_normal:.2%}), Samples: {val_data_count} ({val_data_count/total_samples:.2%})\n"
         )
-        f.write(f"Test Count: {len(test_list)} ({len(test_list)/total_normal:.2%})\n")
-        f.write(f"Fault Count: {len(fault_list)}\n")
+        f.write(
+            f"Test Count: {len(test_list)} ({len(test_list)/total_normal:.2%}), Samples: {test_data_count} ({test_data_count/total_samples:.2%})\n"
+        )
+        f.write(f"Fault Count: {len(fault_list)}, Samples: {fault_data_count}\n")
 
     print(f"Dataset saved to {save_path}")
     exit()

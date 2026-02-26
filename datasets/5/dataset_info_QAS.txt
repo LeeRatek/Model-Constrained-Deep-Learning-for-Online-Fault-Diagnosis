@@ -1,7 +1,7 @@
 Dataset Name: 5
 Battery Type: QAS
 Seed: 42
-Train Count: 15 (4.85%)
-Val Count: 147 (47.57%)
-Test Count: 147 (47.57%)
-Fault Count: 50
+Train Count: 15 (4.85%), Samples: 486718 (5.16%)
+Val Count: 147 (47.57%), Samples: 4399173 (46.64%)
+Test Count: 147 (47.57%), Samples: 4546413 (48.20%)
+Fault Count: 50, Samples: 2133257
