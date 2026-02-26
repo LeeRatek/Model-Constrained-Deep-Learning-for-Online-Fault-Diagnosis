@@ -107,6 +107,11 @@ parser.add_argument(
     action="store_true",
     help="Use validation set for model selection and evaluation.",
 )
+parser.add_argument(
+    "--use-reverse-pos-nag",
+    action="store_true",
+    help="Use reverse positive-negative strategy for model selection and evaluation.",
+)
 args = parser.parse_args()
 
 
@@ -400,7 +405,12 @@ fault_list = (
     .astype(np.int64)
     .tolist()
 )
-test_list = [normal_list, fault_list]
+
+test_list = (
+    [normal_list, fault_list]
+    if not args.use_reverse_pos_nag
+    else [fault_list, normal_list]
+)
 
 ## =================== Initialize params for AUROC curve  =================== ##
 total_test_vehicles = len(normal_list) + len(fault_list)
