@@ -108,7 +108,7 @@ parser.add_argument(
     help="Use validation set for model selection and evaluation.",
 )
 parser.add_argument(
-    "--use-reverse-pos-nag",
+    "--use-reverse-pos-neg",
     action="store_true",
     help="Use reverse positive-negative strategy for model selection and evaluation.",
 )
@@ -369,7 +369,9 @@ PREPROCESSING, SKIP_CHARGE_READY = get_preprocessing_and_skip_charge_ready(
 )
 
 # Determine Dataset Path based on trained model config
-DATA_BASE_PATH = read_dataset_path_from_sim_config(f"{args.models_dir}/{args.models_idx}")
+DATA_BASE_PATH = read_dataset_path_from_sim_config(
+    f"{args.models_dir}/{args.models_idx}"
+)
 print(f"Using dataset from: {DATA_BASE_PATH}")
 
 dim_dict = get_input_dimensions(BATTERY_TYPE)
@@ -415,7 +417,7 @@ fault_list = (
 
 test_list = (
     [normal_list, fault_list]
-    if not args.use_reverse_pos_nag
+    if not args.use_reverse_pos_neg
     else [fault_list, normal_list]
 )
 
@@ -1116,7 +1118,14 @@ def process_combination(u_idx, x_idx):
             CI_array = (spe_array / SPE_95_limit) + (t2_array / T_95_limit)
 
             ci_max = float(np.nanmax(np.asarray(CI_array, dtype=float)))
-            predict_results[test_idx, :] = (ci_max > predict_thresholds).astype(np.int8)
+            if args.use_reverse_pos_neg:
+                predict_results[test_idx, :] = (ci_max < predict_thresholds).astype(
+                    np.int8
+                )
+            else:
+                predict_results[test_idx, :] = (ci_max > predict_thresholds).astype(
+                    np.int8
+                )
             y_true[test_idx] = np.int8(label)
             test_idx += 1
 
