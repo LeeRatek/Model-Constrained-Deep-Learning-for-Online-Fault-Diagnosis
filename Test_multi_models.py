@@ -102,6 +102,11 @@ parser.add_argument(
     action="store_true",
     help="Optimize search: 1. Find best U using last X model. 2. Sweep X models using best U. Reduces combinations from N*M to N+M.",
 )
+parser.add_argument(
+    "--use-validate",
+    action="store_true",
+    help="Use validation set for model selection and evaluation.",
+)
 args = parser.parse_args()
 
 
@@ -381,9 +386,15 @@ except Exception as e:
     print(f"Error plotting loss curve: {e}")
 
 ## =================== Load test data lists =================== ##
-normal_list = (
+normal_test = (
     np.load(f"./{BATTERY_TYPE}_filtered_vehicle_ids_test.npy").astype(np.int64).tolist()
 )
+normal_validate = (
+    np.load(f"./{BATTERY_TYPE}_filtered_vehicle_ids_validate.npy")
+    .astype(np.int64)
+    .tolist()
+)
+normal_list = [*normal_test, *normal_validate] if args.use_validate else normal_test
 fault_list = (
     np.load(f"./{BATTERY_TYPE}_filtered_vehicle_ids_fault.npy")
     .astype(np.int64)
