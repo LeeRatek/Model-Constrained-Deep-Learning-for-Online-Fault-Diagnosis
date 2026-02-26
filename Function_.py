@@ -1094,6 +1094,14 @@ def compute_roc_auc_from_threshold_matrix(y_true, predict_results, predict_thres
     fpr = np.asarray(fpr_list, dtype=float)
     tpr = np.asarray(tpr_list, dtype=float)
     thr_arr = np.asarray(thr_list, dtype=float)
+
+    # Sort by FPR to ensure monotonic increasing for auc computation
+    # This handles both cases: (score > thr) and (score < thr)
+    sort_idx = np.argsort(fpr)
+    fpr = fpr[sort_idx]
+    tpr = tpr[sort_idx]
+    thr_arr = thr_arr[sort_idx]
+
     auc_val = float(sk_metrics.auc(fpr, tpr))
 
     finite_mask = np.isfinite(thr_arr)
