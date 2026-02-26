@@ -98,8 +98,9 @@ def train_pca_only(
         combined_tensor, combined_tensorx = preloaded_train_data
     else:
         print("Loading training data from disk...")
+        dataset_base_path = read_dataset_path_from_sim_config(f"{args.models_dir}/{args.models_folder}")
         train_list = (
-            np.load(f"./{BATTERY_TYPE}_filtered_vehicle_ids_train.npy")
+            np.load(f"{dataset_base_path}/{BATTERY_TYPE}_filtered_vehicle_ids_train.npy")
             .astype(np.int64)
             .tolist()
         )

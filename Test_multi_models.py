@@ -367,6 +367,11 @@ BATTERY_TYPE = vals.battery_type  # 'DTI' or 'QAS'
 PREPROCESSING, SKIP_CHARGE_READY = get_preprocessing_and_skip_charge_ready(
     learning_case
 )
+
+# Determine Dataset Path based on trained model config
+DATA_BASE_PATH = read_dataset_path_from_sim_config(f"{args.models_dir}/{args.models_idx}")
+print(f"Using dataset from: {DATA_BASE_PATH}")
+
 dim_dict = get_input_dimensions(BATTERY_TYPE)
 
 print_sim_config(
@@ -392,16 +397,18 @@ except Exception as e:
 
 ## =================== Load test data lists =================== ##
 normal_test = (
-    np.load(f"./{BATTERY_TYPE}_filtered_vehicle_ids_test.npy").astype(np.int64).tolist()
+    np.load(f"{DATA_BASE_PATH}/{BATTERY_TYPE}_filtered_vehicle_ids_test.npy")
+    .astype(np.int64)
+    .tolist()
 )
 normal_validate = (
-    np.load(f"./{BATTERY_TYPE}_filtered_vehicle_ids_validate.npy")
+    np.load(f"{DATA_BASE_PATH}/{BATTERY_TYPE}_filtered_vehicle_ids_validate.npy")
     .astype(np.int64)
     .tolist()
 )
 normal_list = [*normal_test, *normal_validate] if args.use_validate else normal_test
 fault_list = (
-    np.load(f"./{BATTERY_TYPE}_filtered_vehicle_ids_fault.npy")
+    np.load(f"{DATA_BASE_PATH}/{BATTERY_TYPE}_filtered_vehicle_ids_fault.npy")
     .astype(np.int64)
     .tolist()
 )
@@ -556,7 +563,7 @@ if args.cache_strategy == "disk":
 if not all_files_exist:
     print("Pre-loading training data...")
     train_list = (
-        np.load(f"./{BATTERY_TYPE}_filtered_vehicle_ids_train.npy")
+        np.load(f"{DATA_BASE_PATH}/{BATTERY_TYPE}_filtered_vehicle_ids_train.npy")
         .astype(np.int64)
         .tolist()
     )

@@ -11,14 +11,47 @@ from Class_ import *
 import torch
 
 # from sklearn.datasets import load_boston
-from sklearn.model_selection import train_test_split
+import argparse
 from enum import IntEnum
+
+parser = argparse.ArgumentParser()
+parser.add_argument(
+    "--dataset-name", type=str, default="default", help="Name of the dataset folder"
+)
+parser.add_argument(
+    "--train-ratio",
+    type=float,
+    default=None,
+    help="Ratio of training data (0.0 to 1.0)",
+)
+parser.add_argument(
+    "--val-ratio",
+    type=float,
+    default=None,
+    help="Ratio of validation data (0.0 to 1.0)",
+)
+parser.add_argument("--seed", type=int, default=42, help="Random seed for splitting")
+args = parser.parse_args()
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 print(torch.cuda.device_count())
 
 warnings.filterwarnings("ignore")
+
+# 디버그 모드인지 확인 (sys.gettrace() 또는 debugpy 모듈 로드 여부)
+is_debug = sys.gettrace() is not None or "debugpy" in sys.modules
+
+if is_debug:
+    args.train_ratio = 0.15
+    args.val_ratio = 0.5
+    args.dataset_name = f"{int(args.train_ratio*100)}"
+    print("현재 디버그 모드로 실행 중입니다.")
+
+# Create dataset directory
+dataset_dir = f"./datasets/{args.dataset_name}"
+os.makedirs(dataset_dir, exist_ok=True)
+print(f"Dataset will be saved to: {dataset_dir}")
 
 
 class MODE(IntEnum):
@@ -30,15 +63,25 @@ class MODE(IntEnum):
 mode = MODE.FILTER_MODE
 LSTM_LOAD = False
 FIRST_LOAD = True
-BATTERY_TYPE = "DTI"  # 'DTI' or 'QAS'
+BATTERY_TYPE = "QAS"  # 'DTI' or 'QAS'
 SKIP_CHARGE_READY = True
 PREPROCESSING = False
 dim_dict = get_input_dimensions(BATTERY_TYPE)
 
 max_idx = 392 if BATTERY_TYPE == "QAS" else 79
 fault_idx = 335 if BATTERY_TYPE == "QAS" else 77
-n_train_set = 109 if BATTERY_TYPE == "QAS" else 39
-n_validation_set = 50 if BATTERY_TYPE == "QAS" else 19
+
+# Set random seed
+np.random.seed(args.seed)
+
+# Calculate Dataset Sizes
+if args.train_ratio is not None and args.val_ratio is not None:
+    # Use ratios
+    pass  # Logic below will calculate based on total count
+else:
+    # Fallback to hardcoded values (if not specified) - though ratios are preferred for flexibility
+    n_train_set = 109 if BATTERY_TYPE == "QAS" else 39
+    n_validation_set = 50 if BATTERY_TYPE == "QAS" else 19
 
 # "QAS" = [0~392], "DTI" = [0~79]
 filtered_vehicle_ids = np.array([])
@@ -74,9 +117,9 @@ for i in range(0, max_idx + 1):
     tensor, tensorx = preprocess_loaded_tensor(
         tensor, tensorx, dim_dict, BATTERY_TYPE, PREPROCESSING, SKIP_CHARGE_READY
     )
-    # if is_abnormal(tensor):
-    #     print(f"Vehicle ID {i} is filtered out due to abnormal data.")
-    #     continue
+    if is_abnormal(tensor):
+        print(f"Vehicle ID {i} is filtered out due to abnormal data.")
+        continue
     filtered_vehicle_ids = np.append(filtered_vehicle_ids, i)  # TBD
 
     # ---------------------------------------- Data normalization ------------------------------
@@ -183,8 +226,46 @@ if mode == MODE.PLOT_MODE:
 if mode == MODE.FILTER_MODE:
     fault_list = [i for i in filtered_vehicle_ids if i >= fault_idx]
     normal_list = [i for i in filtered_vehicle_ids if i < fault_idx]
-    np.save(f"./{BATTERY_TYPE}_filtered_vehicle_ids_normal.npy", np.array(normal_list))
-    np.save(f"./{BATTERY_TYPE}_filtered_vehicle_ids_fault.npy", np.array(fault_list))
+
+    # Calculate split sizes if ratios are provided
+    total_normal = len(normal_list)
+    if args.train_ratio is not None:
+        n_train_set = int(total_normal * args.train_ratio)
+
+    if "n_train_set" not in locals():
+        n_train_set = 109 if BATTERY_TYPE == "QAS" else 39
+
+    total_remain = total_normal - n_train_set
+
+    if args.val_ratio is not None:
+        # User requested: val_ratio applies to the remaining data after train split
+        n_validation_set = int(total_remain * args.val_ratio)
+
+    if "n_validation_set" not in locals():
+        n_validation_set = 50 if BATTERY_TYPE == "QAS" else 19
+
+    if n_train_set + n_validation_set > total_normal:
+        print(
+            f"Error: Requested train ({n_train_set}) + val ({n_validation_set}) > Total ({total_normal})"
+        )
+        exit(1)
+
+    print(
+        f"Dataset Split - Train: {n_train_set}, Val: {n_validation_set}, Total Normal: {total_normal}"
+    )
+
+    # Ensure output directory exists (created earlier via dataset_dir)
+    save_path = dataset_dir
+
+    np.save(
+        f"{save_path}/{BATTERY_TYPE}_filtered_vehicle_ids_normal.npy",
+        np.array(normal_list),
+    )
+    np.save(
+        f"{save_path}/{BATTERY_TYPE}_filtered_vehicle_ids_fault.npy",
+        np.array(fault_list),
+    )
+
     train_list = np.random.choice(normal_list, size=n_train_set, replace=False)
     train_list.sort()
     remain_list = [vid for vid in normal_list if vid not in set(train_list)]
@@ -192,11 +273,34 @@ if mode == MODE.FILTER_MODE:
     validate_list.sort()
     test_list = [vid for vid in remain_list if vid not in set(validate_list)]
     test_list.sort()
-    np.save(f"./{BATTERY_TYPE}_filtered_vehicle_ids_train.npy", np.array(train_list))
+
     np.save(
-        f"./{BATTERY_TYPE}_filtered_vehicle_ids_validate.npy", np.array(validate_list)
+        f"{save_path}/{BATTERY_TYPE}_filtered_vehicle_ids_train.npy",
+        np.array(train_list),
     )
-    np.save(f"./{BATTERY_TYPE}_filtered_vehicle_ids_test.npy", np.array(test_list))
+    np.save(
+        f"{save_path}/{BATTERY_TYPE}_filtered_vehicle_ids_validate.npy",
+        np.array(validate_list),
+    )
+    np.save(
+        f"{save_path}/{BATTERY_TYPE}_filtered_vehicle_ids_test.npy", np.array(test_list)
+    )
+
+    # Save dataset info for traceability
+    with open(f"{save_path}/dataset_info_{BATTERY_TYPE}.txt", "w") as f:
+        f.write(f"Dataset Name: {args.dataset_name}\n")
+        f.write(f"Battery Type: {BATTERY_TYPE}\n")
+        f.write(f"Seed: {args.seed}\n")
+        f.write(
+            f"Train Count: {len(train_list)} ({len(train_list)/total_normal:.2%})\n"
+        )
+        f.write(
+            f"Val Count: {len(validate_list)} ({len(validate_list)/total_normal:.2%})\n"
+        )
+        f.write(f"Test Count: {len(test_list)} ({len(test_list)/total_normal:.2%})\n")
+        f.write(f"Fault Count: {len(fault_list)}\n")
+
+    print(f"Dataset saved to {save_path}")
     exit()
 
 narray1 = np.array(combined_tensor)

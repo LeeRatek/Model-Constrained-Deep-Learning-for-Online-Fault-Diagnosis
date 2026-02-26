@@ -143,6 +143,9 @@ vals = read_values_from_sim_config(
     strict=False,  # True: 키가 하나라도 없을 시 예외, False: 없는 키는 None
 )
 learning_case = vals.learning_case
+
+DATA_BASE_PATH = read_dataset_path_from_sim_config(f"{args.models_dir}/{args.models_idx}")
+print(f"Using dataset from: {DATA_BASE_PATH}")
 add_one_output_layer = (
     vals.add_one_output_layer if hasattr(vals, "add_one_output_layer") else False
 )
@@ -186,15 +189,15 @@ except Exception as e:
 ## =================== DTI fault index range = [77~79] ===================
 ## =================== QAS fault index range = [335~392] ===================
 validate_list = (
-    np.load(f"./{BATTERY_TYPE}_filtered_vehicle_ids_validate.npy")
+    np.load(f"{DATA_BASE_PATH}/{BATTERY_TYPE}_filtered_vehicle_ids_validate.npy")
     .astype(np.int64)
     .tolist()
 )
 normal_list = (
-    np.load(f"./{BATTERY_TYPE}_filtered_vehicle_ids_test.npy").astype(np.int64).tolist()
+    np.load(f"{DATA_BASE_PATH}/{BATTERY_TYPE}_filtered_vehicle_ids_test.npy").astype(np.int64).tolist()
 )
 fault_list = (
-    np.load(f"./{BATTERY_TYPE}_filtered_vehicle_ids_fault.npy")
+    np.load(f"{DATA_BASE_PATH}/{BATTERY_TYPE}_filtered_vehicle_ids_fault.npy")
     .astype(np.int64)
     .tolist()
 )

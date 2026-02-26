@@ -2329,6 +2329,37 @@ def read_learning_case_from_sim_config(models_dir: str) -> int:
     return int(m.group(1))
 
 
+def read_dataset_path_from_sim_config(models_dir: str) -> str:
+    """
+    Retrieves the dataset path used for training from sim_config.txt.
+    Returns: Path to the dataset folder (e.g. './datasets/my_split') or '.' (root/legacy).
+    """
+    sim_path = Path(models_dir) / "sim_config.txt"
+    if not sim_path.exists():
+        # Fallback for old models or if config missing
+        return "."
+
+    try:
+        text = sim_path.read_text(encoding="utf-8")
+        # Look for 'dataset_name : value' pattern
+        # Handles potential whitespace around colon
+        m = re.search(r"(?m)^\s*dataset_name\s*:\s*(.+?)\s*$", text)
+        if m:
+            val = m.group(1).strip()
+            if val and val.lower() != "none" and val != "default":
+                candidate = f"./datasets/{val}"
+                if os.path.isdir(candidate):
+                    return candidate
+                else:
+                    print(
+                        f"[Warning] Dataset folder '{candidate}' recorded in config not found. Falling back to root."
+                    )
+    except Exception as e:
+        print(f"[Warning] Error reading dataset_name from {sim_path}: {e}")
+
+    return "."
+
+
 def _coerce_sim_config_value(raw: str):
     s = str(raw).strip()
     if s == "":
@@ -2962,11 +2993,11 @@ def find_max_idx_from_array(array, k=1):
     dv = 0.00001
     arr_flat = np.asarray(array, dtype=float).flatten()
     unique_vals = np.unique(arr_flat)
-    
+
     # Check if k is valid
     if k < 1:
         raise ValueError("k must be >= 1")
-    
+
     # Get k-th max value
     if len(unique_vals) >= k:
         target_val = unique_vals[-k]

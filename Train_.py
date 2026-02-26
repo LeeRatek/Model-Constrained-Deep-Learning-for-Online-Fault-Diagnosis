@@ -110,6 +110,7 @@ parser.add_argument(
     default=1,
     help="1: Skip and no nomalization, 2: Skip but doing normalization, 3: No skip but doing normalization, 4: No skip and no normalization.",
 )
+parser.add_argument("--dataset-name", type=str, default=None, help="Name of the dataset folder (e.g. 'train_0.5_seed42') to load from ./datasets/")
 parser.add_argument("--no-use-dx", action="store_true")
 parser.add_argument("--no-abs-err", action="store_true")
 parser.add_argument("--add-one-output-layer", action="store_true")
@@ -148,13 +149,23 @@ model_path = data_path + "/artifact"
 
 start = time.perf_counter()
 
+if args.dataset_name:
+    dataset_base_path = f"./datasets/{args.dataset_name}"
+    print(f"Dataset path: {dataset_base_path}")
+    train_file_path = f"{dataset_base_path}/{BATTERY_TYPE}_filtered_vehicle_ids_train.npy"
+    val_file_path = f"{dataset_base_path}/{BATTERY_TYPE}_filtered_vehicle_ids_validate.npy"
+else:
+    print("Dataset path: . (Legacy)")
+    train_file_path = f"./{BATTERY_TYPE}_filtered_vehicle_ids_train.npy"
+    val_file_path = f"./{BATTERY_TYPE}_filtered_vehicle_ids_validate.npy"
+
 train_list = (
-    np.load(f"./{BATTERY_TYPE}_filtered_vehicle_ids_train.npy")
+    np.load(train_file_path)
     .astype(np.int64)
     .tolist()
 )
 validate_list = (
-    np.load(f"./{BATTERY_TYPE}_filtered_vehicle_ids_validate.npy")
+    np.load(val_file_path)
     .astype(np.int64)
     .tolist()
 )

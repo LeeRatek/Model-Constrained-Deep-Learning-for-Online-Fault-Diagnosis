@@ -86,6 +86,10 @@ if is_debug:
 os.makedirs(f"{args.models_dir}/{args.models_folder}/results", exist_ok=True)
 
 BATTERY_TYPE = vals.battery_type  # 'DTI' or 'QAS'
+
+DATA_BASE_PATH = read_dataset_path_from_sim_config(f"{args.models_dir}/{args.models_folder}")
+print(f"Using dataset from: {DATA_BASE_PATH}")
+
 PREPROCESSING, SKIP_CHARGE_READY = get_preprocessing_and_skip_charge_ready(
     learning_case
 )
@@ -116,13 +120,13 @@ print_sim_config(
 
 # sim_config_path = os.path.join(f"{args.models_dir}/{args.models_folder}", "sim_config.txt")
 # train_vehicle_ids = load_vehicle_ids_used_for_training(sim_config_path)
-# all_normal_vehicle_ids = np.load(f"./{BATTERY_TYPE}_filtered_vehicle_ids_normal.npy").astype(np.int64).tolist()
+# all_normal_vehicle_ids = np.load(f"{DATA_BASE_PATH}/{BATTERY_TYPE}_filtered_vehicle_ids_normal.npy").astype(np.int64).tolist()
 # normal_list = [vid for vid in all_normal_vehicle_ids if vid not in set(train_vehicle_ids)]
 normal_list = (
-    np.load(f"./{BATTERY_TYPE}_filtered_vehicle_ids_test.npy").astype(np.int64).tolist()
+    np.load(f"{DATA_BASE_PATH}/{BATTERY_TYPE}_filtered_vehicle_ids_test.npy").astype(np.int64).tolist()
 )
 fault_list = (
-    np.load(f"./{BATTERY_TYPE}_filtered_vehicle_ids_fault.npy")
+    np.load(f"{DATA_BASE_PATH}/{BATTERY_TYPE}_filtered_vehicle_ids_fault.npy")
     .astype(np.int64)
     .tolist()
 )
