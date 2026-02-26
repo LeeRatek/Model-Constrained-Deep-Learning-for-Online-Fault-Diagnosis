@@ -43,7 +43,7 @@ warnings.filterwarnings("ignore")
 is_debug = sys.gettrace() is not None or "debugpy" in sys.modules
 
 if is_debug:
-    args.train_ratio = 0.15
+    args.train_ratio = 0.02
     args.val_ratio = 0.5
     args.dataset_name = f"{int(args.train_ratio*100)}"
     print("현재 디버그 모드로 실행 중입니다.")
