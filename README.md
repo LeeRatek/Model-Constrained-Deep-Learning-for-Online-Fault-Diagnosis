@@ -144,8 +144,7 @@ z = fc4(z)                              # --add-one-output-layer 일 때만, Lin
 ├── Test_tsne.py            [실행] 기준 정상 차량 vs 대상 차량 t-SNE + CI 시각화
 ├── Plot_AUC_heatmap.py     [실행] AUC_summary CSV → 히트맵 (재)생성
 ├── data_filter.py          [실행] 이상 차량 제거 + train/validate/test 분할
-├── Class_.py               [모듈] CombinedAE, CustomSigmoidFunc, LSTM(레거시) 클래스
-├── check_data_stats.py     [분석] DTI 초기 수렴 구간 탐색용 일회성 스크립트
+├── Class_.py               [모듈] CombinedAE, CustomSigmoidFunc 클래스
 ├── mcdl/                   [모듈] deep module 패키지 (run.py: Run 폴더 읽기·쓰기, 모델 생성·로드 / reconstruction.py: 재구성·재구성 오차·차량 진단 특징 / diagnosis.py: 진단 특징·관리도 / chart_source.py: 모델 쌍의 관리도 공급원 / vehicles.py: 분할 차량 ID·차량 텐서 로딩 / roc.py: 차량 단위 ROC 평가 / preprocessing.py: 원본 pkl 로딩·전처리 / plotting.py: 그림 함수)
 ├── tests/                  pytest 테스트, realdata/baseline.py: 실데이터 기준선 비교 도구
 ├── pytest.ini              pytest 설정 (저장소 루트를 import 경로에 추가)
@@ -155,8 +154,7 @@ z = fc4(z)                              # --add-one-output-layer 일 때만, Lin
 ├── backup/                 이전 분할 파일 백업 (20260205/, past/)
 ├── data/                   원본 데이터 (git 제외, 직접 배치)
 ├── models/                 학습·평가 결과 (git 제외, 실행 시 생성)
-├── README.md
-└── README.txt              구버전 간단 설명
+└── README.md
 ```
 
 ### 차량 분할 파일
@@ -245,7 +243,7 @@ Zenodo 데이터셋을 받아 `data/` 아래에 다음 구조로 둡니다.
 data/
 ├── QAS/                    차량 ID 0 ~ 392 (393대), 셀 110개
 │   ├── 0/
-│   │   ├── vin_1.pkl       LSTM 입력 (T, 1, 7)
+│   │   ├── vin_1.pkl       LSTM 입력 (T, 1, 7). 현재 스크립트는 읽지 않음
 │   │   ├── vin_2.pkl       U-model 입력 (T, 225)
 │   │   └── vin_3.pkl       X-model 입력 (T, 226)
 │   ├── 1/ ...
@@ -292,13 +290,13 @@ N = 110 (QAS) / 85 (DTI)이며, 열 구간은 `get_input_dimensions()`에 정의
 
 | 파일 | import 하는 모듈 |
 |---|---|
-| `Train_.py` | Class_, mcdl.run, mcdl.preprocessing, mcdl.diagnosis, mcdl.reconstruction, mcdl.vehicles |
+| `Train_.py` | mcdl.run, mcdl.diagnosis, mcdl.reconstruction, mcdl.vehicles |
 | `Test_.py` | mcdl.run, mcdl.reconstruction, mcdl.chart_source, mcdl.vehicles, mcdl.roc, mcdl.plotting |
 | `Test_multi_models.py` | mcdl.run, mcdl.diagnosis, mcdl.reconstruction, mcdl.chart_source, mcdl.vehicles, mcdl.roc, mcdl.plotting |
 | `Test_tsne.py` | mcdl.run, mcdl.reconstruction, mcdl.chart_source, mcdl.vehicles, mcdl.plotting |
 | `data_filter.py` | mcdl.preprocessing, mcdl.plotting |
 | `Plot_AUC_heatmap.py` | mcdl.plotting (`draw_auc_heatmap`) |
-| `Class_.py` | mcdl.plotting (`CombinedAE.analyze_outputs`의 그림) |
+| `Class_.py` | (torch만 사용) |
 | `mcdl/run.py` | Class_, mcdl.preprocessing |
 | `mcdl/chart_source.py` | mcdl.diagnosis, mcdl.reconstruction, mcdl.vehicles |
 | `mcdl/vehicles.py` | mcdl.preprocessing (+ torch) |
@@ -364,9 +362,8 @@ U-model·X-model로 차량 텐서 `[x | y | Δ | q]`를 재구성해 재구성 �
 
 | 클래스 | 설명 |
 |---|---|
-| `CombinedAE` | MC-AE 본체 (2장 구조 참고). `analyze_outputs()`로 중간 출력 시각화 가능 |
+| `CombinedAE` | MC-AE 본체 (2장 구조 참고) |
 | `CustomSigmoidFunc` | 디코더 출력 sigmoid `shift + scale·σ(x)` (U·X의 scale·shift는 학습 인자) |
-| `LSTM`, `MyDataset` | 양방향 LSTM (입력 7 → hidden 18×2 → 출력 2)과 그 Dataset. `vin_1.pkl` 기반, 현재 파이프라인에서는 레거시 |
 
 ### mcdl/preprocessing.py
 
@@ -489,8 +486,6 @@ python Train_.py --battery-type QAS --dataset-name 10 --learning-case 1 \
 | `--no-save` | off | `.pth` 체크포인트 저장 생략 (loss·PCA·sim_config는 저장) |
 | `--seed` | 42 | 난수 시드 |
 | `--debug` | off | 빠른 확인용: 학습·검증 차량 1대씩, `use_dx = False`, `sim_config.txt` 미생성 |
-| `--lstm-load`, `--lstm-training`, `--lstm-epochs`, `--lstm-lr`, `--lstm-batchsize` | off / 300 / 1e-4 / 100 | 레거시. `vin_1.pkl`로 LSTM을 학습하지만 결과는 저장하지 않음 |
-| `--vin1-start`, `--vin2-start`, `--vin3-start` | 0 | 현재 사용하지 않음 (sim_config에 기록만 됨) |
 
 **결과물**: `sim_config.txt`, `artifact/*.pth`, `loss_*.csv`, `pca_*` (상세는 [8장](#8-결과물-정리))
 
@@ -510,7 +505,6 @@ python Test_.py --models-idx <RUN_ID> --u-model-idx 2 --x-model-idx 0       # �
 | `--source-data-dir` | `./data` | 원본 데이터 위치 |
 | `--u-model-idx` / `--x-model-idx` | -1 / -1 | -1: `net.pth`/`netx.pth`, N: `net_eN.pth`/`netx_eN.pth` |
 | `--x-start`, `--x-tick-step` | 20, 3000 | 진단 시계열 그림의 x축 (진단 그림 모드에서만 사용) |
-| `--sigma-levels` | `3,4.5,6` | 현재 사용하지 않음 |
 | `--debug` | off | 빠른 확인용: 모든 반복에서 차량 338만 평가 (모델 쌍은 위 인자 그대로) |
 
 **PCA 관리한계를 정하는 순서**
@@ -558,7 +552,6 @@ python Test_multi_models.py --models-idx <RUN_ID> --u-model-idx 0,5,10,-1 --x-mo
 | `--resume` | off | 기존 CSV에 있는 조합은 건너뜀. 미지정 시 기존 CSV를 지우고 시작 |
 | `--inference-batch-size` | 65536 | 학습 데이터 추론 배치 크기 |
 | `--use-float32` | off | 오차 행렬을 float32로 변환해 메모리 절약 |
-| `--x-start`, `--x-tick-step`, `--sigma-levels` | | 현재 사용하지 않음 |
 
 **처리 흐름**
 
@@ -698,7 +691,4 @@ models/<RUN_ID>/                                  RUN_ID = 26MMDD_HHMMSS (KST, �
 
 ### 알려진 제약
 
-- LSTM 관련 옵션은 레거시입니다. 학습한 LSTM은 저장되지 않으며, `--lstm-training`은 `--lstm-load`와 함께 써야 동작합니다.
-- `check_data_stats.py`는 데이터 경로가 다른 PC 경로로 하드코딩되어 있어, 경로를 수정한 뒤 실행해야 합니다.
-- `models/` 루트의 `net.pth`, `netx.pth`, `pca_*`는 구버전 산출물입니다. 현재 스크립트가 요구하는 `<RUN_ID>/artifact/`, `sim_config.txt` 구조가 아니어서 그대로는 사용할 수 없습니다.
 - `data/GIS`는 `--battery-type` 선택지(QAS, DTI)에 없어 사용할 수 없습니다.

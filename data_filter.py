@@ -1,16 +1,9 @@
-import matplotlib.pyplot as plt
-import matplotlib as mpl
 import numpy as np
-import pandas as pd
-import matplotlib.ticker as mtick
 import os
 import warnings
-import matplotlib
 from mcdl.preprocessing import get_input_dimensions, is_abnormal, preprocess_loaded_tensor, safe_load
 from mcdl.plotting import plot_distribution_with_stats, plot_testX_timeseries
 import torch
-
-# from sklearn.datasets import load_boston
 import argparse
 from enum import IntEnum
 
@@ -36,8 +29,6 @@ parser.add_argument(
     action="store_true",
     help='빠른 확인용: train_ratio 0.02, val_ratio 0.5, dataset_name "2"로 덮어씀',
 )
-
-device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 
 class MODE(IntEnum):
@@ -68,7 +59,6 @@ def main(argv=None):
 
 
     mode = MODE.FILTER_MODE
-    LSTM_LOAD = False
     FIRST_LOAD = True
     BATTERY_TYPE = "QAS"  # 'DTI' or 'QAS'
     SKIP_CHARGE_READY = True
@@ -96,17 +86,10 @@ def main(argv=None):
     (vin1_start, vin2_start, vin3_start) = (0, 0, 0)
 
     start_idxes = []
-    # vehicle_ids = range(0, max_idx + 1) if mode is not MODE.FILTER_MODE else []
     for i in range(0, max_idx + 1):
         VEHICLE_ID = f"{i}"
         print(f"============== Processing Vehicle ID: {VEHICLE_ID} ==============")
         PATH = f"./data/data_analysis_at_charge_{vin2_start}/{BATTERY_TYPE}-{VEHICLE_ID}"
-
-        # ----------------------------------------Data loading for LSTM (customized) ------------------------------
-        if LSTM_LOAD:
-            test_X = safe_load(
-                f"./data/{BATTERY_TYPE}/{VEHICLE_ID}/vin_1.pkl", verbose=False
-            )
 
         # ----------------------------------------Data loading for MC-AE (customized) ------------------------------
         tensor = safe_load(f"./data/{BATTERY_TYPE}/{VEHICLE_ID}/vin_2.pkl", verbose=False)
@@ -123,7 +106,6 @@ def main(argv=None):
 
         # ---------------------------------------- Data normalization ------------------------------
         if mode == MODE.PLOT_MODE:
-            # plot_testX_timeseries(test_X, feature_names="Data for LSTM", title="vin1", figsize=(12, 6), save_path=f'{PATH}/vin1', show=False, seperate=True, start_idx=vin1_start)
             plot_testX_timeseries(
                 tensor,
                 feature_names="Data for voltage estimation",
@@ -163,7 +145,6 @@ def main(argv=None):
                 ],
                 close=True,
             )
-            # plot_testX_timeseries(combined_tensor, feature_names="Data for voltage estimation", title="vin2", figsize=(12, 6), save_path=f'{PATH}/vin2', show=False, seperate=True, start_idx=1000, _range=[0,combined_tensor.shape[-1]])
             plot_testX_timeseries(
                 tensorx,
                 feature_names="Data for SOC estimation",

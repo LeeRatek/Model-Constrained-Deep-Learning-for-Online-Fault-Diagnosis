@@ -373,12 +373,6 @@ def preprocess_loaded_tensor(
             start_idx_dti = get_convergence_start_index(
                 tensor, threshold=0.1, stable_window_size=20
             )
-            # print(
-            #     f"DTI: Detected convergence start index at {start_idx_dti} based on voltage stability."
-            # )
-            # print(
-            #     f"Length before trimming: {tensor.shape[0]}, after trimming: {tensor.shape[0] - start_idx_dti}"
-            # )
         tensor = tensor[start_idx_dti:, :]
         tensorx = tensorx[start_idx_dti:, :]
 

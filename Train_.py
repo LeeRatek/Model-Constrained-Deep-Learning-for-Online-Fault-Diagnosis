@@ -1,26 +1,13 @@
-import matplotlib.pyplot as plt
-import matplotlib as mpl
 import numpy as np
-import pandas as pd
-import matplotlib.ticker as mtick
 import os
 import warnings
-import matplotlib
-from Class_ import LSTM, MyDataset
 import torch
 import torch.nn as nn
-
-# from sklearn.datasets import load_boston
-from sklearn.model_selection import train_test_split
 from torch.utils.data import Dataset
 from torch.utils.data import BatchSampler, DataLoader, RandomSampler, SequentialSampler
-import torch.nn.functional as F
-from torch import nn
 import time
 import argparse
 import random
-from pandas import DataFrame, concat
-from mcdl.preprocessing import safe_load
 from mcdl.run import (
     RunConfig,
     build_model_pair,
@@ -45,65 +32,6 @@ def set_seed(seed):
     torch.backends.cudnn.benchmark = False
 
 
-# set_seed(42) # Moved to after args parsing
-
-
-# ---------------------------------------- LSTM (레거시) 학습 데이터 ----------------------------------------
-def series_to_supervised(data, n_in=1, n_out=1, dropnan=True):
-    """
-    Frame a time series as a supervised learning dataset.
-    Arguments:
-            data: Sequence of observations as a list or NumPy array.
-            n_in: Number of lag observations as input (X).
-            n_out: Number of observations as output (y).
-            dropnan: Boolean whether or not to drop rows with NaN values.
-    Returns:
-            Pandas DataFrame of series framed for supervised learning.
-    """
-    n_vars = 1 if type(data) is list else data.shape[1]
-    df = DataFrame(data)
-    cols, names = list(), list()
-    # input sequence (t-n, ... t-1)
-    for i in range(n_in, 0, -1):
-        cols.append(df.shift(i))
-        names += [("var%d(t-%d)" % (j + 1, i)) for j in range(n_vars)]
-    # forecast sequence (t, t+1, ... t+n)
-    for i in range(0, n_out):
-        cols.append(df.shift(-i))
-        if i == 0:
-            names += [("var%d(t)" % (j + 1)) for j in range(n_vars)]
-        else:
-            names += [("var%d(t+%d)" % (j + 1, i)) for j in range(n_vars)]
-    # put it all together
-    agg = concat(cols, axis=1)
-    agg.columns = names
-    # drop rows with NaN values
-    if dropnan:
-        agg.dropna(inplace=True)
-    return agg
-
-
-def prepare_training_data(test_X, INPUT_SIZE, TIME_STEP, device):
-    test_X_df = pd.DataFrame(test_X.cpu().detach().numpy()[:, 0, :])
-    reframed = series_to_supervised(test_X_df, 1, 1)
-    reframed.drop(
-        reframed.columns[INPUT_SIZE : INPUT_SIZE * 2 - 2], axis=1, inplace=True
-    )
-    train = reframed.values
-    train_X, train_y = (
-        train[:, :-2],
-        train[:, -2:],
-    )  # Last two columns are the targets (volt_modepi and soc)
-    train_y = train_y.reshape(-1, 2)
-    batch_train = int(reframed.shape[0] / TIME_STEP)
-
-    train_X = torch.tensor(train_X)
-    train_X = train_X.reshape(batch_train, TIME_STEP, INPUT_SIZE).to(device)
-    train_y = torch.tensor(train_y)
-    train_y = train_y.reshape(batch_train, TIME_STEP, 2).to(device)
-
-    return train_X, train_y
-
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 parser = argparse.ArgumentParser(description="Run MC-AE training with CLI options")
@@ -117,8 +45,6 @@ parser.add_argument(
 parser.add_argument(
     "--vehicle-end", type=int, default=-1, help="Filtered normal vehicle ID 끝 인덱스"
 )
-parser.add_argument("--lstm-training", action="store_true")
-parser.add_argument("--lstm-load", action="store_true")
 parser.add_argument(
     "--models-dir",
     type=str,
@@ -137,9 +63,6 @@ parser.add_argument(
         else os.environ.get("SOURCE_DIR")
     ),
 )
-parser.add_argument("--vin1-start", type=int, default=0)
-parser.add_argument("--vin2-start", type=int, default=0)
-parser.add_argument("--vin3-start", type=int, default=0)
 parser.add_argument("--ae-u-scale", type=float, default=1.8)
 parser.add_argument("--ae-u-shift", type=float, default=2.5)
 parser.add_argument("--ae-u-epochs", type=int, default=10)  # default 300
@@ -158,14 +81,6 @@ parser.add_argument(
 )  # based on original manuscript
 parser.add_argument("--ae-x-shuffle", action="store_true")
 parser.add_argument("--ae-x-batchsize", type=int, default=100)
-parser.add_argument("--lstm-epochs", type=int, default=300)
-parser.add_argument(
-    "--lstm-lr", type=float, default=1e-4
-)  # based on original manuscript
-
-parser.add_argument(
-    "--lstm-batchsize", type=int, default=100
-)  # based on original manuscript
 parser.add_argument("--normalize-dx", action="store_true")
 parser.add_argument("--normalize-val", type=int, default=4)
 parser.add_argument(
@@ -365,8 +280,6 @@ def main(argv=None):
 
     set_seed(args.seed)
 
-    LSTM_TRAINING = args.lstm_training
-    LSTM_LOAD = args.lstm_load if args.lstm_training else args.lstm_load
     BATTERY_TYPE = args.battery_type  # 'DTI' or 'QAS'
     use_dx_in_forward = not args.no_use_dx
     use_abs_err = not args.no_abs_err
@@ -381,8 +294,6 @@ def main(argv=None):
     # 데이터 로딩과 모델 생성에 함께 쓰는 Run 설정 (디버그 모드에서는 use_dx_in_forward가 False로 강제되어 있다)
     run_config = RunConfig.from_mapping({**vars(args), "no_use_dx": not use_dx_in_forward})
     PREPROCESSING, SKIP_CHARGE_READY = run_config.preprocessing, run_config.skip_charge_ready
-
-    # use_dx_in_forward = False
 
     # 모델 저장 경로 설정
 
@@ -407,18 +318,6 @@ def main(argv=None):
         validate_list = []
 
     vehicle_idxes = []
-    FIRST_LOAD = True
-
-    # ----------------------------------------Hyper Parameter Setting---------------------
-    TIME_STEP = 1  # rnn time step
-    INPUT_SIZE = 7  # rnn input size (전압은 total voltage, 온도는 평균 온도, 전류는 동일하니 1개로 표현, SOC는 board end SOC)
-    LR = args.lstm_lr  # learning rate
-    lr_decay_freq = 25
-    EPOCH = args.lstm_epochs
-    BATCH_SIZE = args.lstm_batchsize
-
-    # train_list = [0]
-    # validate_list = [0]
 
     vehicle_tensors = []
     vehicle_tensorsx = []
@@ -430,42 +329,6 @@ def main(argv=None):
             print(f"Processing vehicle {count}/{len(train_list)}")
         VEHICLE_ID = f"{i}"
         vehicle_idxes.append(VEHICLE_ID)
-        # ----------------------------------------Data loading for LSTM (customized) ------------------------------
-        # print(os.getcwd())
-        if LSTM_LOAD:
-            test_X = safe_load(
-                f"{args.source_data_dir}/{BATTERY_TYPE}/{VEHICLE_ID}/vin_1.pkl"
-            )
-
-        # ----------------------------------------Training for overall state prediction--------
-        if LSTM_TRAINING:
-            train_X, train_y = prepare_training_data(test_X, INPUT_SIZE, TIME_STEP, device)
-
-            train_dataset = MyDataset(train_X, train_y)
-            train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
-
-            lstm = LSTM().to(device)
-            optimizer = torch.optim.Adam(
-                lstm.parameters(), lr=LR
-            )  # optimize all cnn parameters
-            loss_func = nn.MSELoss()
-
-            # LSTM Training
-            hidden_state = None
-            loss_train_100 = []
-            for epoch in range(EPOCH):
-                for step, (b_x, b_y) in enumerate(train_loader):  # gives batch data
-                    lstm = (
-                        lstm.double()
-                    )  # Casts all floating point parameters and buffers to ``double`` datatype.
-                    output = lstm(b_x)  # rnn output
-                    loss = loss_func(b_y, output)  # cross entropy loss
-                    optimizer.zero_grad()  # clear gradients for this training step
-                    loss.backward()  # backpropagation, compute gradients
-                    optimizer.step()  # apply gradients
-                    if step % 50 == 0:
-                        loss_train_100.append(loss.cpu().detach().numpy())
-
         # ----------------------------------------Data loading and preprocessing for MC-AE ------------------------------
         tensor, tensorx = load_vehicle(args.source_data_dir, run_config, VEHICLE_ID)
 
@@ -475,9 +338,6 @@ def main(argv=None):
             break
 
     # combined_tensor를 생성하지 않고 리스트만 유지하여 메모리 피크 방지
-    # combined_tensor = torch.cat(vehicle_tensors, dim=0)
-    # combined_tensorx = torch.cat(vehicle_tensorsx, dim=0)
-    # del vehicle_tensors, vehicle_tensorsx # 기존 코드 주석 처리
 
 
     # Total training samples calculation
@@ -491,7 +351,6 @@ def main(argv=None):
         print("Skipping validation.")
     else:
         # ----------------------------------------Validation Data Loading ------------------------------
-        FIRST_LOAD = True
         count = 0
 
         for i in validate_list:
@@ -504,18 +363,6 @@ def main(argv=None):
             v_vehicle_tensorsx.append(v_tensorx)
             if is_debug:
                 break
-
-    # combined_tensor 생성 제거
-    # if len(v_vehicle_tensors) > 0:
-    #     v_combined_tensor = torch.cat(v_vehicle_tensors, dim=0)
-    #     v_combined_tensorx = torch.cat(v_vehicle_tensorsx, dim=0)
-    # else:
-    #     v_combined_tensor = torch.empty(0)
-    #     v_combined_tensorx = torch.empty(0)
-
-    # del v_vehicle_tensors, v_vehicle_tensorsx
-
-    total_val_samples = sum(len(t) for t in v_vehicle_tensors)
 
     if not is_debug:
         text = write_sim_config(

@@ -1,15 +1,8 @@
-import matplotlib.pyplot as plt
-import matplotlib as mpl
 import numpy as np
-import pandas as pd
-import matplotlib.ticker as mtick
 import os
 import warnings
-import matplotlib
 import torch
 
-# from sklearn.datasets import load_boston
-from sklearn.model_selection import train_test_split
 import argparse
 import time
 from mcdl.run import Run, print_sim_config
@@ -19,7 +12,6 @@ from mcdl.vehicles import load_vehicle, split_ids
 from mcdl.plotting import plot_loss_curve_all, plot_tsne_before_after_ci
 
 device = torch.device("cpu")  # 평가는 CPU 전용 (Run이 CPU 모델을 돌려준다)
-# VIN_data = pd.read_excel(r'{args.source_data_dir}/Name_list.xls')
 
 parser = argparse.ArgumentParser(
     description="Run diagnostics plotting with CLI options"
@@ -44,7 +36,6 @@ parser.add_argument(
     default=-1,
     help=("-1: 모든 비정상차량, 그 외: 특정 비정상 차량 인덱스 (예: 347, 348 등)"),
 )
-# parser.add_argument("--results-dir", type=str, default="./results" if os.environ.get("RESULT_DIR") is None else os.environ.get("RESULT_DIR"))
 parser.add_argument(
     "--source-data-dir",
     type=str,
@@ -249,7 +240,6 @@ def main(argv=None):
 
     BATTERY_TYPE = run.config.battery_type  # 'DTI' or 'QAS'
     PREPROCESSING, SKIP_CHARGE_READY = run.config.preprocessing, run.config.skip_charge_ready
-    # SKIP_CHARGE_READY = False
 
     print_sim_config(
         title="Train Run",
@@ -275,7 +265,6 @@ def main(argv=None):
     validate_list = split_ids(DATA_BASE_PATH, BATTERY_TYPE, "validate")
     normal_list = split_ids(DATA_BASE_PATH, BATTERY_TYPE, "test")
     fault_list = split_ids(DATA_BASE_PATH, BATTERY_TYPE, "fault")
-    # fault_list = np.arange(335, 393)
 
 
     ## =================== Load training data  =================== ##
@@ -286,16 +275,9 @@ def main(argv=None):
 
 
     start = time.perf_counter()
-    # cnt_max = 6
     cnt_max = args.cnt_max
     per_vehicle = args.per_vehicle
-    # normal_but_faulty = [46, 184, 252]  # [46, 184, 252, 301]
-    # normal = np.array(normal_list)[
-    #     np.asarray(np.isin(normal_list, normal_but_faulty), dtype=bool)
-    # ].tolist()
-
     # label=0(정상) 차량은 1회만 고정 수집
-    # normal_vehicle_ids = [*normal_list[0:cnt_max], *normal]
     normal_vehicle_ids = validate_list[0:cnt_max]
     normal_pack, _ = collect_vehicle_points(
         vehicle_ids=normal_vehicle_ids,
@@ -339,7 +321,7 @@ def main(argv=None):
         }
 
         print(f"\n=== Plotting test_vehicle_idx={test_vehicle_idx} ===")
-        fig, axes = plot_tsne_before_after_ci(
+        plot_tsne_before_after_ci(
             X_list_before=X_list_before,
             Y_list_before=Y_list_before,
             X_list_after=X_list_after,

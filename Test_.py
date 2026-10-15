@@ -1,15 +1,7 @@
-import matplotlib.pyplot as plt
-import matplotlib as mpl
-import numpy as np
-import pandas as pd
-import matplotlib.ticker as mtick
 import os
 import warnings
-import matplotlib
 import torch
 
-# from sklearn.datasets import load_boston
-from sklearn.model_selection import train_test_split
 import argparse
 import time
 from mcdl.run import Run, print_sim_config
@@ -25,7 +17,6 @@ from mcdl.plotting import (
 )
 
 device = torch.device("cpu")  # 평가는 CPU 전용 (Run이 CPU 모델을 돌려준다)
-# VIN_data = pd.read_excel(r'{args.source_data_dir}/Name_list.xls')
 
 parser = argparse.ArgumentParser(
     description="Run diagnostics plotting with CLI options"
@@ -55,7 +46,6 @@ parser.add_argument(
 )
 parser.add_argument("--x-start", type=int, default=20)
 parser.add_argument("--x-tick-step", type=int, default=3000)
-parser.add_argument("--sigma-levels", type=str, default="3,4.5,6")
 parser.add_argument("--u-model-idx", type=int, default=-1)
 parser.add_argument("--x-model-idx", type=int, default=-1)
 parser.add_argument(
@@ -95,11 +85,9 @@ def main(argv=None):
     print(f"Using dataset from: {DATA_BASE_PATH}")
 
     PREPROCESSING, SKIP_CHARGE_READY = run.config.preprocessing, run.config.skip_charge_ready
-    # SKIP_CHARGE_READY = False
     AUC_ANALYSIS = True
     if not AUC_ANALYSIS:
         thresholds = [10.4, 87.5]
-        # thresholds = [20, 30]
 
     print_sim_config(
         title="Train Run",
@@ -120,7 +108,6 @@ def main(argv=None):
 
     normal_list = split_ids(DATA_BASE_PATH, BATTERY_TYPE, "test")
     fault_list = split_ids(DATA_BASE_PATH, BATTERY_TYPE, "fault")
-    # fault_list = np.arange(335, 393)
     test_list = [normal_list, fault_list]
 
 
@@ -233,7 +220,6 @@ def main(argv=None):
             else:
                 # =================== Plotting =================== ##
                 t2_array, spe_array, CI_array = chart.score(df_data)
-                title = ["$zu_2$", "$zx_2$", "$zu_1$", "$zx_1$", "$ewu$", "$ewx$"]
                 start1 = time.perf_counter()
                 plot_diagnostics_triplet(
                     t2_array,

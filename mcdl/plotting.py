@@ -135,7 +135,6 @@ def plot_loss_curve_all(path):
             downsample=1,  # 1이면 전체 epoch 표시
             tight_layout=False,
             png_compress_level=9,
-            # yscale="log",
         )
 
     save_path = f"{path}/loss_netx.png"
@@ -149,7 +148,6 @@ def plot_loss_curve_all(path):
             downsample=1,  # 1이면 전체 epoch 표시
             tight_layout=False,
             png_compress_level=9,
-            # yscale="log",
         )
 
     save_path = f"{path}/loss_net_val.png"
@@ -505,15 +503,12 @@ def plot_diagnostics_triplet(
     axes[0].set_ylabel(y_labels[0])
     axes[0].set_title("Hostelling's T² Statistic")
     axes[0].grid(True, alpha=0.3)
-    # x축 범위를 x_start부터 최대값까지 고정
-    # axes[0].set_xlim(x[0], x[-1]+100)
 
     # Middle: SPE
     axes[1].plot(x, spe, color="tab:blue", lw=1.4)
     axes[1].set_ylabel(y_labels[1])
     axes[1].set_title("Squared Prediction Error (SPE)")
     axes[1].grid(True, alpha=0.3)
-    # axes[1].set_xlim(x[0], x[-1]+100)
 
     # Bottom: CI (CI) + thresholds
     axes[2].plot(x, CI, color="tab:blue", lw=1.4, label="CI")
@@ -521,7 +516,6 @@ def plot_diagnostics_triplet(
     axes[2].set_xlabel(x_label)
     axes[2].set_title("Comprehensive Index (CI)")
     axes[2].grid(True, alpha=0.3)
-    # axes[2].set_xlim(x[0], x[-1]+100)
 
     # 시작 눈금을 포함시키기 위해 눈금 간격을 고정할 수 있는 옵션
     if x_tick_step is not None:

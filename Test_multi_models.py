@@ -1,18 +1,11 @@
 import matplotlib.pyplot as plt
-import matplotlib as mpl
-import numpy as np
 import pandas as pd
-import matplotlib.ticker as mtick
 import os
 import warnings
-import matplotlib
 import torch
 
-# from sklearn.datasets import load_boston
-from sklearn.model_selection import train_test_split
 import argparse
 import time
-from pathlib import Path
 from mcdl.run import Run, print_sim_config
 from mcdl.diagnosis import ControlChart, combine_signal_features
 from mcdl.reconstruction import training_signal_features, vehicle_features
@@ -50,9 +43,6 @@ parser.add_argument(
         else os.environ.get("SOURCE_DIR")
     ),
 )
-parser.add_argument("--x-start", type=int, default=20)
-parser.add_argument("--x-tick-step", type=int, default=3000)
-parser.add_argument("--sigma-levels", type=str, default="3,4.5,6")
 parser.add_argument(
     "--u-model-idx",
     type=str,
@@ -318,7 +308,6 @@ def main(argv=None):
     print(f"Test data loaded: {len(test_data_cache)} vehicles\n")
 
     # Initialize caches for training errors to avoid redundant computations
-    import tempfile
     import shutil
 
     # Caching Strategy Setup
@@ -330,14 +319,6 @@ def main(argv=None):
     if cache_strategy == "disk":
         # Create a fixed temporary directory for disk caching (easier manual cleanup)
         temp_cache_dir = os.path.join(f"{args.models_dir}/{args.models_idx}", "temp_cache")
-
-        # Clean up previous cache if it exists (e.g. from a crashed run), unless resuming
-        # if os.path.exists(temp_cache_dir) and not args.resume:
-        #     try:
-        #         shutil.rmtree(temp_cache_dir)
-        #         print(f"Cleared stale cache directory: {temp_cache_dir}")
-        #     except OSError as e:
-        #         print(f"Warning: Could not clear old cache directory {temp_cache_dir}: {e}")
 
         os.makedirs(temp_cache_dir, exist_ok=True)
         if args.resume:
@@ -436,8 +417,6 @@ def main(argv=None):
         torch.cuda.empty_cache()
 
     # Determine the list of combinations to process based on fast-search strategy or full search
-    combinations_to_run = []
-
     if args.fast_search and len(x_model_indices) > 0 and len(u_model_indices) > 0:
         print(f"\n{'='*80}")
         print("FAST SEARCH MODE ENABLED")
@@ -644,17 +623,9 @@ def main(argv=None):
         print("Step 2: Sweeping all X models using the best U model...")
         print(f"{'='*80}\n")
 
-        # Remove duplicates if last_x_idx search overlaps (it's already done)
-        # But usually we just sweep all X for this U
-        combinations_phase2 = [
-            (best_u_idx, x) for x in x_model_indices if x != combinations_phase1[0][1]
-        ]
-
         # In fast search phase 1 we did all U against LAST X.
         # Now we do BEST U against ALL X.
         # Note: (best_u_idx, last_x_idx) is already done in phase 1.
-
-        last_x_idx = x_model_indices[-1]
         combinations_phase2 = [
             (best_u_idx, x)
             for x in x_model_indices
@@ -663,10 +634,6 @@ def main(argv=None):
 
         for u_idx, x_idx in combinations_phase2:
             process_combination(u_idx, x_idx)
-
-    original_loop_code_marker = (
-        False  # Just a marker to ensure we broke the original loop flow structure
-    )
 
 
     # Cleanup temp files if disk strategy was used and keep_cache is False
