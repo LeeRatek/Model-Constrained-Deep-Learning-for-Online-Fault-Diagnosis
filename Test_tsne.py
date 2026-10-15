@@ -15,22 +15,16 @@ from sklearn.model_selection import train_test_split
 import argparse
 from monitering import *
 import time
+from mcdl.run import Run, print_sim_config
+from mcdl.reconstruction import reconstruct, vehicle_features
+from mcdl.chart_source import chart_for_pair
+from mcdl.vehicles import load_vehicle, split_ids
 
-device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
-print(torch.cuda.device_count())
-
-warnings.filterwarnings("ignore")
+device = torch.device("cpu")  # 평가는 CPU 전용 (Run이 CPU 모델을 돌려준다)
 # VIN_data = pd.read_excel(r'{args.source_data_dir}/Name_list.xls')
 
 parser = argparse.ArgumentParser(
     description="Run diagnostics plotting with CLI options"
-)
-parser.add_argument(
-    "--battery-type",
-    choices=["QAS", "DTI"],
-    default="QAS",
-    help="배터리 유형 선택 (DTI fault index range = [77~79], QAS fault index range = [335~392])",
 )
 parser.add_argument(
     "--models-dir",
@@ -63,13 +57,11 @@ parser.add_argument(
     ),
 )
 
-parser.add_argument("--u-model-idx", type=int, default=10)
-parser.add_argument("--x-model-idx", type=int, default=10)
+parser.add_argument("--u-model-idx", type=int, default=-1)
+parser.add_argument("--x-model-idx", type=int, default=-1)
 
 parser.add_argument("--x-start", type=int, default=20)
 parser.add_argument("--x-tick-step", type=int, default=3000)
-parser.add_argument("--normalize-dx", action="store_true")
-parser.add_argument("--normalize-val", type=int, default=4)
 parser.add_argument("--cnt-max", type=int, default=6)
 parser.add_argument("--per-vehicle", type=int, default=500)
 parser.add_argument(
@@ -126,192 +118,6 @@ parser.add_argument(
     help="normal lo(CI>thr[0]) 오버레이를 끕니다.",
 )
 
-args = parser.parse_args()
-
-thresholds = list(args.thr)
-vals = read_values_from_sim_config(
-    f"{args.models_dir}/{args.models_idx}",
-    names_to_find=[
-        "learning_case",
-        "ae_u_scale",
-        "ae_u_shift",
-        "ae_x_scale",
-        "ae_x_shift",
-        "no_use_dx",
-        "add_one_output_layer",
-    ],
-    strict=False,  # True: 키가 하나라도 없을 시 예외, False: 없는 키는 None
-)
-learning_case = vals.learning_case
-
-DATA_BASE_PATH = read_dataset_path_from_sim_config(f"{args.models_dir}/{args.models_idx}")
-print(f"Using dataset from: {DATA_BASE_PATH}")
-add_one_output_layer = (
-    vals.add_one_output_layer if hasattr(vals, "add_one_output_layer") else False
-)
-use_dx = not vals.no_use_dx if hasattr(vals, "no_use_dx") else True
-
-## ================== For backward compatibility =================== ##
-ae_u_scale = vals.ae_u_scale if hasattr(vals, "ae_u_scale") else 1.8
-ae_u_shift = vals.ae_u_shift if hasattr(vals, "ae_u_shift") else 2.5
-ae_x_scale = vals.ae_x_scale if hasattr(vals, "ae_x_scale") else 1.0
-ae_x_shift = vals.ae_x_shift if hasattr(vals, "ae_x_shift") else 0
-
-# 플롯 결과 저장 폴더는 한 번만 생성
-os.makedirs(f"{args.models_dir}/{args.models_idx}/results", exist_ok=True)
-
-BATTERY_TYPE = args.battery_type  # 'DTI' or 'QAS'
-PREPROCESSING, SKIP_CHARGE_READY = get_preprocessing_and_skip_charge_ready(
-    learning_case
-)
-# SKIP_CHARGE_READY = False
-dim_dict = get_input_dimensions(BATTERY_TYPE)
-
-print_sim_config(
-    title="Train Run",
-    config=args,
-    extra={
-        "device": str(device),
-        "learning_case": learning_case,
-        "PREPROCESSING": PREPROCESSING,
-        "SKIP_CHARGE_READY": SKIP_CHARGE_READY,
-        "no_use_dx": not use_dx,
-        "add_one_output_layer": add_one_output_layer,
-    },
-)
-
-try:
-    plot_loss_curve_all(path=f"{args.models_dir}/{args.models_idx}")
-except Exception as e:
-    print(f"Error plotting loss curve: {e}")
-
-
-## =================== DTI fault index range = [77~79] ===================
-## =================== QAS fault index range = [335~392] ===================
-validate_list = (
-    np.load(f"{DATA_BASE_PATH}/{BATTERY_TYPE}_filtered_vehicle_ids_validate.npy")
-    .astype(np.int64)
-    .tolist()
-)
-normal_list = (
-    np.load(f"{DATA_BASE_PATH}/{BATTERY_TYPE}_filtered_vehicle_ids_test.npy").astype(np.int64).tolist()
-)
-fault_list = (
-    np.load(f"{DATA_BASE_PATH}/{BATTERY_TYPE}_filtered_vehicle_ids_fault.npy")
-    .astype(np.int64)
-    .tolist()
-)
-# fault_list = np.arange(335, 393)
-
-
-## =================== Load training data  =================== ##
-import pickle
-
-# Attempt to load feature cache for the specified u/x models
-cache_dir = f"{args.models_dir}/{args.models_idx}/temp_cache"
-u_feat_path = os.path.join(cache_dir, f"feat_u_{args.u_model_idx}.pkl")
-x_feat_path = os.path.join(cache_dir, f"feat_x_{args.x_model_idx}.pkl")
-loads = None
-
-if os.path.exists(u_feat_path) and os.path.exists(x_feat_path):
-    try:
-        print(f"Loading cached training features for PCA setup:")
-        print(f"  U: {u_feat_path}")
-        print(f"  X: {x_feat_path}")
-
-        with open(u_feat_path, "rb") as f:
-            u_feat = pickle.load(f)
-        with open(x_feat_path, "rb") as f:
-            x_feat = pickle.load(f)
-
-        # Structure: max_diff_ERRORU, max_diff_ERRORX, Z_U, Z_X, Z_U_smoothed, Z_X_smoothed
-        df_data_train = pd.concat(
-            [
-                u_feat[0],  # max_diff_ERRORU
-                x_feat[0],  # max_diff_ERRORX
-                u_feat[1],  # Z_U
-                x_feat[1],  # Z_X
-                u_feat[2],  # Z_U_smoothed
-                x_feat[2],  # Z_X_smoothed
-            ],
-            axis=1,
-        )
-
-        print("Computing PCA directly from cached training features...")
-        loads = Custom_PCA(df_data_train, 0.99, 0.99)
-
-        # Optimization: discard large arrays
-        loads_list = list(loads)
-        loads_list[13] = None  # Discard X (scores)
-        loads_list[14] = None  # Discard data_nor
-        loads = tuple(loads_list)
-
-        del df_data_train, u_feat, x_feat
-
-    except Exception as e:
-        print(f"Error processing cached features: {e}.")
-        loads = None
-
-if loads is None:
-    print("Cached features not found or error. Falling back to saved 'pca_arrays.npz'.")
-    loads = load_pca_results(
-        f"{args.models_dir}/{args.models_idx}",
-        load_data_nor=False,
-        validate_shapes=False,
-    )
-
-(
-    v_I,
-    v,
-    v_ratio,
-    p_k,
-    data_mean,
-    data_std,
-    T_95_limit,
-    T_99_limit,
-    SPE_95_limit,
-    SPE_99_limit,
-    P,
-    k,
-    P_t,
-    X,
-    data_nor,
-) = loads
-net_loaded = CombinedAE(
-    input_size=dim_dict["x"],
-    encode2_input_size=dim_dict["q"],
-    output_size=dim_dict["y"],
-    activation_fn=(
-        CustomSigmoidFunc(scale=ae_u_scale, shift=ae_u_shift)
-        if PREPROCESSING == False
-        else CustomSigmoidFunc(scale=1, shift=0)
-    ),
-    use_dx_in_forward=use_dx,
-    add_one_output_layer=add_one_output_layer,
-).to(device)
-netx_loaded = CombinedAE(
-    input_size=dim_dict["x2"],
-    encode2_input_size=dim_dict["q2"],
-    output_size=dim_dict["y2"],
-    activation_fn=(
-        CustomSigmoidFunc(scale=ae_x_scale, shift=ae_x_shift)
-        if PREPROCESSING == False
-        else CustomSigmoidFunc(scale=1, shift=0)
-    ),
-    use_dx_in_forward=use_dx,
-    add_one_output_layer=add_one_output_layer,
-).to(device)
-u_model_idx = "net" if args.u_model_idx == -1 else f"net_e{args.u_model_idx}"
-x_model_idx = "netx" if args.x_model_idx == -1 else f"netx_e{args.x_model_idx}"
-net_state_dict = torch.load(
-    os.path.join(f"{args.models_dir}/{args.models_idx}/artifact/", f"{u_model_idx}.pth")
-)
-net_loaded.load_state_dict(net_state_dict)
-netx_state_dict = torch.load(
-    os.path.join(f"{args.models_dir}/{args.models_idx}/artifact/", f"{x_model_idx}.pth")
-)
-netx_loaded.load_state_dict(netx_state_dict)
-
 
 # 예시: normal_list, fault_list를 이미 갖고 있다고 가정
 # 각 vehicle에서 df_data (N×6) 만든 다음 아래만 수행
@@ -328,19 +134,11 @@ def collect_vehicle_points(
     label,
     per_vehicle,
     args,
-    BATTERY_TYPE,
-    dim_dict,
-    PREPROCESSING,
-    SKIP_CHARGE_READY,
+    config,
     thresholds,
     net_loaded,
     netx_loaded,
-    data_mean,
-    data_std,
-    p_k,
-    v_I,
-    T_95_limit,
-    SPE_95_limit,
+    chart,
 ):
     X_list_before, Y_list_before = [], []
     X_list_after, Y_list_after = [], []
@@ -350,75 +148,20 @@ def collect_vehicle_points(
 
     for i in vehicle_ids:
         VEHICLE_ID = f"{i}"
-        combined_tensor = safe_load(
-            f"{args.source_data_dir}/{BATTERY_TYPE}/{VEHICLE_ID}/vin_2.pkl",
-            verbose=False,
-        )
-        combined_tensorx = safe_load(
-            f"{args.source_data_dir}/{BATTERY_TYPE}/{VEHICLE_ID}/vin_3.pkl",
-            verbose=False,
-        )
+        combined_tensor, combined_tensorx = load_vehicle(args.source_data_dir, config, VEHICLE_ID)
 
-        combined_tensor, combined_tensorx = preprocess_loaded_tensor(
+        # CI는 차량 한 대의 진단 특징으로 (차량 전체를 한 번에 추론, 오차의 abs 여부는 학습 진단 특징과 같은 설정을 따른다),
+        # t-SNE 점은 재구성 대상 y와 재구성 결과 ŷ로 만든다
+        df_data = vehicle_features(
+            net_loaded,
+            netx_loaded,
             combined_tensor,
             combined_tensorx,
-            dim_dict,
-            BATTERY_TYPE,
-            PREPROCESSING,
-            SKIP_CHARGE_READY,
-            normalize_dx=args.normalize_dx,
+            abs_err=not config.no_abs_err,
         )
-
-        # Use indexing to separate
-        x_recovered = combined_tensor[:, : dim_dict["x"]]
-        y_recovered = combined_tensor[:, dim_dict["x"] : dim_dict["x"] + dim_dict["y"]]
-        z_recovered = combined_tensor[
-            :,
-            dim_dict["x"]
-            + dim_dict["y"] : dim_dict["x"]
-            + dim_dict["y"]
-            + dim_dict["z"],
-        ]
-        q_recovered = combined_tensor[
-            :, dim_dict["x"] + dim_dict["y"] + dim_dict["z"] :
-        ]
-        net_loaded = net_loaded.double().eval()
-
-        with torch.inference_mode():
-            recon_imtest = net_loaded(
-                x_recovered, z_recovered, q_recovered, y_recovered
-            )
-
-        # Use indexing to separate
-        x_recovered2 = combined_tensorx[:, : dim_dict["x2"]]
-        y_recovered2 = combined_tensorx[
-            :, dim_dict["x2"] : dim_dict["x2"] + dim_dict["y2"]
-        ]
-        z_recovered2 = combined_tensorx[
-            :,
-            dim_dict["x2"]
-            + dim_dict["y2"] : dim_dict["x2"]
-            + dim_dict["y2"]
-            + dim_dict["z2"],
-        ]
-        q_recovered2 = combined_tensorx[
-            :, dim_dict["x2"] + dim_dict["y2"] + dim_dict["z2"] :
-        ]
-        netx_loaded = netx_loaded.double().eval()
-
-        with torch.inference_mode():
-            reconx_imtest = netx_loaded(
-                x_recovered2, z_recovered2, q_recovered2, y_recovered2
-            )
-
-            # 출력/정답을 각각 numpy로 변환하지 말고 torch에서 error를 먼저 계산 후 1회만 변환
-            ERRORU = np.abs(recon_imtest[0] - y_recovered).cpu().numpy()
-            ERRORX = np.abs(reconx_imtest[0] - y_recovered2).cpu().numpy()
-
-        df_data, _ = DiagnosisFeature(ERRORU, ERRORX, get_true_feature=False)
-        t2_array, _ = T2_array(df_data, data_mean, data_std, p_k, v_I)
-        spe_array, _ = SPE_array(df_data, data_mean, data_std, p_k)
-        CI_array = (spe_array / SPE_95_limit) + (t2_array / T_95_limit)
+        y_recovered, recon_u = reconstruct(net_loaded, combined_tensor)
+        y_recovered2, recon_x = reconstruct(netx_loaded, combined_tensorx)
+        _, _, CI_array = chart.score(df_data)
         CI_last = CI_array
 
         alarmed_idx_hi = np.where(CI_array > thresholds[1])[0]
@@ -456,7 +199,7 @@ def collect_vehicle_points(
             idx=idx,
         )
         x_after, y_after = add_vehicle_points(
-            torch.cat([recon_imtest[0], reconx_imtest[0]], dim=1),
+            torch.cat([recon_u, recon_x], dim=1),
             label,
             idx=idx,
         )
@@ -506,89 +249,135 @@ def collect_vehicle_points(
     return pack, CI_last
 
 
-start = time.perf_counter()
-# cnt_max = 6
-cnt_max = args.cnt_max
-per_vehicle = args.per_vehicle
-# normal_but_faulty = [46, 184, 252]  # [46, 184, 252, 301]
-# normal = np.array(normal_list)[
-#     np.asarray(np.isin(normal_list, normal_but_faulty), dtype=bool)
-# ].tolist()
+def main(argv=None):
+    os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+    print(torch.cuda.device_count())
 
-# label=0(정상) 차량은 1회만 고정 수집
-# normal_vehicle_ids = [*normal_list[0:cnt_max], *normal]
-normal_vehicle_ids = validate_list[0:cnt_max]
-normal_pack, _ = collect_vehicle_points(
-    vehicle_ids=normal_vehicle_ids,
-    label=0,
-    per_vehicle=per_vehicle,
-    args=args,
-    BATTERY_TYPE=BATTERY_TYPE,
-    dim_dict=dim_dict,
-    PREPROCESSING=PREPROCESSING,
-    SKIP_CHARGE_READY=SKIP_CHARGE_READY,
-    thresholds=thresholds,
-    net_loaded=net_loaded,
-    netx_loaded=netx_loaded,
-    data_mean=data_mean,
-    data_std=data_std,
-    p_k=p_k,
-    v_I=v_I,
-    T_95_limit=T_95_limit,
-    SPE_95_limit=SPE_95_limit,
-)
+    warnings.filterwarnings("ignore")
 
-# label=1(고장) 차량 인덱스는 바꿔가며 반복 플롯
+    args = parser.parse_args(argv)
 
-test_list = [*normal_list, *fault_list]
-test_idx = test_list if args.fault_idx == -1 else [args.fault_idx]
-test_vehicle_idxs = test_idx
-for test_vehicle_idx in test_vehicle_idxs:
-    fault_pack, CI_fault = collect_vehicle_points(
-        vehicle_ids=[test_vehicle_idx],
-        label=1,
+    thresholds = list(args.thr)
+    run = Run(f"{args.models_dir}/{args.models_idx}")
+    learning_case = run.config.learning_case
+
+    DATA_BASE_PATH = run.config.split_dir
+    print(f"Using dataset from: {DATA_BASE_PATH}")
+    add_one_output_layer = run.config.add_one_output_layer
+    use_dx = run.config.use_dx
+
+    # 플롯 결과 저장 폴더는 한 번만 생성
+    os.makedirs(f"{args.models_dir}/{args.models_idx}/results", exist_ok=True)
+
+    BATTERY_TYPE = run.config.battery_type  # 'DTI' or 'QAS'
+    PREPROCESSING, SKIP_CHARGE_READY = run.config.preprocessing, run.config.skip_charge_ready
+    # SKIP_CHARGE_READY = False
+
+    print_sim_config(
+        title="Train Run",
+        config=args,
+        extra={
+            "device": str(device),
+            "learning_case": learning_case,
+            "PREPROCESSING": PREPROCESSING,
+            "SKIP_CHARGE_READY": SKIP_CHARGE_READY,
+            "no_use_dx": not use_dx,
+            "add_one_output_layer": add_one_output_layer,
+        },
+    )
+
+    try:
+        plot_loss_curve_all(path=f"{args.models_dir}/{args.models_idx}")
+    except Exception as e:
+        print(f"Error plotting loss curve: {e}")
+
+
+    ## =================== DTI fault index range = [77~79] ===================
+    ## =================== QAS fault index range = [335~392] ===================
+    validate_list = split_ids(DATA_BASE_PATH, BATTERY_TYPE, "validate")
+    normal_list = split_ids(DATA_BASE_PATH, BATTERY_TYPE, "test")
+    fault_list = split_ids(DATA_BASE_PATH, BATTERY_TYPE, "fault")
+    # fault_list = np.arange(335, 393)
+
+
+    ## =================== Load training data  =================== ##
+    # 관리도: 같은 조건 캐시 → 최종 모델 쌍이면 저장된 관리도 → 그 밖엔 학습 데이터로 재계산
+    chart = chart_for_pair(run, args.u_model_idx, args.x_model_idx, source_data_dir=args.source_data_dir)
+
+    net_loaded, netx_loaded = run.load_model_pair(args.u_model_idx, args.x_model_idx)
+
+
+    start = time.perf_counter()
+    # cnt_max = 6
+    cnt_max = args.cnt_max
+    per_vehicle = args.per_vehicle
+    # normal_but_faulty = [46, 184, 252]  # [46, 184, 252, 301]
+    # normal = np.array(normal_list)[
+    #     np.asarray(np.isin(normal_list, normal_but_faulty), dtype=bool)
+    # ].tolist()
+
+    # label=0(정상) 차량은 1회만 고정 수집
+    # normal_vehicle_ids = [*normal_list[0:cnt_max], *normal]
+    normal_vehicle_ids = validate_list[0:cnt_max]
+    normal_pack, _ = collect_vehicle_points(
+        vehicle_ids=normal_vehicle_ids,
+        label=0,
         per_vehicle=per_vehicle,
         args=args,
-        BATTERY_TYPE=BATTERY_TYPE,
-        dim_dict=dim_dict,
-        PREPROCESSING=PREPROCESSING,
-        SKIP_CHARGE_READY=SKIP_CHARGE_READY,
+        config=run.config,
         thresholds=thresholds,
         net_loaded=net_loaded,
         netx_loaded=netx_loaded,
-        data_mean=data_mean,
-        data_std=data_std,
-        p_k=p_k,
-        v_I=v_I,
-        T_95_limit=T_95_limit,
-        SPE_95_limit=SPE_95_limit,
+        chart=chart,
     )
 
-    X_list_before = normal_pack["X_list_before"] + fault_pack["X_list_before"]
-    Y_list_before = normal_pack["Y_list_before"] + fault_pack["Y_list_before"]
-    X_list_after = normal_pack["X_list_after"] + fault_pack["X_list_after"]
-    Y_list_after = normal_pack["Y_list_after"] + fault_pack["Y_list_after"]
-    alarm_masks = {
-        "before": normal_pack["alarm_masks"]["before"]
-        + fault_pack["alarm_masks"]["before"],
-        "after": normal_pack["alarm_masks"]["after"]
-        + fault_pack["alarm_masks"]["after"],
-    }
+    # label=1(고장) 차량 인덱스는 바꿔가며 반복 플롯
 
-    print(f"\n=== Plotting test_vehicle_idx={test_vehicle_idx} ===")
-    fig, axes = plot_tsne_before_after_ci(
-        X_list_before=X_list_before,
-        Y_list_before=Y_list_before,
-        X_list_after=X_list_after,
-        Y_list_after=Y_list_after,
-        alarm_masks=alarm_masks,
-        CI_array=CI_fault,
-        thresholds=thresholds,
-        args=args,
-        vehicle_idx=test_vehicle_idx,
-    )
+    test_list = [*normal_list, *fault_list]
+    test_idx = test_list if args.fault_idx == -1 else [args.fault_idx]
+    test_vehicle_idxs = test_idx
+    for test_vehicle_idx in test_vehicle_idxs:
+        fault_pack, CI_fault = collect_vehicle_points(
+            vehicle_ids=[test_vehicle_idx],
+            label=1,
+            per_vehicle=per_vehicle,
+            args=args,
+            config=run.config,
+            thresholds=thresholds,
+            net_loaded=net_loaded,
+            netx_loaded=netx_loaded,
+            chart=chart,
+        )
 
-elapsed = time.perf_counter() - start
-h, rem = divmod(elapsed, 3600)
-m, s = divmod(rem, 60)
-print(f"{int(h)}시간 {int(m)}분 {s:.3f}초")
+        X_list_before = normal_pack["X_list_before"] + fault_pack["X_list_before"]
+        Y_list_before = normal_pack["Y_list_before"] + fault_pack["Y_list_before"]
+        X_list_after = normal_pack["X_list_after"] + fault_pack["X_list_after"]
+        Y_list_after = normal_pack["Y_list_after"] + fault_pack["Y_list_after"]
+        alarm_masks = {
+            "before": normal_pack["alarm_masks"]["before"]
+            + fault_pack["alarm_masks"]["before"],
+            "after": normal_pack["alarm_masks"]["after"]
+            + fault_pack["alarm_masks"]["after"],
+        }
+
+        print(f"\n=== Plotting test_vehicle_idx={test_vehicle_idx} ===")
+        fig, axes = plot_tsne_before_after_ci(
+            X_list_before=X_list_before,
+            Y_list_before=Y_list_before,
+            X_list_after=X_list_after,
+            Y_list_after=Y_list_after,
+            alarm_masks=alarm_masks,
+            CI_array=CI_fault,
+            thresholds=thresholds,
+            args=args,
+            vehicle_idx=test_vehicle_idx,
+        )
+
+    elapsed = time.perf_counter() - start
+    h, rem = divmod(elapsed, 3600)
+    m, s = divmod(rem, 60)
+    print(f"{int(h)}시간 {int(m)}분 {s:.3f}초")
+
+
+if __name__ == "__main__":
+    main()

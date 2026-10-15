@@ -42,7 +42,7 @@ python Train_.py --battery-type QAS --dataset-name 10 \
 python Test_multi_models.py --models-idx <RUN_ID> --keep-cache
 
 # 3) (선택) 단일 조합 테스트 / t-SNE 시각화
-python Test_.py --models-folder <RUN_ID>
+python Test_.py --models-idx <RUN_ID>
 python Test_tsne.py --models-idx <RUN_ID> --u-model-idx -1 --x-model-idx -1 --fault-idx 338 --save
 ```
 
@@ -80,10 +80,10 @@ python Test_tsne.py --models-idx <RUN_ID> --u-model-idx -1 --x-model-idx -1 --fa
 셀별 재구성 오차 |Û - U|, |X̂ - X|   (QAS 110셀 / DTI 85셀)
         │
         ▼
-시점별 진단 특징 6개                       DiagnosisFeature()
+시점별 진단 특징 6개                       diagnosis_features()
         │
         ▼
-학습 데이터로 PCA → T², SPE 관리한계(95%)    Custom_PCA()
+학습 데이터로 PCA → T², SPE 관리한계(95%)    ControlChart.fit()
         │
         ▼
 CI(t) = T²(t) / T²_95 + SPE(t) / SPE_95
@@ -115,7 +115,7 @@ z = fc4(z)                              # --add-one-output-layer 일 때만, Lin
 - learning_case 2·3(0~1 정규화 사용)에서는 scale = 1, shift = 0을 사용합니다.
 - 손실은 MSE(ŷ, y), 옵티마이저는 Adam이며 double precision으로 학습합니다.
 
-### 진단 특징 6개 ([Function_.py](Function_.py) `DiagnosisFeature`)
+### 진단 특징 6개 ([mcdl/diagnosis.py](mcdl/diagnosis.py) `diagnosis_features`)
 
 매 시점마다 셀 방향으로 재구성 오차 e를 요약합니다.
 
@@ -144,11 +144,13 @@ z = fc4(z)                              # --add-one-output-layer 일 때만, Lin
 ├── Test_tsne.py            [실행] 기준 정상 차량 vs 대상 차량 t-SNE + CI 시각화
 ├── Plot_AUC_heatmap.py     [실행] AUC_summary CSV → 히트맵 (재)생성
 ├── data_filter.py          [실행] 이상 차량 제거 + train/validate/test 분할
-├── Train_pca_only.py       [모듈] 지정 체크포인트로 PCA만 재계산 (Test_.py가 import)
 ├── Class_.py               [모듈] CombinedAE, LSTM, Dataset 클래스
 ├── Function_.py            [모듈] 로딩·전처리·진단 특징·PCA·T²/SPE·ROC·플롯·설정 I/O
 ├── monitering.py           [참고] 외부 T²/Q 관리도 클래스 (import만 되고 사용하지 않음)
 ├── check_data_stats.py     [분석] DTI 초기 수렴 구간 탐색용 일회성 스크립트
+├── mcdl/                   [모듈] deep module 패키지 (run.py: Run 폴더 읽기·쓰기, 모델 생성·로드 / reconstruction.py: 재구성·재구성 오차·차량 진단 특징 / diagnosis.py: 진단 특징·관리도 / chart_source.py: 모델 쌍의 관리도 공급원 / vehicles.py: 분할 차량 ID·차량 텐서 로딩 / roc.py: 차량 단위 ROC 평가)
+├── tests/                  pytest 테스트, realdata/baseline.py: 실데이터 기준선 비교 도구
+├── pytest.ini              pytest 설정 (저장소 루트를 import 경로에 추가)
 ├── QAS_filtered_vehicle_ids_{normal,fault,train,validate,test}.npy   QAS 기본 분할
 ├── DTI_filtered_vehicle_ids_{normal,fault,train,validate,test}.npy   DTI 기본 분할
 ├── datasets/{2,5,10,15}/   data_filter.py로 만든 QAS 분할 (학습 비율 2·5·10·15 %)
@@ -199,10 +201,41 @@ pip install torch==2.9.1 torchvision==0.24.1 numpy==2.3.5 pandas==2.3.3 \
 
 | 변수 | 대응 옵션 | 기본값 | 적용 스크립트 |
 |---|---|---|---|
-| `MODEL_DIR` | `--models-dir` | `./models` | Train_, Test_multi_models, Test_tsne, Plot_AUC_heatmap (Test_.py는 미적용) |
+| `MODEL_DIR` | `--models-dir` | `./models` | Train_, Test_, Test_multi_models, Test_tsne, Plot_AUC_heatmap |
 | `SOURCE_DIR` | `--source-data-dir` | `./data` | Train_, Test_, Test_multi_models, Test_tsne |
 
 `data_filter.py`는 `./data` 경로를 코드에 고정해서 사용합니다.
+
+### 테스트
+
+저장소 루트에서 pytest로 실행합니다. 원본 데이터 없이 CPU에서 몇 초 안에 끝납니다.
+
+```bash
+pip install pytest
+python -m pytest
+```
+
+- `tests/test_run.py`: `mcdl/run.py` 테스트. `tmp_path`에 만든 합성 Run과 실제 sim_config 사본(`tests/fixtures/`)을 사용합니다.
+- `tests/test_scripts.py`: 진입 스크립트 smoke 테스트. `tmp_path`의 가짜 원본 데이터로 `Train_.main` → `Test_.main` → `Test_tsne.main` → `Test_multi_models.main` → `Plot_AUC_heatmap.main`을 이어서 실행합니다(약 20초). 스크립트를 import만 하면 아무것도 실행되지 않는지도 확인합니다.
+- `tests/test_chart_source.py`: 관리도 공급원 테스트. `tmp_path`의 Run과 작은 가짜 원본 데이터(QAS 열 구성 pkl)로 캐시·npz·재계산 분기를 모두 실행합니다.
+- `tests/test_reconstruction.py`: 재구성·재구성 오차·진단 특징 테스트 (작은 CombinedAE와 합성 차량 텐서). 테스트 차량 진단 특징이 기존 스크립트 방식과 bit 단위로 같은지도 확인합니다.
+- `tests/test_vehicles.py`: 차량 데이터 테스트. `tmp_path`의 가짜 원본 데이터와 분할 `.npy`로 분할 범위, 전처리, `.pt` 캐시 재사용과 해시 규칙을 확인합니다 (가짜 데이터는 `tests/fake_vehicles.py`).
+- `tests/test_diagnosis.py`: 진단 특징 → 관리도 → CI → ROC 테스트. 고정 seed 합성 오차(`tests/synthetic_errors.py`)에 대한 기대값(`tests/fixtures/diagnosis_golden.npz`)과 bit 단위로 비교합니다. 기대값은 Windows·numpy 2.3.5 환경에서 만들었으므로 다른 플랫폼에서는 ULP 수준 차이로 실패할 수 있습니다.
+- `realdata` 마커가 붙은 테스트는 `models/260224_090359`가 있을 때만 돕니다.
+
+**실데이터 기준선 비교**: 리팩토링 전후 수치가 bit 단위로 같은지 확인하는 도구입니다. pytest가 수집하지 않으며 직접 실행합니다.
+
+```bash
+python tests/realdata/baseline.py capture <test|test_u0|tsne|multi|train|train_full> <tag>    # 기준선 저장
+python tests/realdata/baseline.py compare <target> <tag_a> <tag_b>          # 두 기준선 비교
+```
+
+- test·test_u0·tsne·multi는 `models/_verify/260224_090359`(원본 Run에서 `pca_data_nor.csv`와 `results/`를 뺀 사본)에서 실행합니다. test_u0은 관리도를 다시 계산하는 경로(U 0, X -1)입니다.
+- train·train_full은 `models/_verify/train/`에 새 Run을 만들고 Run 폴더의 모든 파일을 비교합니다.
+  - train: 차량 1대, 1 epoch
+  - train_full: 차량 2대, 3 epoch, `save-per 2`, shuffle, 검증 포함(약 3분). 학습 루프의 RNG 순서, 검증, 체크포인트 간격까지 봅니다.
+- 결과는 `models/_verify/baselines/<tag>/`에 저장됩니다.
+- multi는 `--source-data-dir`에 `.pt` 캐시(QAS 기본 분할 기준 약 41 GB)를 만들거나 재사용합니다.
 
 ---
 
@@ -261,14 +294,68 @@ N = 110 (QAS) / 85 (DTI)이며, 열 구간은 `get_input_dimensions()`에 정의
 
 | 파일 | import 하는 모듈 |
 |---|---|
-| `Train_.py` | Function_, Class_ |
-| `Test_.py` | Function_, Class_, Train_pca_only, monitering |
-| `Test_multi_models.py` | Function_, Class_, Train_pca_only(import만), monitering |
-| `Test_tsne.py` | Function_, Class_, monitering |
+| `Train_.py` | Function_, Class_, mcdl.run, mcdl.diagnosis, mcdl.reconstruction, mcdl.vehicles |
+| `Test_.py` | Function_, Class_, monitering, mcdl.run, mcdl.reconstruction, mcdl.chart_source, mcdl.roc, mcdl.vehicles |
+| `Test_multi_models.py` | Function_, Class_, monitering, mcdl.run, mcdl.diagnosis, mcdl.reconstruction, mcdl.chart_source, mcdl.roc, mcdl.vehicles |
+| `Test_tsne.py` | Function_, Class_, monitering, mcdl.run, mcdl.reconstruction, mcdl.chart_source, mcdl.vehicles |
 | `data_filter.py` | Function_, Class_ |
 | `Plot_AUC_heatmap.py` | Function_ (`draw_auc_heatmap`) |
-| `Train_pca_only.py` | Function_, Class_, monitering |
 | `Class_.py` | Function_ |
+| `mcdl/run.py` | Function_, Class_ |
+| `mcdl/chart_source.py` | mcdl.diagnosis, mcdl.reconstruction, mcdl.vehicles |
+| `mcdl/vehicles.py` | Function_ (원본 로딩·전처리) (+ torch) |
+| `mcdl/reconstruction.py` | mcdl.diagnosis (+ torch) |
+| `mcdl/diagnosis.py` | (numpy, pandas, scipy만 사용) |
+| `mcdl/roc.py` | (numpy, scikit-learn만 사용) |
+
+### mcdl/run.py
+
+Run(`models/<RUN_ID>/`)을 다루는 module입니다. 평가 스크립트(Test_, Test_multi_models, Test_tsne)는 이 module로 Run을 열고, Train_은 이 module로 sim_config.txt를 쓰고 체크포인트 파일 이름을 정하고 모델 쌍을 만듭니다. 용어는 [GLOSSARY.md](GLOSSARY.md)를 따릅니다.
+
+| 이름 | 설명 |
+|---|---|
+| `Run(path)` | sim_config.txt를 읽어 `.config`를 만듭니다. `battery_type`·`learning_case`가 없으면 ValueError |
+| `Run.config` (`RunConfig`) | 평가에 필요한 설정. 키가 없는 예전 Run은 기본값(scale·shift 1.8/2.5/1.0/0, use_dx True 등)으로 채우고, learning_case에서 preprocessing·skip_charge_ready를, dataset_name에서 분할 폴더(`split_dir`)를 계산 |
+| `Run.checkpoint_numbers("U"/"X")` | artifact 폴더의 체크포인트 번호 (오름차순, -1은 맨 뒤) |
+| `Run.feature_cache_path("U"/"X", n, abs_err=, float32=, batch_size=)` | temp_cache 학습 특징 캐시 파일 경로. 계산 조건이 이름에 들어갑니다 |
+| `Run.load_model("U"/"X", n)`, `Run.load_model_pair(u, x)` | CPU·double·eval 상태의 U-model·X-model. 학습 때와 같은 double 정밀도로 가중치를 load합니다 |
+| `RunConfig.from_mapping(values)` | sim_config 값 또는 학습 인자(`vars(args)`)에서 설정을 만듭니다. 기본값·파생값 계산이 모이는 곳 |
+| `build_model_pair(config)`, `checkpoint_filename(model, n)` | 설정에 맞는 새 모델 쌍 (U를 먼저 생성), 체크포인트 파일 이름 규칙 |
+| `write_sim_config(path, args, extra)` | 학습 인자를 `path/sim_config.txt`에 쓰고 그 텍스트를 돌려줍니다 (Train_) |
+| `print_sim_config(...)` | 설정 표 출력. sim_config.txt 형식이 여기서 정해지며, Test 계열은 시작할 때 콘솔 출력에 씁니다 |
+
+### mcdl/reconstruction.py
+
+U-model·X-model로 차량 텐서 `[x | y | Δ | q]`를 재구성해 재구성 오차를 구하고, 차량 한 대의 진단 특징과 학습 진단 특징을 만드는 module입니다. 열 구성은 모델 크기에서 읽으며, 재구성 오차를 계산하는 곳(학습 진단 특징, 테스트 차량 평가)은 모두 `reconstruct`를 거칩니다. 학습 쪽과 테스트 쪽이 같은 `vehicle_features`를 씁니다.
+
+| 이름 | 설명 |
+|---|---|
+| `reconstruct(model, tensor, batch_size=None)` | 한 차량의 (재구성 대상 y, 재구성 결과 ŷ). 모델이 있는 device에서 batch 단위로 추론하고, `None`이면 차량 전체를 한 번에 추론합니다. batch 크기는 결과에 ULP 수준으로 영향을 주므로 호출자가 정합니다 (Train_ 4096, 평가 쪽 학습 특징 65536, 테스트 차량은 차량 전체) |
+| `reconstruction_errors(model, tensor, batch_size=, abs_err=, float32=False)` | 한 차량의 재구성 오차 ŷ − y (시점 × 셀). `abs_err`이면 절댓값입니다 |
+| `vehicle_features(net, netx, u, x, batch_size=None, abs_err=)` | 차량 한 대의 진단 특징. 테스트 스크립트는 차량 전체를 한 번에 추론하고, abs 여부는 학습 진단 특징과 같은 설정(`no_abs_err`)을 따릅니다 |
+| `training_features(net, netx, vehicles, batch_size=, abs_err=)` | (U 텐서, X 텐서) 쌍마다 `vehicle_features`를 구해 이어 붙인 학습 진단 특징 (Train_, 관리도 재계산) |
+| `training_signal_features(model, "U"/"X", tensors, …)` | 한 신호의 학습 진단 특징 3개 (Test_multi_models의 temp_cache 형식). 두 신호를 `combine_signal_features`로 묶으면 `training_features`와 같습니다 |
+
+### mcdl/diagnosis.py
+
+차량별 재구성 오차에서 진단 특징을 뽑고, 관리도(정상 학습 진단 특징으로 맞춘 PCA 모델과 T²·SPE 관리한계)로 CI를 계산하는 module입니다. 용어는 [GLOSSARY.md](GLOSSARY.md)를 따릅니다.
+
+| 이름 | 설명 |
+|---|---|
+| `diagnosis_features(error_u, error_x)` | 차량 한 대의 진단 특징 (시점 × 6, 2장 표의 열 순서). 차량마다 따로 계산해야 합니다 |
+| `signal_features("U"/"X", error)`, `combine_signal_features(u, x)` | 신호별 특징 3개와 그 조합. Test_multi_models의 temp_cache 파일(`Run.feature_cache_path`)이 이 형식입니다 |
+| `ControlChart.fit(features)` | 정상 학습 진단 특징(차량별로 계산해 이어 붙인 것)으로 관리도를 맞춥니다 |
+| `ControlChart.load(run_dir)` | Run 폴더의 `pca_arrays.npz`를 읽습니다 (`pca_manifest.json` 필요) |
+| `chart.save(run_dir, features)` | `pca_arrays.npz`, `pca_manifest.json`, `pca_data_nor.csv`를 씁니다 (Train_) |
+| `chart.t2_limit`, `chart.spe_limit` | 관리한계 T²₉₅, SPE₉₅ |
+| `chart.score(features)`, `chart.max_ci(features)` | 시점별 (T², SPE, CI)와 최대 CI. CI = SPE/SPE₉₅ + T²/T²₉₅ |
+
+### mcdl/roc.py
+
+| 이름 | 설명 |
+|---|---|
+| `evaluate(max_ci, is_fault, reverse=False)` | 차량별 최대 CI와 고장 여부로 ROC를 평가합니다. 임계값 θ = 0 ~ 999.9 (0.1 간격). 기본은 고장이 양성이고 최대 CI > θ이면 양성, `reverse`는 정상이 양성이고 최대 CI < θ이면 양성입니다 |
+| `RocResult` | `fpr`, `tpr`, `auc`, `best`(Youden J 최대점), `closest_to_01`((0,1) 최근접점). `best`·`closest_to_01`은 threshold·fpr·tpr·index와 youden_j/distance를 담은 dict입니다 |
 
 ### Class_.py
 
@@ -285,19 +372,36 @@ N = 110 (QAS) / 85 (DTI)이며, 열 구간은 `get_input_dimensions()`에 정의
 |---|---|
 | 로딩 | `safe_load` (pkl/pt/npy를 CPU로 로드) |
 | 전처리 | `get_input_dimensions`, `get_preprocessing_and_skip_charge_ready`, `preprocess_loaded_tensor`, `is_abnormal`, `get_convergence_start_index`, `normalize_columns_0_to_1` |
-| 진단 | `CustomSigmoidFunc`, `DiagnosisFeature`, `Custom_PCA`, `T2_array`, `SPE_array` |
-| 평가 | `compute_roc_auc_from_threshold_matrix`, `compute_optimal_thresholds_from_roc` |
+| 진단 | `CustomSigmoidFunc` (진단 특징·관리도는 `mcdl/diagnosis.py`) |
 | 시각화 | `plot_roc_curve`, `draw_auc_heatmap`, `plot_diagnostics_triplet`, `plot_tsne_before_after_ci`, `plot_loss_curve_all`, `plot_net_layer_params_by_index`, `plot_testX_timeseries` |
-| 저장·설정 | `save_net_state`, `save_pca_results`, `load_pca_results`, `make_model_path_based_timestamp`, `print_sim_config`, `read_values_from_sim_config`, `read_dataset_path_from_sim_config` |
+| 저장·설정 | `save_net_state`, `make_model_path_based_timestamp` (sim_config 읽기·쓰기는 `mcdl/run.py`, 관리도 저장·로드는 `mcdl/diagnosis.py`) |
 | 현재 미사용 | `solvers`(Kalman 기반 추정), `calculate_volt_modepi`, `ClassifyFeature`, `cont`, `diagnosis_thresholds`, `plot_contrib_percent_stacked`, LSTM 저장/로드 등 |
 
-### Train_pca_only.py
+### mcdl/chart_source.py
 
-`train_pca_only(args, device, save=True, ...)`는 지정한 체크포인트(`args.u_model_idx`, `args.x_model_idx`)로 학습 차량의 재구성 오차 → 진단 특징 → PCA를 다시 계산합니다. `save=False`이면 PCA 결과 튜플을 반환하고, `save=True`이면 새 타임스탬프 폴더에 `pca_*`를 저장합니다. Test_.py의 PCA 대체 경로에서 사용합니다.
+모델 쌍의 관리도를 어디서 가져올지 정하는 module입니다. Test_.py와 Test_tsne.py는 `chart_for_pair` 한 줄로 관리도를 얻고, Test_multi_models.py는 같은 module로 temp_cache를 쓰고 읽습니다.
+
+| 이름 | 설명 |
+|---|---|
+| `chart_for_pair(run, u, x, source_data_dir=)` | ① 다시 계산할 때와 같은 조건(설정의 abs 여부, float32 끔, batch 65536)으로 만든 temp_cache 특징이 있으면 그것으로 관리도를 맞추고, ② U·X가 모두 -1이면 `pca_arrays.npz`를 읽고, ③ 그 밖에는 Run의 학습 차량 원본을 읽어 학습 진단 특징을 다시 계산합니다 (수 분) |
+| `save_cached_features(run, "U"/"X", n, features, conditions=)`, `load_cached_features(…)` | temp_cache 파일(신호별 특징 3개의 pickle) 쓰기·읽기. 경로는 `Run.feature_cache_path` |
+
+### mcdl/vehicles.py
+
+분할의 차량 ID와, 원본(`vin_2`·`vin_3`)을 Run 설정대로 전처리한 차량 텐서를 돌려주는 module입니다. 네 스크립트와 관리도 재계산이 모두 이 module로 차량을 읽습니다. 용어는 [GLOSSARY.md](GLOSSARY.md)를 따릅니다.
+
+| 이름 | 설명 |
+|---|---|
+| `split_ids(split_dir, battery_type, split, start=0, end=-1)` | 분할(train/validate/test/fault/normal)의 차량 ID (int 목록). `start`~`end`(끝 포함, -1이면 끝까지)가 학습 차량 범위입니다 |
+| `load_vehicle(source_data_dir, config, vehicle_id)` | 한 차량의 (U 텐서, X 텐서). `RunConfig`의 battery_type·전처리 설정·normalize_dx·normalize_val로 `preprocess_loaded_tensor`를 적용합니다 |
+| `load_training_vehicles(source_data_dir, config, ids)` | 학습 차량들의 `[(U, X)]` (double). `source_data_dir/train_data_list_<BT>_<hash>.pt`가 있으면 그것을 읽고, 없으면 만들어 저장합니다 (Test_multi_models) |
+| `load_test_vehicles(source_data_dir, config, ids)` | 테스트 차량들의 `{id: (U, X)}`. 캐시 파일은 `test_data_cache_<BT>_<hash>.pt`입니다 (Test_multi_models) |
+
+캐시 해시는 차량 ID 목록(순서 포함)과 battery_type·preprocessing·skip_charge_ready·normalize_dx의 md5이며, normalize_dx일 때만 normalize_val이 들어갑니다. 전처리 코드를 바꾸면 해시가 그대로이므로 캐시 파일을 직접 지워야 합니다.
 
 ### monitering.py
 
-외부 코드(Iurii Katser, control-charts)의 Hotelling T²/Q 통계 클래스입니다. 테스트 스크립트들이 `from monitering import *`로 불러오지만, 실제 진단에는 `Function_.py`의 `T2_array`/`SPE_array`를 사용합니다.
+외부 코드(Iurii Katser, control-charts)의 Hotelling T²/Q 통계 클래스입니다. 테스트 스크립트들이 `from monitering import *`로 불러오지만, 실제 진단에는 `mcdl/diagnosis.py`의 관리도(`ControlChart`)를 사용합니다.
 
 ---
 
@@ -317,6 +421,7 @@ python data_filter.py --dataset-name 10 --train-ratio 0.1 --val-ratio 0.5 --seed
 | `--train-ratio` | 없음 | 정상 차량 중 학습 비율. 미지정 시 QAS 109대 / DTI 39대 |
 | `--val-ratio` | 없음 | **학습을 뺀 나머지** 중 검증 비율. 미지정 시 QAS 50대 / DTI 19대. 남은 차량이 test |
 | `--seed` | 42 | 분할 난수 시드 |
+| `--debug` | off | 빠른 확인용: `train_ratio = 0.02`, `val_ratio = 0.5`, `dataset_name = "2"`로 덮어씀 |
 
 코드 상단에 고정된 값이 있어, 바꾸려면 코드를 수정해야 합니다.
 
@@ -350,10 +455,12 @@ python Train_.py --battery-type QAS --dataset-name 10 --learning-case 1 \
 2. 차량별 `vin_2.pkl`, `vin_3.pkl`을 로드하고 전처리합니다.
 3. `models/<RUN_ID>/sim_config.txt`에 전체 인자, 학습 차량 ID, 학습 샘플 수 등을 저장합니다.
 4. U-model을 학습합니다. `--ae-u-save-per` epoch마다 검증 loss를 계산하고 `net_e<epoch>.pth`를 저장하며, 종료 후 `net.pth`를 저장합니다.
-5. X-model도 같은 방식으로 학습해 `netx_e<epoch>.pth`, `netx.pth`를 저장합니다.
+5. X-model도 같은 방식으로 학습해 `netx_e<epoch>.pth`, `netx.pth`를 저장합니다. U·X 모두 같은 함수(`train_autoencoder`)로 학습합니다.
 6. 최종 모델로 학습 차량의 재구성 오차 → 진단 특징 → PCA를 계산해 `pca_*`를 저장합니다.
 
 콘솔에는 저장 주기마다 `Epoch | Train Loss | Val Loss`와 총 소요 시간이 출력됩니다.
+
+**재현성**: 같은 인자와 `--seed`면 결과가 bit 단위로 같습니다. 다만 DataLoader는 순회할 때마다 전역 난수를 쓰므로(shuffle을 꺼도), shuffle을 켜면 X-model의 셔플 순서가 U-model 학습의 epoch 수와 `--ae-u-save-per`(검증 횟수)에 따라 달라집니다.
 
 | 옵션 | 기본값 | 설명 |
 |---|---|---|
@@ -371,11 +478,12 @@ python Train_.py --battery-type QAS --dataset-name 10 --learning-case 1 \
 | `--ae-x-scale`, `--ae-x-shift` | 1.0, 0 | X 출력 sigmoid 스케일·오프셋 (learning_case 1·4에서만 적용) |
 | `--no-use-dx` | off | Δ(셀 편차) 입력 미사용 |
 | `--add-one-output-layer` | off | 디코더 앞에 Linear(N → N) 추가 |
-| `--no-abs-err` | off | 학습 데이터 PCA 특징 계산 시 부호 있는 오차 사용 (테스트 차량 오차는 항상 절댓값) |
+| `--no-abs-err` | off | 진단 특징 계산 시 부호 있는 오차 사용. 평가 스크립트도 sim_config의 이 값을 따라 테스트 차량 오차를 계산 |
 | `--normalize-dx`, `--normalize-val` | off, 4 | learning_case 2·3에서 Δ를 normalize_val로 나눔 |
 | `--no-validation` | off | 검증 데이터 로드·평가 생략 |
 | `--no-save` | off | `.pth` 체크포인트 저장 생략 (loss·PCA·sim_config는 저장) |
 | `--seed` | 42 | 난수 시드 |
+| `--debug` | off | 빠른 확인용: 학습·검증 차량 1대씩, `use_dx = False`, `sim_config.txt` 미생성 |
 | `--lstm-load`, `--lstm-training`, `--lstm-epochs`, `--lstm-lr`, `--lstm-batchsize` | off / 300 / 1e-4 / 100 | 레거시. `vin_1.pkl`로 LSTM을 학습하지만 결과는 저장하지 않음 |
 | `--vin1-start`, `--vin2-start`, `--vin3-start` | 0 | 현재 사용하지 않음 (sim_config에 기록만 됨) |
 
@@ -386,24 +494,27 @@ python Train_.py --battery-type QAS --dataset-name 10 --learning-case 1 \
 학습 폴더의 `sim_config.txt`에서 설정(battery_type, learning_case, 출력층 파라미터, dataset_name 등)을 읽어 학습과 같은 조건으로 평가합니다.
 
 ```bash
-python Test_.py --models-folder <RUN_ID>                                    # 최종 모델 (net.pth, netx.pth)
-python Test_.py --models-folder <RUN_ID> --u-model-idx 2 --x-model-idx 0    # 특정 체크포인트 (temp_cache 필요, 9장)
+python Test_.py --models-idx <RUN_ID>                                       # 최종 모델 (net.pth, netx.pth)
+python Test_.py --models-idx <RUN_ID> --u-model-idx 2 --x-model-idx 0       # 특정 체크포인트 (캐시가 없으면 관리도를 다시 계산, 수 분)
 ```
 
 | 옵션 | 기본값 | 설명 |
 |---|---|---|
-| `--models-folder` | `260224_090359` | 평가할 `RUN_ID` (다른 스크립트의 `--models-idx`에 해당) |
-| `--models-dir` | `./models` | `MODEL_DIR` 환경 변수 미적용 |
+| `--models-idx` (`--models-folder`) | `260224_090359` | 평가할 `RUN_ID`. 예전 이름 `--models-folder`도 그대로 동작 |
+| `--models-dir` | `./models` | 결과 위치 (`MODEL_DIR` 환경 변수) |
 | `--source-data-dir` | `./data` | 원본 데이터 위치 |
 | `--u-model-idx` / `--x-model-idx` | -1 / -1 | -1: `net.pth`/`netx.pth`, N: `net_eN.pth`/`netx_eN.pth` |
 | `--x-start`, `--x-tick-step` | 20, 3000 | 진단 시계열 그림의 x축 (진단 그림 모드에서만 사용) |
 | `--sigma-levels` | `3,4.5,6` | 현재 사용하지 않음 |
+| `--debug` | off | 빠른 확인용: 모든 반복에서 차량 338만 평가 (모델 쌍은 위 인자 그대로) |
 
 **PCA 관리한계를 정하는 순서**
 
-1. `temp_cache/feat_u_<u>.pkl`, `feat_x_<x>.pkl`이 있으면 캐시된 학습 특징으로 PCA를 계산합니다.
-2. 없고 u = -1이면 학습 때 저장한 `pca_arrays.npz`를 사용합니다.
-3. 그 외에는 `train_pca_only()`로 다시 계산합니다 (현재 오류 발생, 9장).
+1. 같은 계산 조건(설정의 abs 여부, float32 끔, batch 65536)으로 만든 `temp_cache/feat_u_<u>_….pkl`, `feat_x_<x>_….pkl`이 있으면 캐시된 학습 특징으로 PCA를 계산합니다.
+2. 없고 u = x = -1(최종 모델 쌍)이면 학습 때 저장한 `pca_arrays.npz`를 사용합니다.
+3. 그 외에는 학습 차량의 진단 특징을 차량별로 다시 계산해 관리도를 만듭니다. 학습 차량 원본을 읽으므로 수 분이 걸립니다. Test_multi_models와 같은 계산(`mcdl/reconstruction.py`)이라 같은 모델 쌍이면 같은 결과가 나옵니다.
+
+이 순서는 `mcdl/chart_source.py`의 `chart_for_pair`에 있으며, Test_tsne.py도 같은 순서를 씁니다.
 
 **동작**: test(정상) + fault 차량마다 CI 최대값을 구하고, 임계값을 바꿔 가며 ROC/AUC를 계산합니다. 콘솔에 AUC, Youden J 기준 최적 임계값, (0, 1)에 가장 가까운 임계값을 출력하고 ROC 그림을 저장·표시합니다.
 
@@ -457,8 +568,8 @@ python Test_multi_models.py --models-idx <RUN_ID> --u-model-idx 0,5,10,-1 --x-mo
 - `results/AUC_ROC_u<U>_x<X>_case<C>.png`: 조합별 ROC 곡선
 - `results/AUC_ROC_ALL_COMBINATIONS_case<C>.png`: 모든 조합의 ROC 곡선 비교
 - `AUC_heatmap_case<C>.png`: 가로 U 체크포인트 × 세로 X 체크포인트 AUC 히트맵
-- `temp_cache/feat_{u,x}_<idx>.pkl`: 학습 특징 캐시 (`--keep-cache`일 때만 남음)
-- `<source-data-dir>/train_data_list_<BT>_<hash>.pt`, `test_data_cache_<BT>_<hash>.pt`: 전처리 데이터 캐시 (자동 삭제되지 않음)
+- `temp_cache/feat_{u,x}_<idx>_abs=<0|1>_float32=<0|1>_batch=<N>.pkl`: 학습 특징 캐시 (`--keep-cache`일 때만 남음). 계산 조건이 이름에 들어가므로 조건이 다른 캐시는 섞여 쓰이지 않습니다
+- `<source-data-dir>/train_data_list_<BT>_<hash>.pt`, `test_data_cache_<BT>_<hash>.pt`: 전처리 데이터 캐시 (자동 삭제되지 않음, 해시 규칙은 [6장 mcdl/vehicles.py](#mcdlvehiclespy))
 - 콘솔: 조합별 AUC / Best threshold / TPR / FPR 요약 표
 
 ### 7.5 시각화
@@ -492,9 +603,8 @@ python Test_tsne.py --models-idx <RUN_ID> --u-model-idx -1 --x-model-idx -1 --sa
 
 | 옵션 | 기본값 | 설명 |
 |---|---|---|
-| `--models-idx` | `260206_084839` | `RUN_ID` |
-| `--battery-type` | `QAS` | sim_config에서 읽지 않으므로 DTI 모델이면 직접 지정 |
-| `--u-model-idx` / `--x-model-idx` | **10 / 10** | -1이 아니면 temp_cache 필요 (9장) |
+| `--models-idx` | `260206_084839` | `RUN_ID`. 배터리 타입과 전처리 설정(`normalize_dx` 등)은 이 Run의 sim_config에서 읽습니다 |
+| `--u-model-idx` / `--x-model-idx` | -1 / -1 | 관리도 출처는 Test_.py와 같은 순서 (7.3) |
 | `--fault-idx` | -1 | -1: test(정상) + fault 전체를 차례로, N: 차량 N 하나 |
 | `--thr THR0 THR1` | 10.4 87.5 | CI 알람 임계값 2개 |
 | `--cnt-max` | 6 | 기준 정상 차량 수 |
@@ -502,7 +612,6 @@ python Test_tsne.py --models-idx <RUN_ID> --u-model-idx -1 --x-model-idx -1 --sa
 | `--save` | off | 파일로 저장. 미지정 시 차량마다 창으로 표시 |
 | `--no-alarm`, `--no-alarm-{nlo,nhi,flo,fhi}` | 모두 표시 | 알람 강조점 끄기 (n/f = 기준 정상/대상 차량, lo/hi = THR0/THR1 초과) |
 | `--x-start`, `--x-tick-step` | 20, 3000 | CI 패널 x축 |
-| `--normalize-dx` | off | 전처리 옵션 (학습 설정과 맞출 것) |
 
 **결과물**: `results_tsne/tSNE_<id>.png` — [t-SNE (실제값) | t-SNE (재구성값) | 대상 차량 CI + 임계선] 1×3 그림
 
@@ -526,7 +635,7 @@ models/<RUN_ID>/                                  RUN_ID = 26MMDD_HHMMSS (KST, �
 ├── AUC_summary_case<C>.csv                       Test_multi_models  조합별 AUC 표
 ├── AUC_heatmap_case<C>.png                       Test_multi_models  AUC 히트맵
 ├── AUC_summary_case<C>_heatmap.png               Plot_AUC_heatmap   AUC 히트맵 (CSV에서 재생성)
-├── temp_cache/feat_{u,x}_<idx>.pkl               Test_multi_models  학습 특징 캐시 (--keep-cache)
+├── temp_cache/feat_{u,x}_<idx>_<조건>.pkl        Test_multi_models  학습 특징 캐시 (--keep-cache)
 ├── results/
 │   ├── AUC_ROC<C>.png                            Test_              단일 조합 ROC
 │   ├── <id>_testing_diagnostics_case<C>.png      Test_              T²·SPE·CI 시계열 (AUC_ANALYSIS=False)
@@ -568,25 +677,22 @@ models/<RUN_ID>/                                  RUN_ID = 26MMDD_HHMMSS (KST, �
 - **저장소 루트에서 실행**해야 합니다 (상대 경로 사용).
 - **`sim_config.txt`를 지우거나 고치지 마세요.** Test 계열 스크립트가 학습 설정을 복원할 때 이 파일을 읽습니다. 학습 시 준 `--dataset-name`도 여기에 기록되어, 테스트가 같은 분할을 자동으로 사용합니다.
 - **분할 이름으로 `default`는 피하세요.** `sim_config.txt`의 `dataset_name`이 `default`이면 Test 계열은 루트 기본 분할을 사용합니다. `data_filter.py`의 기본 이름이 `default`입니다.
-- **디버거(VS Code 등)로 실행하면 동작이 바뀝니다.**
+- **`--debug`를 주면 빠른 확인용으로 동작이 바뀝니다.** 디버거(VS Code 등)로 실행하는 것만으로는 동작이 바뀌지 않습니다. 디버거에서 이 동작을 쓰려면 launch.json의 `args`에 `--debug`를 넣으세요.
 
-  | 스크립트 | 디버거로 실행할 때 |
+  | 스크립트 | `--debug`일 때 |
   |---|---|
   | `Train_.py` | 학습·검증 차량 1대씩만 사용, `use_dx = False` 강제, `sim_config.txt` 미생성 |
-  | `Test_.py` | u = `net_e2`, x = `netx_e1`로 고정, 모든 반복에서 차량 338만 평가 |
+  | `Test_.py` | 모든 반복에서 차량 338만 평가. 모델 쌍과 관리도는 `--u-model-idx`·`--x-model-idx`를 그대로 따름 |
   | `data_filter.py` | `train_ratio = 0.02`, `val_ratio = 0.5`, `dataset_name = "2"`로 덮어씀 |
 
-- **Test 계열은 CPU 실행을 권장합니다.** `Test_.py`, `Test_multi_models.py`, `Test_tsne.py`는 모델만 `cuda`로 옮기고 테스트 입력은 CPU에 둡니다. GPU가 있는 환경에서는 `CUDA_VISIBLE_DEVICES=""`를 지정해 실행하세요.
+- **2026-10-15 이전 평가 결과와 비교할 때 주의하세요.** 그 전에는 평가 스크립트가 저장된 float64 가중치를 float32로 잘라 load했습니다(`.scratch/known-bugs` 01). 기존 Run 폴더의 `AUC_summary_case<C>.csv`, ROC 그림 등은 잘린 가중치 기준이며, 지금 다시 평가하면 값이 달라질 수 있습니다. 학습 때 저장한 `pca_arrays.npz`는 원래부터 full precision 기준입니다.
+- **Test 계열은 CPU에서 실행됩니다.** `Test_.py`, `Test_multi_models.py`, `Test_tsne.py`는 GPU가 있어도 모델과 입력을 모두 CPU에 둡니다 (`mcdl/run.py`가 CPU 모델을 돌려줌).
 - **디스크 용량**: `Test_multi_models.py`가 `--source-data-dir`에 남기는 `.pt` 캐시는 학습·테스트 차량 데이터 전체를 담으므로 QAS 기본 분할 기준 수십 GB가 될 수 있습니다. 분할이나 전처리 설정이 바뀌면 해시가 달라져 새 파일이 생기므로 주기적으로 정리하세요. `temp_cache/`도 체크포인트마다 파일이 생깁니다.
 - **체크포인트 저장 시점**: `epoch % save_per == 0`일 때만 `*_e<epoch>.pth`가 저장됩니다. 마지막 epoch 가중치는 `net.pth` / `netx.pth`(-1)에만 있습니다.
 - **조합 수**: 300 epoch를 10 epoch마다 저장하면 U·X 각 31개 → 961개 조합입니다. `--fast-search`나 `--u-model-idx`/`--x-model-idx` 지정을 고려하세요.
 
 ### 알려진 제약
 
-- `Test_.py`에서 `--u-model-idx`를 -1이 아닌 값으로 주고 `temp_cache`가 없으면, `train_pca_only()`에 Test 인자(`args`)가 넘어가 AttributeError가 납니다. 먼저 `Test_multi_models.py --keep-cache`로 캐시를 만들어 두세요.
-- `Test_tsne.py`는 `temp_cache`가 없으면 체크포인트와 관계없이 최종 모델 기준 `pca_arrays.npz`를 사용합니다.
-- `Train_pca_only.py`는 단독 실행되지 않습니다. `__main__`에서 `device` 인자 없이 호출하고, 필요한 인자(`--learning-case` 등)도 정의되어 있지 않습니다. Test_.py에서 함수로만 사용합니다.
-- `--normalize-dx`를 쓰면 Test 계열은 `normalize_val`을 넘기지 않아(기본 1.0) 학습(기본 4)과 Δ 스케일이 달라집니다. learning_case 2·3에만 해당합니다.
 - LSTM 관련 옵션은 레거시입니다. 학습한 LSTM은 저장되지 않으며, `--lstm-training`은 `--lstm-load`와 함께 써야 동작합니다.
 - `check_data_stats.py`는 데이터 경로가 다른 PC 경로로 하드코딩되어 있어, 경로를 수정한 뒤 실행해야 합니다.
 - `models/` 루트의 `net.pth`, `netx.pth`, `pca_*`는 구버전 산출물입니다. 현재 스크립트가 요구하는 `<RUN_ID>/artifact/`, `sim_config.txt` 구조가 아니어서 그대로는 사용할 수 없습니다.

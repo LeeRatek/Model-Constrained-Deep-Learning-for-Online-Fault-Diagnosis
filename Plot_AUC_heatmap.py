@@ -37,10 +37,9 @@ parser.add_argument(
     help="Direct path to the AUC summary CSV file. Overrides models-dir/models-idx logic.",
 )
 
-args = parser.parse_args()
 
-
-def main():
+def main(argv=None):
+    args = parser.parse_args(argv)
     csv_file = args.csv_path
 
     if csv_file is None:

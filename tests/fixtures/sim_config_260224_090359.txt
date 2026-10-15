@@ -1,0 +1,49 @@
+============================================================================================================================================
+                                                                 Train Run                                                                  
+============================================================================================================================================
+timestamp                        : 2026-02-24 00:05:17
+python                           : 3.12.12
+platform                         : Linux 6.8.0-90-generic (x86_64)
+cwd                              : /usr/wbms/Model-Constrained-Deep-Learning-for-Online-Fault-Diagnosis
+--------------------------------------------------------------------------------------------------------------------------------------------
+Amount of data used for training : 6357186
+PREPROCESSING                    : False
+SKIP_CHARGE_READY                : True
+Vehicle IDs used for training    : [2, 6, 7, 10, 11, 12, 13, 17, 18, 19, 20, 21, 22, 23, 24, 29, 35, 36, 39, 40, 41, 42, 43, 44, 47, 48, 49, 50, 51, 52, 54, 55, 56, 58, 60, 61, 62, 67, 68, 72, 76, 81, 85, 88, 89,...
+add_one_output_layer             : True
+ae_u_batchsize                   : 100
+ae_u_epochs                      : 13
+ae_u_lr                          : 0.0005
+ae_u_save_per                    : 1
+ae_u_scale                       : 1.8
+ae_u_shift                       : 2.5
+ae_u_shuffle                     : False
+ae_x_batchsize                   : 100
+ae_x_epochs                      : 13
+ae_x_lr                          : 0.0005
+ae_x_save_per                    : 1
+ae_x_scale                       : 1.0
+ae_x_shift                       : 0
+ae_x_shuffle                     : False
+battery_type                     : QAS
+device                           : cpu
+learning_case                    : 1
+lstm_batchsize                   : 100
+lstm_epochs                      : 300
+lstm_load                        : False
+lstm_lr                          : 0.0001
+lstm_training                    : False
+models_dir                       : /usr/wbms/data/models
+no_abs_err                       : False
+no_save                          : False
+no_use_dx                        : True
+normalize_dx                     : False
+normalize_val                    : 4
+seed                             : 42
+source_data_dir                  : /usr/wbms/data/source_data
+vehicle_end                      : -1
+vehicle_start                    : 0
+vin1_start                       : 0
+vin2_start                       : 0
+vin3_start                       : 0
+============================================================================================================================================
