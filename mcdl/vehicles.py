@@ -13,7 +13,7 @@ import os
 import numpy as np
 import torch
 
-from Function_ import get_input_dimensions, preprocess_loaded_tensor, safe_load
+from mcdl.preprocessing import get_input_dimensions, preprocess_loaded_tensor, safe_load
 
 
 def split_ids(split_dir, battery_type: str, split: str, *, start: int = 0, end: int = -1) -> list[int]:

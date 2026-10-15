@@ -10,7 +10,7 @@ import pytest
 import torch
 
 from fake_vehicles import fake_vehicle, write_fake_vehicles, write_split
-from Function_ import get_input_dimensions, preprocess_loaded_tensor
+from mcdl.preprocessing import get_input_dimensions, preprocess_loaded_tensor
 from mcdl.run import RunConfig
 from mcdl.vehicles import load_test_vehicles, load_training_vehicles, load_vehicle, split_ids
 

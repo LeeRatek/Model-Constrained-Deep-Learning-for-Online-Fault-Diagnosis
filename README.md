@@ -144,11 +144,9 @@ z = fc4(z)                              # --add-one-output-layer 일 때만, Lin
 ├── Test_tsne.py            [실행] 기준 정상 차량 vs 대상 차량 t-SNE + CI 시각화
 ├── Plot_AUC_heatmap.py     [실행] AUC_summary CSV → 히트맵 (재)생성
 ├── data_filter.py          [실행] 이상 차량 제거 + train/validate/test 분할
-├── Class_.py               [모듈] CombinedAE, LSTM, Dataset 클래스
-├── Function_.py            [모듈] 로딩·전처리·진단 특징·PCA·T²/SPE·ROC·플롯·설정 I/O
-├── monitering.py           [참고] 외부 T²/Q 관리도 클래스 (import만 되고 사용하지 않음)
+├── Class_.py               [모듈] CombinedAE, CustomSigmoidFunc, LSTM(레거시) 클래스
 ├── check_data_stats.py     [분석] DTI 초기 수렴 구간 탐색용 일회성 스크립트
-├── mcdl/                   [모듈] deep module 패키지 (run.py: Run 폴더 읽기·쓰기, 모델 생성·로드 / reconstruction.py: 재구성·재구성 오차·차량 진단 특징 / diagnosis.py: 진단 특징·관리도 / chart_source.py: 모델 쌍의 관리도 공급원 / vehicles.py: 분할 차량 ID·차량 텐서 로딩 / roc.py: 차량 단위 ROC 평가)
+├── mcdl/                   [모듈] deep module 패키지 (run.py: Run 폴더 읽기·쓰기, 모델 생성·로드 / reconstruction.py: 재구성·재구성 오차·차량 진단 특징 / diagnosis.py: 진단 특징·관리도 / chart_source.py: 모델 쌍의 관리도 공급원 / vehicles.py: 분할 차량 ID·차량 텐서 로딩 / roc.py: 차량 단위 ROC 평가 / preprocessing.py: 원본 pkl 로딩·전처리 / plotting.py: 그림 함수)
 ├── tests/                  pytest 테스트, realdata/baseline.py: 실데이터 기준선 비교 도구
 ├── pytest.ini              pytest 설정 (저장소 루트를 import 경로에 추가)
 ├── QAS_filtered_vehicle_ids_{normal,fault,train,validate,test}.npy   QAS 기본 분할
@@ -258,7 +256,7 @@ data/
 ```
 
 - 정상/고장은 **차량 ID 범위로 구분**합니다: QAS는 ID ≥ 335, DTI는 ID ≥ 77이 고장입니다. `Labels.xls`는 코드에서 읽지 않습니다.
-- `.pkl`은 pickle된 torch 텐서이며, `Function_.safe_load()`가 CPU로 로드합니다.
+- `.pkl`은 pickle된 torch 텐서이며, `mcdl/preprocessing.py`의 `safe_load()`가 CPU로 로드합니다.
 - 원본 크기는 QAS 약 49 GB, DTI 약 9 GB입니다.
 
 ### `vin_2.pkl` / `vin_3.pkl` 열 구성
@@ -294,19 +292,23 @@ N = 110 (QAS) / 85 (DTI)이며, 열 구간은 `get_input_dimensions()`에 정의
 
 | 파일 | import 하는 모듈 |
 |---|---|
-| `Train_.py` | Function_, Class_, mcdl.run, mcdl.diagnosis, mcdl.reconstruction, mcdl.vehicles |
-| `Test_.py` | Function_, Class_, monitering, mcdl.run, mcdl.reconstruction, mcdl.chart_source, mcdl.roc, mcdl.vehicles |
-| `Test_multi_models.py` | Function_, Class_, monitering, mcdl.run, mcdl.diagnosis, mcdl.reconstruction, mcdl.chart_source, mcdl.roc, mcdl.vehicles |
-| `Test_tsne.py` | Function_, Class_, monitering, mcdl.run, mcdl.reconstruction, mcdl.chart_source, mcdl.vehicles |
-| `data_filter.py` | Function_, Class_ |
-| `Plot_AUC_heatmap.py` | Function_ (`draw_auc_heatmap`) |
-| `Class_.py` | Function_ |
-| `mcdl/run.py` | Function_, Class_ |
+| `Train_.py` | Class_, mcdl.run, mcdl.preprocessing, mcdl.diagnosis, mcdl.reconstruction, mcdl.vehicles |
+| `Test_.py` | mcdl.run, mcdl.reconstruction, mcdl.chart_source, mcdl.vehicles, mcdl.roc, mcdl.plotting |
+| `Test_multi_models.py` | mcdl.run, mcdl.diagnosis, mcdl.reconstruction, mcdl.chart_source, mcdl.vehicles, mcdl.roc, mcdl.plotting |
+| `Test_tsne.py` | mcdl.run, mcdl.reconstruction, mcdl.chart_source, mcdl.vehicles, mcdl.plotting |
+| `data_filter.py` | mcdl.preprocessing, mcdl.plotting |
+| `Plot_AUC_heatmap.py` | mcdl.plotting (`draw_auc_heatmap`) |
+| `Class_.py` | mcdl.plotting (`CombinedAE.analyze_outputs`의 그림) |
+| `mcdl/run.py` | Class_, mcdl.preprocessing |
 | `mcdl/chart_source.py` | mcdl.diagnosis, mcdl.reconstruction, mcdl.vehicles |
-| `mcdl/vehicles.py` | Function_ (원본 로딩·전처리) (+ torch) |
+| `mcdl/vehicles.py` | mcdl.preprocessing (+ torch) |
 | `mcdl/reconstruction.py` | mcdl.diagnosis (+ torch) |
 | `mcdl/diagnosis.py` | (numpy, pandas, scipy만 사용) |
 | `mcdl/roc.py` | (numpy, scikit-learn만 사용) |
+| `mcdl/preprocessing.py` | (numpy, torch만 사용) |
+| `mcdl/plotting.py` | (matplotlib, numpy, pandas, scipy, scikit-learn, torch만 사용) |
+
+스크립트는 star import(`from … import *`)를 쓰지 않습니다. import 줄에서 무엇에 기대는지 바로 보입니다.
 
 ### mcdl/run.py
 
@@ -321,6 +323,7 @@ Run(`models/<RUN_ID>/`)을 다루는 module입니다. 평가 스크립트(Test_,
 | `Run.load_model("U"/"X", n)`, `Run.load_model_pair(u, x)` | CPU·double·eval 상태의 U-model·X-model. 학습 때와 같은 double 정밀도로 가중치를 load합니다 |
 | `RunConfig.from_mapping(values)` | sim_config 값 또는 학습 인자(`vars(args)`)에서 설정을 만듭니다. 기본값·파생값 계산이 모이는 곳 |
 | `build_model_pair(config)`, `checkpoint_filename(model, n)` | 설정에 맞는 새 모델 쌍 (U를 먼저 생성), 체크포인트 파일 이름 규칙 |
+| `make_model_path_based_timestamp(base)`, `save_net_state(model, models_dir, filename)` | 새 Run 폴더 경로(`<base>/<RUN_ID>`, 서울 시간 기준 `26MMDD_HHMMSS`), 체크포인트(CPU state_dict) 저장 (Train_) |
 | `write_sim_config(path, args, extra)` | 학습 인자를 `path/sim_config.txt`에 쓰고 그 텍스트를 돌려줍니다 (Train_) |
 | `print_sim_config(...)` | 설정 표 출력. sim_config.txt 형식이 여기서 정해지며, Test 계열은 시작할 때 콘솔 출력에 씁니다 |
 
@@ -362,20 +365,24 @@ U-model·X-model로 차량 텐서 `[x | y | Δ | q]`를 재구성해 재구성 �
 | 클래스 | 설명 |
 |---|---|
 | `CombinedAE` | MC-AE 본체 (2장 구조 참고). `analyze_outputs()`로 중간 출력 시각화 가능 |
-| `LSTM` | 양방향 LSTM (입력 7 → hidden 18×2 → 출력 2). `vin_1.pkl` 기반, 현재 파이프라인에서는 레거시 |
-| `MyDataset`, `Dataset` | LSTM / 5-텐서용 Dataset |
-| `RMSELoss` | RMSE 손실 (사용하지 않음) |
+| `CustomSigmoidFunc` | 디코더 출력 sigmoid `shift + scale·σ(x)` (U·X의 scale·shift는 학습 인자) |
+| `LSTM`, `MyDataset` | 양방향 LSTM (입력 7 → hidden 18×2 → 출력 2)과 그 Dataset. `vin_1.pkl` 기반, 현재 파이프라인에서는 레거시 |
 
-### Function_.py 주요 함수
+### mcdl/preprocessing.py
 
-| 분류 | 함수 |
+원본 pkl 로딩과 전처리입니다. 차량 단위 로딩·캐시는 `mcdl/vehicles.py`가, 이상 차량 판정은 data_filter.py가 이 module을 씁니다.
+
+| 이름 | 설명 |
 |---|---|
-| 로딩 | `safe_load` (pkl/pt/npy를 CPU로 로드) |
-| 전처리 | `get_input_dimensions`, `get_preprocessing_and_skip_charge_ready`, `preprocess_loaded_tensor`, `is_abnormal`, `get_convergence_start_index`, `normalize_columns_0_to_1` |
-| 진단 | `CustomSigmoidFunc` (진단 특징·관리도는 `mcdl/diagnosis.py`) |
-| 시각화 | `plot_roc_curve`, `draw_auc_heatmap`, `plot_diagnostics_triplet`, `plot_tsne_before_after_ci`, `plot_loss_curve_all`, `plot_net_layer_params_by_index`, `plot_testX_timeseries` |
-| 저장·설정 | `save_net_state`, `make_model_path_based_timestamp` (sim_config 읽기·쓰기는 `mcdl/run.py`, 관리도 저장·로드는 `mcdl/diagnosis.py`) |
-| 현재 미사용 | `solvers`(Kalman 기반 추정), `calculate_volt_modepi`, `ClassifyFeature`, `cont`, `diagnosis_thresholds`, `plot_contrib_percent_stacked`, LSTM 저장/로드 등 |
+| `safe_load(path)` | pkl/pt/npy를 CPU로 로드 |
+| `get_input_dimensions(battery_type)` | 차량 텐서의 열 구간(x·y·Δ·q, U·X) |
+| `get_preprocessing_and_skip_charge_ready(learning_case)` | learning_case → (0~1 정규화, 충전 대기 구간 제거) |
+| `preprocess_loaded_tensor(...)` | 5장의 전처리. DTI는 수렴 시점부터 사용 |
+| `is_abnormal(tensor)` | data_filter의 이상 차량 판정 |
+
+### mcdl/plotting.py
+
+스크립트가 쓰는 그림 함수입니다. `plot_loss_curve_all`, `plot_roc_curve`, `plot_diagnostics_triplet`, `plot_testX_timeseries`, `plot_distribution_with_stats`, `plot_net_layer_params_by_index`, `plot_tsne_before_after_ci`, `draw_auc_heatmap`이 있습니다.
 
 ### mcdl/chart_source.py
 
@@ -398,10 +405,6 @@ U-model·X-model로 차량 텐서 `[x | y | Δ | q]`를 재구성해 재구성 �
 | `load_test_vehicles(source_data_dir, config, ids)` | 테스트 차량들의 `{id: (U, X)}`. 캐시 파일은 `test_data_cache_<BT>_<hash>.pt`입니다 (Test_multi_models) |
 
 캐시 해시는 차량 ID 목록(순서 포함)과 battery_type·preprocessing·skip_charge_ready·normalize_dx의 md5이며, normalize_dx일 때만 normalize_val이 들어갑니다. 전처리 코드를 바꾸면 해시가 그대로이므로 캐시 파일을 직접 지워야 합니다.
-
-### monitering.py
-
-외부 코드(Iurii Katser, control-charts)의 Hotelling T²/Q 통계 클래스입니다. 테스트 스크립트들이 `from monitering import *`로 불러오지만, 실제 진단에는 `mcdl/diagnosis.py`의 관리도(`ControlChart`)를 사용합니다.
 
 ---
 
@@ -459,6 +462,8 @@ python Train_.py --battery-type QAS --dataset-name 10 --learning-case 1 \
 6. 최종 모델로 학습 차량의 재구성 오차 → 진단 특징 → PCA를 계산해 `pca_*`를 저장합니다.
 
 콘솔에는 저장 주기마다 `Epoch | Train Loss | Val Loss`와 총 소요 시간이 출력됩니다.
+
+**데이터 로딩**: 학습·검증 DataLoader는 배치 단위로 행을 모아 옵니다(`row_loader`). 차량 텐서를 이어 붙이지 않아 메모리 피크가 늘지 않습니다.
 
 **재현성**: 같은 인자와 `--seed`면 결과가 bit 단위로 같습니다. 다만 DataLoader는 순회할 때마다 전역 난수를 쓰므로(shuffle을 꺼도), shuffle을 켜면 X-model의 셔플 순서가 U-model 학습의 epoch 수와 `--ae-u-save-per`(검증 횟수)에 따라 달라집니다.
 

@@ -13,11 +13,18 @@ from torch.utils.data import DataLoader
 import torch.nn.functional as F
 from torch import nn
 from torchvision import transforms as tfs
-from Function_ import (
-    CustomSigmoidFunc,
-    plot_distribution_with_stats,
-    plot_testX_timeseries,
-)
+from mcdl.plotting import plot_distribution_with_stats, plot_testX_timeseries
+
+
+class CustomSigmoidFunc:
+    # The authors use scale default = 1.8, shift default = 2.5
+    # We set scale = 1, shift = 0 as default values for general use.
+    def __init__(self, scale=1, shift=0):
+        self.scale = scale
+        self.shift = shift
+
+    def forward(self, x):
+        return self.shift + self.scale * torch.sigmoid(x)
 
 
 class MyDataset(Dataset):
@@ -57,21 +64,6 @@ class LSTM(nn.Module):
         for time_step in range(r_out.size(1)):
             outs.append(self.out(r_out[:, time_step, :]))
         return torch.stack(outs, dim=1)
-
-
-class Dataset(Dataset):
-    def __init__(self, x, y, z, q, w):
-        self.x = torch.from_numpy(x).to(torch.double)
-        self.y = torch.from_numpy(y).to(torch.double)
-        self.z = torch.from_numpy(z).to(torch.double)
-        self.q = torch.from_numpy(q).to(torch.double)
-        self.w = torch.from_numpy(w).to(torch.double)
-
-    def __len__(self):
-        return len(self.x)
-
-    def __getitem__(self, idx):
-        return self.x[idx], self.y[idx], self.z[idx], self.q[idx], self.w[idx]
 
 
 class CombinedAE(nn.Module):
@@ -382,12 +374,3 @@ class CombinedAE(nn.Module):
             plt.show()
         else:
             plt.close(fig)
-
-
-class RMSELoss(nn.Module):
-    def __init__(self):
-        super().__init__()
-        self.mse = nn.MSELoss()
-
-    def forward(self, yhat, y):
-        return torch.sqrt(self.mse(yhat, y))

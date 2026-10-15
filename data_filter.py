@@ -6,8 +6,8 @@ import matplotlib.ticker as mtick
 import os
 import warnings
 import matplotlib
-from Function_ import *
-from Class_ import *
+from mcdl.preprocessing import get_input_dimensions, is_abnormal, preprocess_loaded_tensor, safe_load
+from mcdl.plotting import plot_distribution_with_stats, plot_testX_timeseries
 import torch
 
 # from sklearn.datasets import load_boston
@@ -111,16 +111,6 @@ def main(argv=None):
         # ----------------------------------------Data loading for MC-AE (customized) ------------------------------
         tensor = safe_load(f"./data/{BATTERY_TYPE}/{VEHICLE_ID}/vin_2.pkl", verbose=False)
         tensorx = safe_load(f"./data/{BATTERY_TYPE}/{VEHICLE_ID}/vin_3.pkl", verbose=False)
-
-        # volt_all = pd.DataFrame(tensor[:, dim_dict["x"] : dim_dict["x"] + dim_dict["y"]])
-        # volt_modepi, volt_di = calculate_volt_modepi(
-        #     pd.DataFrame(tensor[:, dim_dict["x"] : dim_dict["x"] + dim_dict["y"]])
-        # )
-        # Temperature = pd.DataFrame(tensor[:, dim_dict["x"] + dim_dict["y"] + dim_dict["z"]])
-        # soc_all = pd.DataFrame(
-        #     tensorx[:, dim_dict["x"] + dim_dict["y"] + dim_dict["z"] + 1]
-        # )
-        # current = pd.DataFrame(tensor[:, dim_dict["x"] + dim_dict["y"] + dim_dict["z"] + 2])
 
         tensor, tensorx = preprocess_loaded_tensor(
             tensor, tensorx, dim_dict, BATTERY_TYPE, PREPROCESSING, SKIP_CHARGE_READY
@@ -450,17 +440,6 @@ def main(argv=None):
     )
 
     print("Amount of data used for training:", combined_tensor.shape[0])
-
-    # ----------------------------------------Training for MC-AE--------------------------
-    # x_recovered = combined_tensor[:, :dim_x] # 0~1
-    # y_recovered = combined_tensor[:, dim_x:dim_x + dim_y] # 2~111
-    # z_recovered = combined_tensor[:, dim_x + dim_y: dim_x + dim_y + dim_z] # 112~221
-    # q_recovered = combined_tensor[:, dim_x + dim_y + dim_z:] # 222~
-
-    # x_recovered2 = combined_tensorx[:, :dim_x2]
-    # y_recovered2 = combined_tensorx[:, dim_x2:dim_x2 + dim_y2]
-    # z_recovered2 = combined_tensorx[:, dim_x2 + dim_y2: dim_x2 + dim_y2 + dim_z2]
-    # q_recovered2 = combined_tensorx[:, dim_x2 + dim_y2 + dim_z2:]
 
 
 if __name__ == "__main__":

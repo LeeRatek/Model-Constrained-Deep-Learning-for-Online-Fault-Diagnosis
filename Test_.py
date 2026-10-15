@@ -6,20 +6,23 @@ import matplotlib.ticker as mtick
 import os
 import warnings
 import matplotlib
-from Function_ import *
-from Class_ import *
 import torch
 
 # from sklearn.datasets import load_boston
 from sklearn.model_selection import train_test_split
 import argparse
-from monitering import *
 import time
 from mcdl.run import Run, print_sim_config
 from mcdl.reconstruction import vehicle_features
 from mcdl.chart_source import chart_for_pair
 from mcdl.vehicles import load_vehicle, split_ids
 from mcdl.roc import evaluate
+from mcdl.plotting import (
+    plot_diagnostics_triplet,
+    plot_loss_curve_all,
+    plot_net_layer_params_by_index,
+    plot_roc_curve,
+)
 
 device = torch.device("cpu")  # 평가는 CPU 전용 (Run이 CPU 모델을 돌려준다)
 # VIN_data = pd.read_excel(r'{args.source_data_dir}/Name_list.xls')
@@ -115,10 +118,6 @@ def main(argv=None):
     ## =================== DTI fault index range = [77~79] ===================
     ## =================== QAS fault index range = [335~392] ===================
 
-    # sim_config_path = os.path.join(f"{args.models_dir}/{args.models_folder}", "sim_config.txt")
-    # train_vehicle_ids = load_vehicle_ids_used_for_training(sim_config_path)
-    # all_normal_vehicle_ids = np.load(f"{DATA_BASE_PATH}/{BATTERY_TYPE}_filtered_vehicle_ids_normal.npy").astype(np.int64).tolist()
-    # normal_list = [vid for vid in all_normal_vehicle_ids if vid not in set(train_vehicle_ids)]
     normal_list = split_ids(DATA_BASE_PATH, BATTERY_TYPE, "test")
     fault_list = split_ids(DATA_BASE_PATH, BATTERY_TYPE, "fault")
     # fault_list = np.arange(335, 393)
@@ -217,47 +216,6 @@ def main(argv=None):
 
             combined_tensor, combined_tensorx = load_vehicle(args.source_data_dir, run.config, VEHICLE_ID)
 
-            # interest_order = 5
-            # do_show = False
-            # time_idx = find_max_idx_from_array(np.asarray(ERRORU, dtype=float).max(axis=1), interest_order)[0][0]
-            # print(f"Max ERRORU at time index {time_idx}, value: {ERRORU[time_idx].max():.4f}")
-            # cell_idx = np.where(ERRORU[time_idx] == ERRORU[time_idx].max())[0][0]
-            # print(f"Max ERRORU at cell index {cell_idx}, value: {ERRORU[time_idx][cell_idx]:.4f}")
-            # if do_show:
-            #     net_loaded.analyze_outputs(x_recovered, recon_imtest[1], q_recovered, recon_imtest[0], y_recovered, cell_idx=cell_idx, combine=True, ncols=3, fill="spiral")
-            #     netx_loaded.analyze_outputs(x_recovered2, reconx_imtest[1], q_recovered2, reconx_imtest[0], y_recovered2, cell_idx=cell_idx, combine=True, ncols=3, fill="spiral")
-            #     plot_testX_timeseries(ERRORU, feature_names="|U - $\hat{U}|$", title="|U - $\hat{U}|$", figsize=(6, 3), show=True, seperate=False, start_idx=0, _range=[cell_idx,cell_idx])
-            #     plot_testX_timeseries(ERRORX, feature_names="|X - $\hat{X}|$", title="|X - $\hat{X}|$", figsize=(6, 3), show=True, seperate=False, start_idx=0, _range=[cell_idx,cell_idx])
-
-            # plot_testX_timeseries(y_recovered, feature_names="U", title="U", figsize=(6, 3), show=True, seperate=False, start_idx=0, _range=[0,0])
-            # plot_testX_timeseries(y_recovered2, feature_names="X", title="X", figsize=(6, 3), show=True, seperate=False, start_idx=0, _range=[0,0])
-            # plot_testX_timeseries(recon_imtest[0], feature_names="$\hat{U}$", title="$\hat{U}$", figsize=(6, 3), show=True, seperate=False, start_idx=0, _range=[0,0])
-            # plot_testX_timeseries(reconx_imtest[0], feature_names="$\hat{X}$", title="$\hat{X}$", figsize=(6, 3), show=True, seperate=False, start_idx=0, _range=[0,0])
-            # plot_testX_timeseries(ERRORU, feature_names="|U - $\hat{U}|$", title="|U - $\hat{U}|$", figsize=(6, 3), show=True, seperate=False, start_idx=0, _range=[0,0])
-            # plot_testX_timeseries(ERRORX, feature_names="|X - $\hat{X}|$", title="|X - $\hat{X}|$", figsize=(6, 3), show=True, seperate=False, start_idx=0, _range=[0,0])
-            # plot_testX_timeseries(np.asarray(ERRORU, dtype=float).max(axis=1).reshape(ERRORU.shape[0],1), feature_names="max(|U - $\hat{U}|$)", title="max(|U - $\hat{U}|$)", figsize=(6, 3), show=True, seperate=False, start_idx=0, _range=[0,0])
-            # plot_testX_timeseries(np.asarray(ERRORX, dtype=float).max(axis=1).reshape(ERRORU.shape[0],1), feature_names="max(|X - $\hat{X}|$)", title="max(|X - $\hat{X}|$)", figsize=(6, 3), show=True, seperate=False, start_idx=0, _range=[0,0])
-
-            # plot_testX_timeseries(np.asarray(np.abs(ERRORU), dtype=float).max(axis=1).reshape(ERRORU.shape[0],1), feature_names="|max(U - $\hat{U}$)|", title="|max(U - $\hat{U}$)|", figsize=(6, 3), show=True, seperate=False, start_idx=0, _range=[0,0])
-            # plot_testX_timeseries(np.asarray(np.abs(ERRORX), dtype=float).max(axis=1).reshape(ERRORU.shape[0],1), feature_names="|max(X - $\hat{X}$)|", title="|max(X - $\hat{X}$)|", figsize=(6, 3), show=True, seperate=False, start_idx=0, _range=[0,0])
-
-            # title = ["$zu_2$", "$zx_2$", "$zu_1$", "$zx_1$", "$ewu$", "$ewx$"]
-            # for i in range(len(title)):
-            #     plot_testX_timeseries(t2_contrib[:, i].to_numpy().reshape(df_data2.shape[0],1), feature_names=title[i], title=title[i], figsize=(6, 3), show=True, seperate=False, start_idx=0, _range=[0,0])
-
-            # plot_testX_timeseries(df_data2.iloc[:,0].to_numpy().reshape(df_data2.shape[0],1), feature_names="$zu_2$", title="$zu_2$", figsize=(6, 3), show=True, seperate=False, start_idx=0, _range=[0,0])
-            # plot_testX_timeseries(df_data2.iloc[:,1].to_numpy().reshape(df_data2.shape[0],1), feature_names="$zx_2$", title="$zx_2$", figsize=(6, 3), show=True, seperate=False, start_idx=0, _range=[0,0])
-            # plot_testX_timeseries(df_data2.iloc[:,2].to_numpy().reshape(df_data2.shape[0],1), feature_names="$zu_1$", title="$zu_1$", figsize=(6, 3), show=True, seperate=False, start_idx=0, _range=[0,0])
-            # plot_testX_timeseries(df_data2.iloc[:,3].to_numpy().reshape(df_data2.shape[0],1), feature_names="$zx_1$", title="$zx_1$", figsize=(6, 3), show=True, seperate=False, start_idx=0, _range=[0,0])
-            # plot_testX_timeseries(df_data2.iloc[:,4].to_numpy().reshape(df_data2.shape[0],1), feature_names="$ewu$", title="$ewu$", figsize=(6, 3), show=True, seperate=False, start_idx=0, _range=[0,0])
-            # plot_testX_timeseries(df_data2.iloc[:,5].to_numpy().reshape(df_data2.shape[0],1), feature_names="$ewx$", title="$ewx$", figsize=(6, 3), show=True, seperate=False, start_idx=0, _range=[0,0])
-            # df_origin = (data_nor * data_std) + data_mean
-
-            # plot_testX_timeseries(z_recovered, feature_names="$\Delta{U}$", title="$\Delta{U}$", figsize=(6, 3), show=True, seperate=False, start_idx=0, _range=[0,0])
-            # plot_testX_timeseries(x_recovered[:, 0].reshape(x_recovered.shape[0],1), feature_names="$U^{pre1}$", title="$U^{pre1}$", figsize=(6, 3), show=True, seperate=False, start_idx=0, _range=[0,0])
-            # plot_testX_timeseries((x_recovered[:, 0].unsqueeze(1) + z_recovered), feature_names="$U^{pre1}$ + $\Delta{U}$", title="$U^{pre1}$ + $\Delta{U}$", figsize=(6, 3), show=True, seperate=False, start_idx=0, _range=[0,0])
-            # plot_testX_timeseries((x_recovered[:, 0].unsqueeze(1) - z_recovered), feature_names="$U^{pre1}$ - $\Delta{U}$", title="$U^{pre1}$ - $\Delta{U}$", figsize=(6, 3), show=True, seperate=False, start_idx=0, _range=[0,0])
-
             # 차량 한 대의 진단 특징 (차량 전체를 한 번에 추론, 오차의 abs 여부는 학습 진단 특징과 같은 설정을 따른다)
             df_data = vehicle_features(
                 net_loaded,
@@ -266,43 +224,8 @@ def main(argv=None):
                 combined_tensorx,
                 abs_err=not run.config.no_abs_err,
             )
-            # plot_ae_output_distribution(df_data2, do_plot=analyse_ae_output)
-
-            # u_max_idx = find_max_idx_from_array(df_data2.iloc[:,0])[0][0]
-            # ci_max_idx = find_max_idx_from_array(CI_array)[0][0]
-            # [[df_data2.iloc[u_max_idx,0],df_data2.iloc[u_max_idx,1],df_data2.iloc[u_max_idx,2],df_data2.iloc[u_max_idx,3],df_data2.iloc[u_max_idx,4],df_data2.iloc[u_max_idx,5]],
-            #  [df_data2.iloc[ci_max_idx ,0],df_data2.iloc[ci_max_idx ,1],df_data2.iloc[ci_max_idx ,2],df_data2.iloc[ci_max_idx ,3],df_data2.iloc[ci_max_idx ,4],df_data2.iloc[ci_max_idx ,5]]]
-            # [[df_data.iloc[u_max_idx,0],df_data.iloc[u_max_idx,1],df_data.iloc[u_max_idx,2],df_data.iloc[u_max_idx,3],df_data.iloc[u_max_idx,4],df_data.iloc[u_max_idx,5]],
-            # [df_data.iloc[ci_max_idx ,0],df_data.iloc[ci_max_idx ,1],df_data.iloc[ci_max_idx ,2],df_data.iloc[ci_max_idx ,3],df_data.iloc[ci_max_idx ,4],df_data.iloc[ci_max_idx ,5]]]
-
-            # max_err = np.array(df_data.iloc[:,2]).max()
-            # max_err_time = np.where(np.array(df_data.iloc[:,2])> (max_err - 0.00001))
-            # max_err2 = np.asarray(ERRORU[max_err_time,:], dtype=float).max(axis=1).max()
-            # max_err_idx = np.where(np.asarray(ERRORU[max_err_time], dtype=float) > (max_err2 - 0.00001))
-
-            # ## =================== Calculate thresholds =================== ###
-            # sigma_levels = [float(s.strip()) for s in args.sigma_levels.split(',') if s.strip()]
-            # new_X = (df_data - data_mean) / data_std
-            # pi, g, h = chi_square_dist_components(p_k, v_I, np.cov(new_X.T), SPE_95_limit, T_95_limit)
-            # thresholds = diagnosis_thresholds(g, h, sigma_levels=sigma_levels, show_plot=False)
 
             ## =================== Testing Diagnosis =================== ##
-            # feature_names=["zx1","zx2","ewx","zu1","zu2","ewu"]
-            # title = ["$zu_2$", "$zx_2$", "$zu_1$", "$zx_1$", "$ewu$", "$ewx$"]
-            # plot_contrib_percent_stacked(t2_contrib,val_array=t2_array,feature_names=title,top_k=100,mode="abs",kind="$T^2$",)
-            # plot_contrib_percent_stacked(spe_contrib,val_array=spe_array,feature_names=title,top_k=100,mode="abs",kind="SPE",)
-            # plot_contrib_percent_stacked(CI_contrib,val_array=CI_array,feature_names=title,top_k=100,mode="abs",kind="CI",)
-            # plot_contrib_percent_stacked(
-            #     CI_contrib, val_array=CI_array, feature_names=title,
-            #     kind="CI", mode="abs", plot_step=100, xtick_step=10
-            #     )
-
-            # for i in range(len(title)):
-            #     plot_testX_timeseries(t2_contrib[:, i].reshape(t2_contrib.shape[0],1), feature_names=title[i], title="t2_"+title[i], figsize=(6, 3), show=True, seperate=False, start_idx=0, _range=[0,0])
-
-            # for i in range(len(title)):
-            #     plot_testX_timeseries(spe_contrib[:, i].reshape(spe_contrib.shape[0],1), feature_names=title[i], title="spe_"+title[i], figsize=(6, 3), show=True, seperate=False, start_idx=0, _range=[0,0])
-
             if AUC_ANALYSIS:
                 # =================== 차량 판정 점수 (ROC는 루프가 끝난 뒤 evaluate에서) ===================
                 vehicle_max_ci.append(chart.max_ci(df_data))
@@ -312,27 +235,6 @@ def main(argv=None):
                 t2_array, spe_array, CI_array = chart.score(df_data)
                 title = ["$zu_2$", "$zx_2$", "$zu_1$", "$zx_1$", "$ewu$", "$ewx$"]
                 start1 = time.perf_counter()
-                # plot_contrib_percent_stacked(
-                #     CI_contrib,
-                #     val_array=CI_array,
-                #     save_path=f"{args.models_dir}/{args.models_folder}/results_ci/{VEHICLE_ID}_testing_contrib_top{learning_case}.png",
-                #     show=False,
-                #     feature_names=title,
-                #     top_k=100,
-                #     mode="abs",
-                #     kind="CI",
-                # )
-                # plot_contrib_percent_stacked(
-                #     CI_contrib,
-                #     val_array=CI_array,
-                #     save_path=f"{args.models_dir}/{args.models_folder}/results_ci/{VEHICLE_ID}_testing_contrib{learning_case}.png",
-                #     show=False,
-                #     feature_names=title,
-                #     kind="CI",
-                #     mode="abs",
-                #     plot_step=100,
-                #     xtick_step=10,
-                # )
                 plot_diagnostics_triplet(
                     t2_array,
                     spe_array,

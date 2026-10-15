@@ -4,8 +4,7 @@ import numpy as np
 import pandas as pd
 import torch
 
-from Class_ import CombinedAE
-from Function_ import CustomSigmoidFunc
+from Class_ import CombinedAE, CustomSigmoidFunc
 from mcdl.diagnosis import combine_signal_features, diagnosis_features
 from mcdl.reconstruction import (
     reconstruct,

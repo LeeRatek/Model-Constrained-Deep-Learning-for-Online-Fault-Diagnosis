@@ -22,12 +22,8 @@ from typing import Any, Mapping, Sequence
 
 import torch
 
-from Class_ import CombinedAE
-from Function_ import (
-    CustomSigmoidFunc,
-    get_input_dimensions,
-    get_preprocessing_and_skip_charge_ready,
-)
+from Class_ import CombinedAE, CustomSigmoidFunc
+from mcdl.preprocessing import get_input_dimensions, get_preprocessing_and_skip_charge_ready
 
 REQUIRED_KEYS = ("battery_type", "learning_case")
 
@@ -190,6 +186,40 @@ def write_sim_config(path, args, extra, exclude: Sequence[str] | None = None) ->
     with open(f"{path}/sim_config.txt", "w", encoding="utf-8") as f:
         f.write(text)
     return text
+
+
+def save_net_state(model, models_dir="./models", filename="net_model.pth"):
+    """
+    net(CombinedAE)의 state_dict를 CPU 텐서로 저장합니다.
+    """
+    os.makedirs(models_dir, exist_ok=True)
+    path = os.path.join(models_dir, filename)
+    state = {k: v.detach().cpu() for k, v in model.state_dict().items()}
+    torch.save(state, path)
+
+
+def make_model_path_based_timestamp(
+    base="models", make: bool = False, prefix: str = None, tz="Asia/Seoul"
+):
+    # tzinfo 설정: zoneinfo 우선, 실패 시 pytz로 폴백
+    try:
+        from zoneinfo import ZoneInfo  # Python 3.9+
+
+        tzinfo = ZoneInfo(tz)
+    except Exception:
+        import pytz  # pip install pytz 필요
+
+        tzinfo = pytz.timezone(tz)
+
+    now = datetime.now(tzinfo)
+    timestamp = now.strftime("26%m%d_%H%M%S")
+    if prefix is None:
+        path = os.path.join(base, timestamp)
+    else:
+        path = os.path.join(base, f"{prefix}_{timestamp}")
+    if make:
+        os.makedirs(path, exist_ok=True)
+    return path
 
 
 def print_sim_config(

@@ -6,19 +6,17 @@ import matplotlib.ticker as mtick
 import os
 import warnings
 import matplotlib
-from Function_ import *
-from Class_ import *
 import torch
 
 # from sklearn.datasets import load_boston
 from sklearn.model_selection import train_test_split
 import argparse
-from monitering import *
 import time
 from mcdl.run import Run, print_sim_config
 from mcdl.reconstruction import reconstruct, vehicle_features
 from mcdl.chart_source import chart_for_pair
 from mcdl.vehicles import load_vehicle, split_ids
+from mcdl.plotting import plot_loss_curve_all, plot_tsne_before_after_ci
 
 device = torch.device("cpu")  # 평가는 CPU 전용 (Run이 CPU 모델을 돌려준다)
 # VIN_data = pd.read_excel(r'{args.source_data_dir}/Name_list.xls')
@@ -124,8 +122,6 @@ parser.add_argument(
 def add_vehicle_points(df_data, label, idx):
     Xv = np.asarray(df_data, dtype=float)
     return Xv[idx], np.full(len(idx), label, dtype=int)
-    # X_list.append(Xv[idx])
-    # y_list.append(np.full(len(idx), label, dtype=int))
 
 
 def collect_vehicle_points(
@@ -204,24 +200,6 @@ def collect_vehicle_points(
             idx=idx,
         )
 
-        # x_before, y_before = add_vehicle_points(
-        #     torch.cat(
-        #         [
-        #             (recon_imtest[0] - y_recovered).detach(),
-        #             (reconx_imtest[0] - y_recovered2).detach(),
-        #         ],
-        #         dim=1,
-        #     )
-        #     .cpu()
-        #     .numpy(),
-        #     label,
-        #     idx=idx,
-        # )
-        # x_after, y_after = add_vehicle_points(
-        #     torch.cat([recon_imtest[1], reconx_imtest[1]], dim=1),
-        #     label,
-        #     idx=idx,
-        # )
         X_list_before.extend(x_before)
         Y_list_before.extend(y_before)
         X_list_after.extend(x_after)

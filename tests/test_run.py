@@ -8,8 +8,8 @@ from pathlib import Path
 import pytest
 import torch
 
-from Class_ import CombinedAE
-from Function_ import CustomSigmoidFunc, get_input_dimensions
+from Class_ import CombinedAE, CustomSigmoidFunc
+from mcdl.preprocessing import get_input_dimensions
 from mcdl.run import Run, RunConfig, build_model_pair, checkpoint_filename, write_sim_config
 
 FIXTURES = Path(__file__).parent / "fixtures"

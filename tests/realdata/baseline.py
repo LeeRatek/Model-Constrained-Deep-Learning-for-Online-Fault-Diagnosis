@@ -9,8 +9,10 @@ pytest가 수집하지 않는 파일 이름이며, 저장소 루트에서 직접
 target: test | test_u0 | tsne | multi | train | train_full
 결과:   models/_verify/baselines/<tag>/<target>.pkl  (+ 같은 이름의 .log)
 
-스크립트 코드는 건드리지 않는다. Function_의 진단·PCA·ROC 함수를 기록용 wrapper로
-바꿔 둔 뒤 runpy로 스크립트를 실행한다(스크립트는 `from Function_ import *`로 이 wrapper를 가져간다).
+스크립트 코드는 건드리지 않는다. 진단 특징·PCA·T²/SPE·ROC·t-SNE 입력 함수를 기록용 wrapper로
+바꿔 둔 뒤 runpy로 스크립트를 실행한다. 스크립트와 mcdl module은 import할 때 이 wrapper를 가져간다.
+WRAP_TARGETS의 위치 목록에는 지금 위치(mcdl.*)와 예전 위치(Function_)가 함께 있다. 예전 위치는 옛 코드로
+기준선을 다시 뜰 때만 쓰이고, 없는 module이면 건너뛴다.
 """
 
 import os
@@ -179,7 +181,7 @@ WRAP_TARGETS = [
     # 반환값(fig, axes)은 객체 주소가 섞이므로 입력만 기록한다
     (
         "plot_tsne_before_after_ci",
-        [("Function_", "plot_tsne_before_after_ci")],
+        [("Function_", "plot_tsne_before_after_ci"), ("mcdl.plotting", "plot_tsne_before_after_ci")],
         {"inputs": True, "output": False, "drop_kwargs": ("args",)},
     ),
 ]

@@ -6,21 +6,29 @@ import matplotlib.ticker as mtick
 import os
 import warnings
 import matplotlib
-from Function_ import *
-from Class_ import *
+from Class_ import LSTM, MyDataset
 import torch
 import torch.nn as nn
 
 # from sklearn.datasets import load_boston
 from sklearn.model_selection import train_test_split
 from torch.utils.data import Dataset
-from torch.utils.data import DataLoader
+from torch.utils.data import BatchSampler, DataLoader, RandomSampler, SequentialSampler
 import torch.nn.functional as F
 from torch import nn
 import time
 import argparse
 import random
-from mcdl.run import RunConfig, build_model_pair, checkpoint_filename, write_sim_config
+from pandas import DataFrame, concat
+from mcdl.preprocessing import safe_load
+from mcdl.run import (
+    RunConfig,
+    build_model_pair,
+    checkpoint_filename,
+    make_model_path_based_timestamp,
+    save_net_state,
+    write_sim_config,
+)
 from mcdl.diagnosis import ControlChart
 from mcdl.reconstruction import training_features
 from mcdl.vehicles import load_vehicle, split_ids
@@ -38,6 +46,63 @@ def set_seed(seed):
 
 
 # set_seed(42) # Moved to after args parsing
+
+
+# ---------------------------------------- LSTM (레거시) 학습 데이터 ----------------------------------------
+def series_to_supervised(data, n_in=1, n_out=1, dropnan=True):
+    """
+    Frame a time series as a supervised learning dataset.
+    Arguments:
+            data: Sequence of observations as a list or NumPy array.
+            n_in: Number of lag observations as input (X).
+            n_out: Number of observations as output (y).
+            dropnan: Boolean whether or not to drop rows with NaN values.
+    Returns:
+            Pandas DataFrame of series framed for supervised learning.
+    """
+    n_vars = 1 if type(data) is list else data.shape[1]
+    df = DataFrame(data)
+    cols, names = list(), list()
+    # input sequence (t-n, ... t-1)
+    for i in range(n_in, 0, -1):
+        cols.append(df.shift(i))
+        names += [("var%d(t-%d)" % (j + 1, i)) for j in range(n_vars)]
+    # forecast sequence (t, t+1, ... t+n)
+    for i in range(0, n_out):
+        cols.append(df.shift(-i))
+        if i == 0:
+            names += [("var%d(t)" % (j + 1)) for j in range(n_vars)]
+        else:
+            names += [("var%d(t+%d)" % (j + 1, i)) for j in range(n_vars)]
+    # put it all together
+    agg = concat(cols, axis=1)
+    agg.columns = names
+    # drop rows with NaN values
+    if dropnan:
+        agg.dropna(inplace=True)
+    return agg
+
+
+def prepare_training_data(test_X, INPUT_SIZE, TIME_STEP, device):
+    test_X_df = pd.DataFrame(test_X.cpu().detach().numpy()[:, 0, :])
+    reframed = series_to_supervised(test_X_df, 1, 1)
+    reframed.drop(
+        reframed.columns[INPUT_SIZE : INPUT_SIZE * 2 - 2], axis=1, inplace=True
+    )
+    train = reframed.values
+    train_X, train_y = (
+        train[:, :-2],
+        train[:, -2:],
+    )  # Last two columns are the targets (volt_modepi and soc)
+    train_y = train_y.reshape(-1, 2)
+    batch_train = int(reframed.shape[0] / TIME_STEP)
+
+    train_X = torch.tensor(train_X)
+    train_X = train_X.reshape(batch_train, TIME_STEP, INPUT_SIZE).to(device)
+    train_y = torch.tensor(train_y)
+    train_y = train_y.reshape(batch_train, TIME_STEP, 2).to(device)
+
+    return train_X, train_y
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
@@ -134,9 +199,12 @@ parser.add_argument(
 
 # ----------------------------------------Training for MC-AE--------------------------
 class VehicleRows(Dataset):
-    """여러 차량 텐서를 이어 붙이지 않고(메모리 피크 방지) 시점 하나씩 (x, y, Δ, q)를 double로 꺼낸다.
+    """여러 차량 텐서를 이어 붙이지 않고(메모리 피크 방지) 배치 하나를 (x, y, Δ, q) double로 꺼낸다.
 
-    열 구성 [x | y | Δ | q]의 x·y 크기는 호출자가 모델 크기에서 읽어 넘긴다 (reconstruct와 같은 규칙).
+    인덱스는 시점 번호의 목록(배치)이다 (row_loader의 BatchSampler가 넘긴다). 한 차량 안의 연속 구간이면
+    slice로, 아니면 시점을 하나씩 모아 쌓는다. 어느 쪽이든 시점마다 꺼내 collate로 쌓던 예전 방식과
+    값·stride가 같다. 열 구성 [x | y | Δ | q]의 x·y 크기는 호출자가 모델 크기에서 읽어 넘긴다
+    (reconstruct와 같은 규칙).
     """
 
     def __init__(self, tensors, x_dim, y_dim):
@@ -148,20 +216,37 @@ class VehicleRows(Dataset):
     def __len__(self):
         return self.cumulative[-1]
 
-    def __getitem__(self, idx):
-        # 이진 탐색으로 어느 차량의 몇 번째 시점인지 찾는다
+    def __getitem__(self, indices):
+        # 이진 탐색으로 각 시점이 어느 차량의 몇 번째 시점인지 찾는다
+        idx = np.asarray(indices)
         vehicle = np.searchsorted(self.cumulative, idx, side="right") - 1
-        row = self.tensors[vehicle][idx - self.cumulative[vehicle]]
+        local = idx - self.cumulative[vehicle]
+        if vehicle[0] == vehicle[-1] and np.all(np.diff(local) == 1):
+            rows = self.tensors[vehicle[0]][local[0] : local[-1] + 1]  # 한 차량 안의 연속 구간
+        else:
+            rows = torch.stack([self.tensors[v][i] for v, i in zip(vehicle, local)])
+        rows = rows.to(torch.double)
 
+        # 열 구간마다 표준 stride의 새 텐서로 만든다 (예전 collate 결과와 stride가 같아야 같은 연산 경로를 탄다).
+        # .contiguous()는 배치가 1행이면 복사하지 않아 원래 행 stride가 남으므로 clone을 쓴다.
         y_start = self.x_dim
         dx_start = y_start + self.y_dim
         q_start = dx_start + self.y_dim
-        return (
-            row[:y_start].to(torch.double),
-            row[y_start:dx_start].to(torch.double),
-            row[dx_start:q_start].to(torch.double),
-            row[q_start:].to(torch.double),
+        return tuple(
+            rows[:, a:b].clone(memory_format=torch.contiguous_format)
+            for a, b in ((0, y_start), (y_start, dx_start), (dx_start, q_start), (q_start, None))
         )
+
+
+def row_loader(tensors, x_dim, y_dim, *, batch_size, shuffle):
+    """VehicleRows를 배치 단위로 읽는 DataLoader.
+
+    sampler 구성이 DataLoader(shuffle=…, batch_size=…)가 안에서 만드는 것과 같아서, 배치 순서와
+    순회할 때의 전역 RNG 소비가 같다.
+    """
+    rows = VehicleRows(tensors, x_dim, y_dim)
+    sampler = RandomSampler(rows) if shuffle else SequentialSampler(rows)
+    return DataLoader(rows, sampler=BatchSampler(sampler, batch_size, drop_last=False), batch_size=None)
 
 
 LOSS_CSV = {"U": "loss_net", "X": "loss_netx"}
@@ -186,19 +271,12 @@ def train_autoencoder(
     net = net.double()
 
     x_dim, y_dim = net.fc1.in_features, net.fc3.out_features
-    train_loader = DataLoader(
-        VehicleRows(train_tensors, x_dim, y_dim),
-        batch_size=batch_size,
-        shuffle=shuffle,  # Shuffle is important for training
-    )
+    # Shuffle is important for training
+    train_loader = row_loader(train_tensors, x_dim, y_dim, batch_size=batch_size, shuffle=shuffle)
     if val_tensors is None:
         validate_loader = []
     else:
-        validate_loader = DataLoader(
-            VehicleRows(val_tensors, x_dim, y_dim),
-            batch_size=batch_size,
-            shuffle=False,
-        )
+        validate_loader = row_loader(val_tensors, x_dim, y_dim, batch_size=batch_size, shuffle=False)
 
     for epoch in range(epochs):
         total_loss = 0
@@ -437,9 +515,6 @@ def main(argv=None):
 
     # del v_vehicle_tensors, v_vehicle_tensorsx
 
-    # v_x_recovered = v_combined_tensor[:, : dim_dict["x"]]  # 0~1
-    # ... (슬라이싱 제거)
-
     total_val_samples = sum(len(t) for t in v_vehicle_tensors)
 
     if not is_debug:
@@ -511,16 +586,6 @@ def main(argv=None):
     print(f"{int(h)}시간 {int(m)}분 {s:.3f}초")
 
     chart.save(f"{data_path}/", df_data)
-
-    # (v_I, v, v_ratio, p_k, data_mean, data_std, T_95_limit, T_99_limit, SPE_95_limit, SPE_99_limit, P, k, P_t, X, data_nor) = results
-
-    # t2_array = T2_array(df_data, data_mean, data_std, p_k, v_I)
-    # plot_array(t2_array, title="Hotelling T² over time",
-    #             figsize=(12, 4), save_path=None, show=True)
-
-    # spe_array = SPE_array(df_data, data_mean, data_std, p_k)
-    # plot_array(spe_array, title="Squared Prediction Error over time",
-    #             figsize=(12, 4), save_path=None, show=True)
 
 
 if __name__ == "__main__":

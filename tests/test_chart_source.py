@@ -41,7 +41,7 @@ def run(tmp_path, monkeypatch):
 
 
 def preprocessed_training_vehicles(run):
-    from Function_ import get_input_dimensions, preprocess_loaded_tensor
+    from mcdl.preprocessing import get_input_dimensions, preprocess_loaded_tensor
 
     dims = get_input_dimensions("QAS")
     return [
