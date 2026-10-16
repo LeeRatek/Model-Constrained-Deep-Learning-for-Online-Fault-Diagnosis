@@ -13,12 +13,8 @@ Test_multi_models.py도 실행이 끝나면 같은 그림을 그린다. 이 스�
 
 import argparse
 import os
-import sys
 import glob
 from mcdl.plotting import draw_auc_heatmap
-
-# Ensure current directory is in path for imports if needed
-sys.path.append(os.getcwd())
 
 # 명령줄 옵션 정의. 실제 읽기(parse_args)는 main 안에서 한다 (import만 할 때는 아무것도 실행되지 않게).
 parser = argparse.ArgumentParser(description="Generate AUC Heatmap from CSV")
@@ -61,12 +57,7 @@ def main(argv=None):
     csv_file = args.csv_path
 
     if csv_file is None:
-        # If no CSV path, must have models-idx
-        if not args.models_idx:
-            print("Error: Must provide either --csv-path or --models-idx")
-            return
-
-        # Search in the model folder
+        # 모델 폴더에서 CSV를 찾는다
         search_dir = os.path.join(args.models_dir, args.models_idx)
         if not os.path.exists(search_dir):
             print(f"Error: Directory {search_dir} does not exist.")
@@ -79,21 +70,17 @@ def main(argv=None):
             )
             return
 
-        # Pick the one with largest size or most specific name?
-        # Usually checking for case number case1, case4 etc.
-        # Just pick the first one matching
-        csv_file = files[0]
+        csv_file = files[0]  # 여러 개면 처음 찾은 파일
         print(f"Found CSV: {csv_file}")
 
     if not os.path.exists(csv_file):
         print(f"Error: File {csv_file} does not exist")
         return
 
-    # Determine output path (same folder as csv, named similarly)
-    output_path = csv_file.replace(".csv", "_heatmap.png")
+    output_path = csv_file.replace(".csv", "_heatmap.png")  # CSV와 같은 폴더, 같은 이름 + _heatmap
 
     print(f"Generating heatmap for {csv_file}...")
-    draw_auc_heatmap(csv_file, output_path, title_suffix="")
+    draw_auc_heatmap(csv_file, output_path)
     print("Done.")
 
 

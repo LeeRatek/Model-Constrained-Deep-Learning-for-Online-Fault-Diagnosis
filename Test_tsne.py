@@ -29,8 +29,6 @@ from mcdl.chart_source import chart_for_pair
 from mcdl.vehicles import load_vehicle, split_ids
 from mcdl.plotting import plot_loss_curve_all, plot_tsne_before_after_ci
 
-device = torch.device("cpu")  # 평가는 CPU 전용 (Run이 CPU 모델을 돌려준다)
-
 # 명령줄 옵션 정의. 실제 읽기(parse_args)는 main 안에서 한다 (import만 할 때는 아무것도 실행되지 않게).
 parser = argparse.ArgumentParser(
     description="Run diagnostics plotting with CLI options"
@@ -123,49 +121,26 @@ parser.add_argument(
     "--save",
     action="store_true",
     default=False,
-    help="normal lo(CI>thr[0]) 오버레이를 끕니다.",
+    help="그림을 창으로 띄우지 않고 <models-dir>/<models-idx>/results_tsne/tSNE_<차량 ID>.png로 저장합니다.",
 )
 
 
-def add_vehicle_points(df_data, label, idx):
-    """한 차량의 (시점 × 값) 데이터에서 idx 시점들만 골라, 그 행들과 같은 길이의 라벨 배열(label)을 돌려준다.
-
-    쓰는 곳: collect_vehicle_points (t-SNE에 넣을 점 고르기).
-    """
-    Xv = np.asarray(df_data, dtype=float)
-    return Xv[idx], np.full(len(idx), label, dtype=int)
-
-
-def collect_vehicle_points(
-    *,
-    vehicle_ids,
-    label,
-    per_vehicle,
-    args,
-    config,
-    thresholds,
-    net_loaded,
-    netx_loaded,
-    chart,
-):
+def collect_vehicle_points(vehicle_ids, label, *, args, config, net_loaded, netx_loaded, chart):
     """차량들(vehicle_ids)에서 t-SNE에 넣을 점(시점)을 골라 모은다. label은 0(정상 기준) 또는 1(대상 차량).
 
-    차량마다: 원본을 읽고 → 진단 특징으로 CI를 계산하고 → 무작위 per_vehicle개 시점에, CI가 임계값을 넘은
-    시점(임계값마다 최대 100개)을 더해 점을 고른다. 고른 시점의 실제 셀 값(before)과 재구성 값(after)을 모으고,
+    차량마다: 원본을 읽고 → 진단 특징으로 CI를 계산하고 → 무작위 args.per_vehicle개 시점에, CI가 임계값(args.thr)을
+    넘은 시점(임계값마다 최대 100개)을 더해 점을 고른다. 고른 시점의 실제 셀 값(before)과 재구성 값(after)을 모으고,
     점마다 알람 단계(0 없음, 1 첫 번째 임계값 초과, 2 두 번째 임계값 초과)를 기록한다. 시점은 시드 0으로 골라
     실행할 때마다 같다.
-    돌려주는 값: (점·라벨·알람 단계를 담은 dict, 마지막 차량의 CI 시계열).
+    돌려주는 값: ({"before", "after", "labels", "alarm_levels": 점마다의 목록}, 마지막 차량의 CI 시계열).
     쓰는 곳: main (기준 정상 차량 묶음 한 번, 대상 차량마다 한 번).
     """
-    X_list_before, Y_list_before = [], []
-    X_list_after, Y_list_after = [], []
-    alarm_masks = {"before": [], "after": []}
-
+    thresholds = args.thr
+    points = {"before": [], "after": [], "labels": [], "alarm_levels": []}
     CI_last = None
 
     for i in vehicle_ids:
-        VEHICLE_ID = f"{i}"
-        combined_tensor, combined_tensorx = load_vehicle(args.source_data_dir, config, VEHICLE_ID)
+        combined_tensor, combined_tensorx = load_vehicle(args.source_data_dir, config, i)
 
         # CI는 차량 한 대의 진단 특징으로 (차량 전체를 한 번에 추론, 오차의 abs 여부는 학습 진단 특징과 같은 설정을 따른다),
         # t-SNE 점은 재구성 대상 y와 재구성 결과 ŷ로 만든다
@@ -198,7 +173,7 @@ def collect_vehicle_points(
 
         idx = np.random.default_rng(0).choice(
             y_recovered.shape[0],
-            size=min(per_vehicle, y_recovered.shape[0]),
+            size=min(args.per_vehicle, y_recovered.shape[0]),
             replace=False,
         )
         # thresholds[0]/[1] 초과 샘플을 반드시 포함 (현재 차량 기준)
@@ -210,42 +185,22 @@ def collect_vehicle_points(
         if len(to_add) > 0:
             idx = np.unique(np.concatenate([idx, *to_add]))
 
-        x_before, y_before = add_vehicle_points(
-            torch.cat([y_recovered, y_recovered2], dim=1),
-            label,
-            idx=idx,
-        )
-        x_after, y_after = add_vehicle_points(
-            torch.cat([recon_u, recon_x], dim=1),
-            label,
-            idx=idx,
-        )
+        # 고른 시점의 [셀 전압 | 셀 SOC] 행: 실제 값(before)과 재구성 값(after)
+        points["before"].extend(np.asarray(torch.cat([y_recovered, y_recovered2], dim=1), dtype=float)[idx])
+        points["after"].extend(np.asarray(torch.cat([recon_u, recon_x], dim=1), dtype=float)[idx])
+        points["labels"].extend([label] * len(idx))
 
-        X_list_before.extend(x_before)
-        Y_list_before.extend(y_before)
-        X_list_after.extend(x_after)
-        Y_list_after.extend(y_after)
-
-        # 샘플링된 idx 중 알람 레벨 표시
-        # 0: none, 1: thresholds[0] 초과, 2: thresholds[1] 초과
+        # 고른 시점의 알람 단계 (0: 없음, 1: thresholds[0] 초과, 2: thresholds[1] 초과)
         alarm_levels = np.zeros(len(idx), dtype=np.int8)
         if alarmed_idx_lo.size > 0:
             alarm_levels[np.isin(idx, alarmed_idx_lo)] = 1
         if alarmed_idx_hi.size > 0:
             alarm_levels[np.isin(idx, alarmed_idx_hi)] = 2
-        alarm_masks["before"].extend(alarm_levels.tolist())
-        alarm_masks["after"].extend(alarm_levels.tolist())
+        points["alarm_levels"].extend(alarm_levels.tolist())
 
         print(f"Done (label={label}, vehicle={i})")
 
-    pack = {
-        "X_list_before": X_list_before,
-        "Y_list_before": Y_list_before,
-        "X_list_after": X_list_after,
-        "Y_list_after": Y_list_after,
-        "alarm_masks": alarm_masks,
-    }
-    return pack, CI_last
+    return points, CI_last
 
 
 def main(argv=None):
@@ -254,37 +209,24 @@ def main(argv=None):
     argv를 주면 명령줄 대신 그 목록을 옵션으로 읽는다(테스트에서 이렇게 부른다). 쓰는 곳: 이 파일 맨 아래 실행부.
     """
     os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
-    print(torch.cuda.device_count())
-
     warnings.filterwarnings("ignore")
 
     args = parser.parse_args(argv)
 
-    thresholds = list(args.thr)
     run = Run(f"{args.models_dir}/{args.models_idx}")
-    learning_case = run.config.learning_case
-
-    DATA_BASE_PATH = run.config.split_dir
-    print(f"Using dataset from: {DATA_BASE_PATH}")
-    add_one_output_layer = run.config.add_one_output_layer
-    use_dx = run.config.use_dx
-
-    # 플롯 결과 저장 폴더는 한 번만 생성
-    os.makedirs(f"{args.models_dir}/{args.models_idx}/results", exist_ok=True)
-
-    BATTERY_TYPE = run.config.battery_type  # 'DTI' or 'QAS'
-    PREPROCESSING, SKIP_CHARGE_READY = run.config.preprocessing, run.config.skip_charge_ready
+    config = run.config
+    print(f"Using dataset from: {config.split_dir}")
 
     print_sim_config(
         title="Train Run",
         config=args,
         extra={
-            "device": str(device),
-            "learning_case": learning_case,
-            "PREPROCESSING": PREPROCESSING,
-            "SKIP_CHARGE_READY": SKIP_CHARGE_READY,
-            "no_use_dx": not use_dx,
-            "add_one_output_layer": add_one_output_layer,
+            "device": "cpu",  # 평가는 CPU에서 한다 (Run이 CPU 모델을 돌려준다)
+            "learning_case": config.learning_case,
+            "PREPROCESSING": config.preprocessing,
+            "SKIP_CHARGE_READY": config.skip_charge_ready,
+            "no_use_dx": not config.use_dx,
+            "add_one_output_layer": config.add_one_output_layer,
         },
     )
 
@@ -293,78 +235,37 @@ def main(argv=None):
     except Exception as e:
         print(f"Error plotting loss curve: {e}")
 
-
-    ## =================== DTI fault index range = [77~79] ===================
-    ## =================== QAS fault index range = [335~392] ===================
-    validate_list = split_ids(DATA_BASE_PATH, BATTERY_TYPE, "validate")
-    normal_list = split_ids(DATA_BASE_PATH, BATTERY_TYPE, "test")
-    fault_list = split_ids(DATA_BASE_PATH, BATTERY_TYPE, "fault")
-
-
-    ## =================== Load training data  =================== ##
     # 관리도: 같은 조건 캐시 → 최종 모델 쌍이면 저장된 관리도 → 그 밖엔 학습 데이터로 재계산
     chart = chart_for_pair(run, args.u_model_idx, args.x_model_idx, source_data_dir=args.source_data_dir)
-
     net_loaded, netx_loaded = run.load_model_pair(args.u_model_idx, args.x_model_idx)
-
+    # collect_vehicle_points 호출마다 똑같이 넘기는 값
+    shared = dict(args=args, config=config, net_loaded=net_loaded, netx_loaded=netx_loaded, chart=chart)
 
     start = time.perf_counter()
-    cnt_max = args.cnt_max
-    per_vehicle = args.per_vehicle
-    # label=0(정상) 차량은 1회만 고정 수집
-    normal_vehicle_ids = validate_list[0:cnt_max]
-    normal_pack, _ = collect_vehicle_points(
-        vehicle_ids=normal_vehicle_ids,
-        label=0,
-        per_vehicle=per_vehicle,
-        args=args,
-        config=run.config,
-        thresholds=thresholds,
-        net_loaded=net_loaded,
-        netx_loaded=netx_loaded,
-        chart=chart,
-    )
+    # 정상 기준 점은 validate 분할 앞쪽 --cnt-max대에서 한 번만 모은다 (label 0)
+    validate_list = split_ids(config.split_dir, config.battery_type, "validate")
+    normal_points, _ = collect_vehicle_points(validate_list[: args.cnt_max], 0, **shared)
 
-    # label=1(고장) 차량 인덱스는 바꿔가며 반복 플롯
-
-    test_list = [*normal_list, *fault_list]
-    test_idx = test_list if args.fault_idx == -1 else [args.fault_idx]
-    test_vehicle_idxs = test_idx
-    for test_vehicle_idx in test_vehicle_idxs:
-        fault_pack, CI_fault = collect_vehicle_points(
-            vehicle_ids=[test_vehicle_idx],
-            label=1,
-            per_vehicle=per_vehicle,
-            args=args,
-            config=run.config,
-            thresholds=thresholds,
-            net_loaded=net_loaded,
-            netx_loaded=netx_loaded,
-            chart=chart,
+    # 대상 차량(label 1)마다 점을 모아 정상 기준 점과 합쳐 그린다
+    if args.fault_idx == -1:
+        target_ids = split_ids(config.split_dir, config.battery_type, "test") + split_ids(
+            config.split_dir, config.battery_type, "fault"
         )
+    else:
+        target_ids = [args.fault_idx]
+    for target_id in target_ids:
+        target_points, CI_target = collect_vehicle_points([target_id], 1, **shared)
 
-        X_list_before = normal_pack["X_list_before"] + fault_pack["X_list_before"]
-        Y_list_before = normal_pack["Y_list_before"] + fault_pack["Y_list_before"]
-        X_list_after = normal_pack["X_list_after"] + fault_pack["X_list_after"]
-        Y_list_after = normal_pack["Y_list_after"] + fault_pack["Y_list_after"]
-        alarm_masks = {
-            "before": normal_pack["alarm_masks"]["before"]
-            + fault_pack["alarm_masks"]["before"],
-            "after": normal_pack["alarm_masks"]["after"]
-            + fault_pack["alarm_masks"]["after"],
-        }
-
-        print(f"\n=== Plotting test_vehicle_idx={test_vehicle_idx} ===")
+        print(f"\n=== Plotting test_vehicle_idx={target_id} ===")
         plot_tsne_before_after_ci(
-            X_list_before=X_list_before,
-            Y_list_before=Y_list_before,
-            X_list_after=X_list_after,
-            Y_list_after=Y_list_after,
-            alarm_masks=alarm_masks,
-            CI_array=CI_fault,
-            thresholds=thresholds,
+            X_before=normal_points["before"] + target_points["before"],
+            X_after=normal_points["after"] + target_points["after"],
+            labels=normal_points["labels"] + target_points["labels"],
+            alarm_levels=normal_points["alarm_levels"] + target_points["alarm_levels"],
+            CI_array=CI_target,
+            thresholds=args.thr,
             args=args,
-            vehicle_idx=test_vehicle_idx,
+            vehicle_idx=target_id,
         )
 
     elapsed = time.perf_counter() - start

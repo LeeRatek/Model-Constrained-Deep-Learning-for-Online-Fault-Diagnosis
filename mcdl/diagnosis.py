@@ -53,7 +53,7 @@ def signal_features(signal: str, error):
     arr_std = np.maximum(arr.std(axis=1), _EPS)
 
     z = ((arr - arr_mean[:, None]) / arr_std[:, None]).max(axis=1)
-    second = np.partition(arr, -2, axis=1)[:, -2] if arr.shape[1] >= 2 else arr[:, 0]
+    second = np.partition(arr, -2, axis=1)[:, -2]  # 시점마다 두 번째로 큰 오차
     max_diff = (arr_max - second) / arr_std
     ewma = pd.Series(arr_max).ewm(alpha=_EWMA_ALPHA).mean()
 
@@ -169,8 +169,8 @@ class ControlChart:
         CI = SPE/SPE 관리한계 + T²/T² 관리한계. 두 지표가 모두 관리한계 이하이면 CI는 2 이하다.
         쓰는 곳: Test_.py(진단 그림 모드), Test_tsne.py(알람 시점 찾기), 아래 max_ci.
         """
-        t2, _ = _t2(features, self._mean, self._std, self._p_k, self._v_I)
-        spe, _ = _spe(features, self._mean, self._std, self._p_k)
+        t2 = _t2(features, self._mean, self._std, self._p_k, self._v_I)
+        spe = _spe(features, self._mean, self._std, self._p_k)
         return t2, spe, (spe / self.spe_limit) + (t2 / self.t2_limit)
 
     def max_ci(self, features: pd.DataFrame) -> float:
@@ -188,17 +188,12 @@ def _sliding_average(s, n: int):
     처음 n개 시점은 앞에 값이 모자라므로 처음 n개 값의 평균으로 채운다. 길이가 n 이하이면 그대로 돌려준다.
     """
     a = np.asarray(s, dtype=float).reshape(-1)
-    L = int(a.shape[0])
-    n = int(n)
-    if L == 0:
-        return a
-    if L <= n or n <= 0:
+    L = a.shape[0]
+    if L <= n:
         return a
     out = np.empty(L, dtype=float)
-    first_mean = float(np.mean(a[:n]))
-    out[:n] = first_mean
-    c = np.cumsum(a, dtype=float)
-    c = np.concatenate(([0.0], c))
+    out[:n] = float(np.mean(a[:n]))
+    c = np.concatenate(([0.0], np.cumsum(a, dtype=float)))
     window_sums = c[n:] - c[:-n]  # ends at n..L
     out[n:] = window_sums[:-1] / n  # ends at n..L-1
     return out
@@ -276,27 +271,22 @@ def _t2(data_in, data_mean, data_std, p_k, v_I):
     """ControlChart.score 안에서 쓴다. 시점마다 호텔링 T²를 계산한다.
 
     특징을 학습 때의 평균·표준편차로 표준화한 뒤, 선택한 주성분 방향에서 각 성분을 그 분산으로 나눠
-    제곱합한다(평소 퍼진 정도에 비해 얼마나 멀리 있는지). (T², 특징별 기여도)를 돌려준다.
+    제곱합한다(평소 퍼진 정도에 비해 얼마나 멀리 있는지).
     """
     D = p_k @ v_I @ p_k.T  # (F×F)
     X = np.asarray((data_in - data_mean) / data_std, dtype=float)  # (N×F)
-    contrib_array = (X @ D) * X
-    return np.sum(contrib_array, axis=1), contrib_array
+    return np.sum((X @ D) * X, axis=1)
 
 
 def _spe(data_in, data_mean, data_std, p_k):
     """ControlChart.score 안에서 쓴다. 시점마다 SPE(주성분으로 설명되지 않는 잔차의 제곱합)를 계산한다.
 
-    식: SPE_i = ||(I - p_k p_k^T) x_i||^2 (x_i는 표준화한 특징 벡터). (SPE, 특징별 잔차²)를 돌려준다.
+    식: SPE_i = ||(I - p_k p_k^T) x_i||^2 (x_i는 표준화한 특징 벡터).
     """
-    X = np.asarray((data_in - data_mean) / data_std, dtype=float)
-    if X.ndim == 1:
-        X = X[None, :]  # (1, F)
-    F_dim = p_k.shape[0]
-    C = p_k @ p_k.T  # (F, F)
-    M = np.eye(F_dim) - C  # residual projection
-    R = X @ M  # (N, F)
-    return np.einsum("ij,ij->i", R, R), R**2  # row-wise squared norm
+    X = np.asarray((data_in - data_mean) / data_std, dtype=float)  # (N×F)
+    M = np.eye(p_k.shape[0]) - p_k @ p_k.T  # 주성분 공간 밖으로 보내는 투영 (F×F)
+    R = X @ M  # 잔차 (N×F)
+    return np.einsum("ij,ij->i", R, R)  # 행마다 제곱합
 
 
 def _save_pca(output_dir, pca_outputs):
@@ -348,19 +338,8 @@ def _save_pca(output_dir, pca_outputs):
         X=np.asarray(X),
     )
 
-    # Save data_nor: keep original type
-    data_nor_type = "DataFrame" if isinstance(data_nor, pd.DataFrame) else "ndarray"
-    if data_nor_type == "DataFrame":
-        # No extra engines required; use CSV
-        data_nor.to_csv(df_path, index=True)
-        df_shape = list(data_nor.shape)
-    else:
-        # Store ndarray into separate NPZ for clarity
-        np.savez_compressed(
-            os.path.join(output_dir, "pca_data_nor.npz"), data_nor=np.asarray(data_nor)
-        )
-        df_path = os.path.join(output_dir, "pca_data_nor.npz")
-        df_shape = list(np.asarray(data_nor).shape)
+    # data_nor(표준화한 학습 특징 DataFrame)는 기록용 CSV로 저장한다
+    data_nor.to_csv(df_path, index=True)
 
     manifest = {
         "types": {
@@ -378,7 +357,7 @@ def _save_pca(output_dir, pca_outputs):
             "k": "ndarray",
             "P_t": "ndarray",
             "X": "ndarray",
-            "data_nor": data_nor_type,
+            "data_nor": "DataFrame",
         },
         "shapes": {
             "v_I": list(np.asarray(v_I).shape),
@@ -391,7 +370,7 @@ def _save_pca(output_dir, pca_outputs):
             "k": list(np.asarray(k).shape),
             "P_t": list(np.asarray(P_t).shape),
             "X": list(np.asarray(X).shape),
-            "data_nor": df_shape,
+            "data_nor": list(data_nor.shape),
         },
         "paths": {"arrays": arrays_path, "data_nor": df_path},
     }

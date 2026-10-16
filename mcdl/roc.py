@@ -18,6 +18,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import numpy as np
+from sklearn import metrics
 
 # 검사할 임계값 목록: 0, 0.1, 0.2, …, 999.9 (10,000개).
 # list를 거쳐 만드는 방식까지 예전 스크립트와 같게 두어, 결과 CSV에 찍히는 값(0.30000000000000004 등)이 그대로다.
@@ -71,31 +72,13 @@ def _roc_from_threshold_matrix(y_true, predict_results, predict_thresholds):
     곡선 양 끝에 (0,0)과 (1,1)을 더하고, FPR 오름차순(같으면 TPR 오름차순)으로 정렬해 계단 모양 곡선을 만든다.
 
     Returns:
-        dict: fpr, tpr, thresholds(곡선 점마다의 임계값), auc, candidate_idx(양 끝 점을 뺀 실제 임계값의 위치),
-        pos_count, neg_count(양성·음성 차량 수)
+        dict: fpr, tpr, thresholds(곡선 점마다의 임계값), auc, candidate_idx(양 끝 점을 뺀 실제 임계값의 위치)
     """
-    from sklearn import metrics as sk_metrics
-
-    y_true = np.asarray(y_true)
-    if y_true.ndim != 1:
-        y_true = y_true.reshape(-1)
-
     pos_count = int(np.sum(y_true == 1))
     neg_count = int(np.sum(y_true == 0))
     if pos_count == 0 or neg_count == 0:
         raise ValueError(
             f"ROC 계산을 위해 정상/고장 샘플이 모두 필요합니다. pos={pos_count}, neg={neg_count}"
-        )
-
-    predict_results = np.asarray(predict_results)
-    predict_thresholds = np.asarray(predict_thresholds, dtype=float)
-    if predict_results.ndim != 2:
-        raise ValueError(
-            f"predict_results는 2D여야 합니다. got ndim={predict_results.ndim}"
-        )
-    if predict_results.shape[1] != predict_thresholds.shape[0]:
-        raise ValueError(
-            f"predict_results.shape[1]({predict_results.shape[1]}) != len(predict_thresholds)({predict_thresholds.shape[0]})"
         )
 
     # threshold를 큰 값 -> 작은 값으로 낮추면, 예측 Positive가 늘어나며 ROC가 (0,0) -> (1,1)로 진행
@@ -126,50 +109,29 @@ def _roc_from_threshold_matrix(y_true, predict_results, predict_thresholds):
     tpr = tpr[sort_idx]
     thr_arr = thr_arr[sort_idx]
 
-    auc_val = float(sk_metrics.auc(fpr, tpr))
-
-    finite_mask = np.isfinite(thr_arr)
-    candidate_idx = np.where(finite_mask)[0]
+    auc_val = float(metrics.auc(fpr, tpr))
 
     return {
         "fpr": fpr,
         "tpr": tpr,
         "thresholds": thr_arr,
         "auc": auc_val,
-        "candidate_idx": candidate_idx,
-        "pos_count": pos_count,
-        "neg_count": neg_count,
+        "candidate_idx": np.where(np.isfinite(thr_arr))[0],
     }
 
 
-def _optimal_thresholds(fpr, tpr, thresholds, *, candidate_idx=None):
+def _optimal_thresholds(fpr, tpr, thr_arr, *, candidate_idx):
     """evaluate 안에서 쓴다. ROC 곡선 위에서 추천 임계값 두 개를 고른다.
 
     Youden J(TPR − FPR)가 가장 큰 점과, (FPR 0, TPR 1)까지 거리가 가장 짧은 점이다. 같은 값이 여럿이면
-    앞쪽(작은 FPR) 점을 고른다. candidate_idx가 있으면 곡선 양 끝의 가상 점(임계값 ±무한대)은 빼고 고른다.
+    앞쪽(작은 FPR) 점을 고른다. candidate_idx(실제 임계값의 위치)에서만 골라, 곡선 양 끝의 가상 점
+    (임계값 ±무한대)은 빼고 고른다.
     """
-    fpr = np.asarray(fpr, dtype=float)
-    tpr = np.asarray(tpr, dtype=float)
-    thr_arr = np.asarray(thresholds, dtype=float)
-    if fpr.shape != tpr.shape or fpr.shape != thr_arr.shape:
-        raise ValueError("fpr/tpr/thresholds는 같은 shape 여야 합니다.")
-
-    if candidate_idx is None:
-        candidate_idx = np.where(np.isfinite(thr_arr))[0]
-    else:
-        candidate_idx = np.asarray(candidate_idx, dtype=int)
-
     j_scores = tpr - fpr
-    if candidate_idx.size > 0:
-        best_idx = int(candidate_idx[np.argmax(j_scores[candidate_idx])])
-    else:
-        best_idx = int(np.argmax(j_scores))
+    best_idx = int(candidate_idx[np.argmax(j_scores[candidate_idx])])
 
     dist2 = (fpr**2) + ((1.0 - tpr) ** 2)
-    if candidate_idx.size > 0:
-        closest_idx = int(candidate_idx[np.argmin(dist2[candidate_idx])])
-    else:
-        closest_idx = int(np.argmin(dist2))
+    closest_idx = int(candidate_idx[np.argmin(dist2[candidate_idx])])
 
     ## ================ Youden J 기준 최적점 ================
     best = {

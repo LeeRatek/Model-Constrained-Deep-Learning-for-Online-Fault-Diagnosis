@@ -226,12 +226,9 @@ def train_autoencoder(
     for epoch in range(epochs):
         total_loss = 0
         num_batches = 0
-        for x, y, z, q in train_loader:
-            x = x.to(device)
-            y = y.to(device)
-            z = z.to(device)
-            q = q.to(device)
-            net.train()
+        net.train()
+        for batch in train_loader:
+            x, y, z, q = (t.to(device) for t in batch)
             recon_im, _ = net(x, z, q)
             loss = loss_f(y, recon_im)
             total_loss += loss.item()
@@ -247,17 +244,13 @@ def train_autoencoder(
             v_total = 0.0
             v_batches = 0
             with torch.inference_mode():
-                for vx, vy, vz, vq in validate_loader:
-                    vx = vx.to(device)
-                    vy = vy.to(device)
-                    vz = vz.to(device)
-                    vq = vq.to(device)
+                for batch in validate_loader:
+                    vx, vy, vz, vq = (t.to(device) for t in batch)
                     v_recon_im, _ = net(vx, vz, vq)
-                    v_loss = loss_f(vy, v_recon_im)
-                    v_total += float(v_loss.item())
+                    v_total += loss_f(vy, v_recon_im).item()
                     v_batches += 1
             avg_val_loss = v_total / max(v_batches, 1)
-            val_loss_points.append((int(epoch), float(avg_val_loss)))
+            val_loss_points.append((epoch, avg_val_loss))
 
             print(
                 "Epoch: {:2d} | Train Loss: {:.4f} | Val Loss: {:.4f}".format(
@@ -315,22 +308,12 @@ def main(argv=None):
 
     set_seed(args.seed)
 
-    BATTERY_TYPE = args.battery_type  # 'DTI' or 'QAS'
-    use_dx_in_forward = not args.no_use_dx
-    use_abs_err = not args.no_abs_err
-
     # --debug: 학습·검증 차량 1대씩, use_dx 끔, sim_config.txt 생략 (빠른 확인용)
-    is_debug = args.debug
-
-    if is_debug:
-        use_dx_in_forward = False
+    if args.debug:
         print("현재 디버그 모드로 실행 중입니다.")
 
-    # 데이터 로딩과 모델 생성에 함께 쓰는 Run 설정 (디버그 모드에서는 use_dx_in_forward가 False로 강제되어 있다)
-    run_config = RunConfig.from_mapping({**vars(args), "no_use_dx": not use_dx_in_forward})
-    PREPROCESSING, SKIP_CHARGE_READY = run_config.preprocessing, run_config.skip_charge_ready
-
-    # 모델 저장 경로 설정
+    # 데이터 로딩과 모델 생성에 함께 쓰는 Run 설정 (디버그 모드에서는 use_dx를 끈다)
+    run_config = RunConfig.from_mapping({**vars(args), "no_use_dx": args.no_use_dx or args.debug})
 
     data_path = make_model_path_based_timestamp(base=args.models_dir)
 
@@ -344,72 +327,48 @@ def main(argv=None):
         dataset_base_path = "."
 
     train_list = split_ids(
-        dataset_base_path, BATTERY_TYPE, "train", start=args.vehicle_start, end=args.vehicle_end
+        dataset_base_path, args.battery_type, "train", start=args.vehicle_start, end=args.vehicle_end
     )
-    if not args.no_validation:
-        validate_list = split_ids(dataset_base_path, BATTERY_TYPE, "validate")
-    else:
-        print("Validation skipped by user request.")
-        validate_list = []
+    if args.debug:
+        train_list = train_list[:1]
 
-    vehicle_idxes = []
-
+    # 차량을 하나로 이어 붙이지 않고 차량별 텐서 목록으로 둔다 (메모리를 두 배로 쓰지 않게)
     vehicle_tensors = []
     vehicle_tensorsx = []
-
-    count = 0
-    for i in train_list:
-        count += 1
+    for count, vehicle_id in enumerate(train_list, start=1):
         if count % 10 == 0:
             print(f"Processing vehicle {count}/{len(train_list)}")
-        VEHICLE_ID = f"{i}"
-        vehicle_idxes.append(VEHICLE_ID)
-        # ----------------------------------------Data loading and preprocessing for MC-AE ------------------------------
-        tensor, tensorx = load_vehicle(args.source_data_dir, run_config, VEHICLE_ID)
-
+        tensor, tensorx = load_vehicle(args.source_data_dir, run_config, vehicle_id)
         vehicle_tensors.append(tensor)
         vehicle_tensorsx.append(tensorx)
-        if is_debug:
-            break
-
-    # combined_tensor를 생성하지 않고 리스트만 유지하여 메모리 피크 방지
-
-
-    # Total training samples calculation
-    total_train_samples = sum(len(t) for t in vehicle_tensors)
-
-
-    v_vehicle_tensors = []
-    v_vehicle_tensorsx = []
 
     if args.no_validation:
-        print("Skipping validation.")
+        print("Validation skipped by user request.")
+        v_vehicle_tensors = v_vehicle_tensorsx = None
     else:
-        # ----------------------------------------Validation Data Loading ------------------------------
-        count = 0
-
-        for i in validate_list:
-            count += 1
+        validate_list = split_ids(dataset_base_path, args.battery_type, "validate")
+        if args.debug:
+            validate_list = validate_list[:1]
+        v_vehicle_tensors = []
+        v_vehicle_tensorsx = []
+        for count, vehicle_id in enumerate(validate_list, start=1):
             if count % 10 == 0:
                 print(f"Processing validation vehicle {count}/{len(validate_list)}")
-            v_tensor, v_tensorx = load_vehicle(args.source_data_dir, run_config, i)
-
+            v_tensor, v_tensorx = load_vehicle(args.source_data_dir, run_config, vehicle_id)
             v_vehicle_tensors.append(v_tensor)
             v_vehicle_tensorsx.append(v_tensorx)
-            if is_debug:
-                break
 
-    if not is_debug:
+    if not args.debug:
         text = write_sim_config(
             data_path,
             args,
             exclude=("debug",),
             extra={
                 "device": str(device),
-                "Vehicle IDs used for training": vehicle_idxes,
-                "Amount of data used for training": total_train_samples,
-                "PREPROCESSING": PREPROCESSING,
-                "SKIP_CHARGE_READY": SKIP_CHARGE_READY,
+                "Vehicle IDs used for training": train_list,
+                "Amount of data used for training": sum(len(t) for t in vehicle_tensors),
+                "PREPROCESSING": run_config.preprocessing,
+                "SKIP_CHARGE_READY": run_config.skip_charge_ready,
             },
         )
         print(text, end="")  # 콘솔 출력
@@ -423,7 +382,7 @@ def main(argv=None):
         net,
         "U",
         vehicle_tensors,
-        None if args.no_validation else v_vehicle_tensors,
+        v_vehicle_tensors,
         epochs=args.ae_u_epochs,
         save_per=args.ae_u_save_per,
         lr=args.ae_u_lr,
@@ -439,7 +398,7 @@ def main(argv=None):
         netx,
         "X",
         vehicle_tensorsx,
-        None if args.no_validation else v_vehicle_tensorsx,
+        v_vehicle_tensorsx,
         epochs=args.ae_x_epochs,
         save_per=args.ae_x_save_per,
         lr=args.ae_x_lr,
@@ -450,14 +409,13 @@ def main(argv=None):
         save=not args.no_save,
     )
 
-    # Optimization: Calculate Diagnosis Features Per Vehicle to handle variance differences
     print("Calculating features per vehicle...")
     net.eval()
     netx.eval()
 
     # 학습 진단 특징: 차량마다 재구성 오차(batch 4096) → 진단 특징을 구해 이어 붙인다
     df_data = training_features(
-        net, netx, zip(vehicle_tensors, vehicle_tensorsx), batch_size=4096, abs_err=use_abs_err
+        net, netx, zip(vehicle_tensors, vehicle_tensorsx), batch_size=4096, abs_err=not args.no_abs_err
     )
 
     chart = ControlChart.fit(df_data)

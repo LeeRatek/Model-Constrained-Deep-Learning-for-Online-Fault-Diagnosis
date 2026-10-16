@@ -69,7 +69,7 @@ python -m pytest        # 원본 데이터 없이 30초 안팎. 모두 passed면
 [Zenodo 데이터셋](https://doi.org/10.5281/zenodo.10656500)을 받아 `data/QAS/<차량 ID>/vin_2.pkl` 구조로 둡니다(5장). 잘 놓였는지는 다음으로 확인합니다.
 
 ```bash
-python -c "from mcdl.preprocessing import safe_load; print(safe_load('data/QAS/0/vin_2.pkl', verbose=False).shape)"
+python -c "from mcdl.preprocessing import safe_load; print(safe_load('data/QAS/0/vin_2.pkl').shape)"
 # torch.Size([43546, 225])  ← (시점 수, 열 수). 열 수가 225이면 QAS U-model 입력입니다
 ```
 
@@ -419,8 +419,8 @@ Run(`models/<RUN_ID>/`)을 다루는 module입니다. 평가 스크립트(Test_,
 | `RunConfig.from_mapping(values)` | sim_config 값 또는 학습 인자(`vars(args)`)에서 설정을 만듭니다. 기본값·파생값 계산이 모이는 곳 |
 | `build_model_pair(config)`, `checkpoint_filename(model, n)` | 설정에 맞는 새 모델 쌍 (U를 먼저 생성), 체크포인트 파일 이름 규칙 |
 | `make_model_path_based_timestamp(base)`, `save_net_state(model, models_dir, filename)` | 새 Run 폴더 경로(`<base>/<RUN_ID>`, 서울 시간 기준 `26MMDD_HHMMSS`), 체크포인트(CPU state_dict) 저장 (Train_) |
-| `write_sim_config(path, args, extra, exclude=None)` | 학습 인자를 `path/sim_config.txt`에 쓰고 그 텍스트를 돌려줍니다. `exclude` 키는 쓰지 않습니다 (Train_은 `debug`를 뺍니다) |
-| `print_sim_config(...)` | 설정 표 출력. sim_config.txt 형식이 여기서 정해지며, Test 계열은 시작할 때 콘솔 출력에 씁니다 |
+| `write_sim_config(path, args, extra, exclude=())` | 학습 인자를 `path/sim_config.txt`에 쓰고 그 텍스트를 돌려줍니다. `exclude` 키는 쓰지 않습니다 (Train_은 `debug`를 뺍니다) |
+| `print_sim_config(title, config, extra, exclude=())` | 설정 표 출력. sim_config.txt 형식이 여기서 정해지며, Test 계열은 시작할 때 콘솔 출력에 씁니다 |
 
 ### mcdl/reconstruction.py
 
@@ -468,7 +468,7 @@ U-model·X-model로 차량 텐서 `[x | y | Δ | q]`를 재구성해 재구성 �
 
 | 이름 | 설명 |
 |---|---|
-| `safe_load(path)` | pkl/pt/npy를 CPU로 로드 |
+| `safe_load(path)` | 원본 `.pkl` 텐서를 CPU로 로드 (GPU에서 저장된 텐서도 읽음) |
 | `get_input_dimensions(battery_type)` | 차량 텐서의 열 구간(x·y·Δ·q, U·X) |
 | `get_preprocessing_and_skip_charge_ready(learning_case)` | learning_case → (0~1 정규화, 충전 대기 구간 제거) |
 | `preprocess_loaded_tensor(...)` | 5장의 전처리. DTI는 수렴 시점부터 사용 |

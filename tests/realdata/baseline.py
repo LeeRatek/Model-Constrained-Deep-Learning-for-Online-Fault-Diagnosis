@@ -163,6 +163,24 @@ def _as_diagnosis_feature_output(features):
     return features, None
 
 
+def _first_if_tuple(out):
+    """T²·SPE 함수의 결과에서 T²·SPE 값만 남긴다.
+
+    예전 _t2·_spe는 (값, 특징별 기여도·잔차²)를 돌려줬고 지금은 값만 돌려준다. 어느 쪽으로 기록해도 같은
+    기록이 되도록 값만 기록한다. 쓰는 곳: WRAP_TARGETS.
+    """
+    return out[0] if isinstance(out, tuple) else out
+
+
+def _without_counts(roc):
+    """ROC 결과 dict에서 양성·음성 차량 수(pos_count, neg_count)를 뺀다.
+
+    예전에는 이 두 값도 돌려줬지만 쓰는 곳이 없어 지웠다. 어느 쪽으로 기록해도 같은 기록이 되게 한다.
+    쓰는 곳: WRAP_TARGETS.
+    """
+    return {k: v for k, v in roc.items() if k not in ("pos_count", "neg_count")}
+
+
 # 기록할 함수 목록: (기록 이름, 함수가 있을 수 있는 위치들, 옵션). 함수를 다른 파일로 옮겨도 같은 기록 이름을 써서
 # 예전에 뜬 기준선과 그대로 비교한다. 위치는 실제로 있는 것만 감싼다.
 # 위치에 세 번째 값(dict)이 있으면 그 위치에만 추가 옵션을 적용한다. 옵션의 뜻은 _wrap 설명에 있다.
@@ -175,8 +193,8 @@ WRAP_TARGETS = [
         ],
         {},
     ),
-    ("T2_array", [("Function_", "T2_array"), ("mcdl.diagnosis", "_t2")], {}),
-    ("SPE_array", [("Function_", "SPE_array"), ("mcdl.diagnosis", "_spe")], {}),
+    ("T2_array", [("Function_", "T2_array"), ("mcdl.diagnosis", "_t2")], {"legacy_out": _first_if_tuple}),
+    ("SPE_array", [("Function_", "SPE_array"), ("mcdl.diagnosis", "_spe")], {"legacy_out": _first_if_tuple}),
     ("Custom_PCA", [("Function_", "Custom_PCA"), ("mcdl.diagnosis", "_pca")], {"inputs": True}),
     ("load_pca_results", [("Function_", "load_pca_results"), ("mcdl.diagnosis", "_load_pca")], {}),
     (
@@ -185,7 +203,7 @@ WRAP_TARGETS = [
             ("Function_", "compute_roc_auc_from_threshold_matrix"),
             ("mcdl.roc", "_roc_from_threshold_matrix"),
         ],
-        {"inputs": True, "keep_full": True, "keep_last_args": True},
+        {"inputs": True, "keep_full": True, "keep_last_args": True, "legacy_out": _without_counts},
     ),
     (
         "compute_optimal_thresholds_from_roc",

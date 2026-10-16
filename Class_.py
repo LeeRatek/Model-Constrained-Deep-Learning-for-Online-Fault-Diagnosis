@@ -80,8 +80,8 @@ class CombinedAE(nn.Module):
         """셀별 잠재값 z를 셀 값 범위의 재구성 값으로 바꾼다 (fc3 + CustomSigmoidFunc)."""
         return self.activation_fn.forward(self.fc3(z))
 
-    def forward(self, x, dx, q, y=None):
-        """재구성을 계산해 (재구성 값 ŷ, 잠재값 z)를 돌려준다. y는 쓰지 않는다(예전 호출 형태와 맞추려고 남겨 둔 인자).
+    def forward(self, x, dx, q):
+        """재구성을 계산해 (재구성 값 ŷ, 잠재값 z)를 돌려준다.
 
         쓰는 곳: Train_.py의 train_autoencoder(학습), mcdl/reconstruction.py의 reconstruct(평가).
         """

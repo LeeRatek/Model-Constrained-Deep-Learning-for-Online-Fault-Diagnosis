@@ -23,10 +23,11 @@ import platform
 import re
 import sys
 from contextlib import redirect_stdout
-from dataclasses import asdict, dataclass, is_dataclass
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Mapping, Sequence
+from zoneinfo import ZoneInfo
 
 import torch
 
@@ -219,7 +220,7 @@ def checkpoint_filename(model: str, number: int) -> str:
     return f"{prefix}.pth" if number == -1 else f"{prefix}_e{number}.pth"
 
 
-def write_sim_config(path, args, extra, exclude: Sequence[str] | None = None) -> str:
+def write_sim_config(path, args, extra, exclude: Sequence[str] = ()) -> str:
     """학습 설정을 path/sim_config.txt에 쓰고, 쓴 내용을 문자열로 돌려준다.
 
     args는 명령줄 인자, extra는 덧붙일 값(학습 차량 ID 목록 등)이다. exclude에 든 항목은 쓰지 않는다
@@ -236,149 +237,75 @@ def write_sim_config(path, args, extra, exclude: Sequence[str] | None = None) ->
     return text
 
 
-def save_net_state(model, models_dir="./models", filename="net_model.pth"):
+def save_net_state(model, models_dir, filename):
     """모델 가중치(state_dict)를 CPU 텐서로 바꿔 models_dir/filename에 저장한다.
 
     GPU에서 학습해도 CPU에서 불러올 수 있게 하려고 CPU로 옮겨 저장한다.
     쓰는 곳: Train_.py의 train_autoencoder (중간 체크포인트와 최종 모델).
     """
     os.makedirs(models_dir, exist_ok=True)
-    path = os.path.join(models_dir, filename)
     state = {k: v.detach().cpu() for k, v in model.state_dict().items()}
-    torch.save(state, path)
+    torch.save(state, os.path.join(models_dir, filename))
 
 
-def make_model_path_based_timestamp(
-    base="models", make: bool = False, prefix: str = None, tz="Asia/Seoul"
-):
+def make_model_path_based_timestamp(base):
     """새 Run 폴더 경로 "<base>/<RUN_ID>"를 만든다. RUN_ID는 서울 시간 기준 "26MMDD_HHMMSS"이다.
 
-    연도 자리는 "26"으로 고정되어 있다. make=True면 폴더도 만든다.
+    연도 자리는 "26"으로 고정되어 있다. 폴더 자체는 만들지 않는다(처음 저장할 때 생긴다).
     쓰는 곳: Train_.py (학습 시작 시 결과 폴더 이름을 정한다).
     """
-    # 시간대 정보: 표준 라이브러리 zoneinfo를 먼저 쓰고, 없으면 pytz를 쓴다
-    try:
-        from zoneinfo import ZoneInfo  # Python 3.9+
-
-        tzinfo = ZoneInfo(tz)
-    except Exception:
-        import pytz  # pip install pytz 필요
-
-        tzinfo = pytz.timezone(tz)
-
-    now = datetime.now(tzinfo)
-    timestamp = now.strftime("26%m%d_%H%M%S")
-    if prefix is None:
-        path = os.path.join(base, timestamp)
-    else:
-        path = os.path.join(base, f"{prefix}_{timestamp}")
-    if make:
-        os.makedirs(path, exist_ok=True)
-    return path
+    now = datetime.now(ZoneInfo("Asia/Seoul"))
+    return os.path.join(base, now.strftime("26%m%d_%H%M%S"))
 
 
-def print_sim_config(
-    title: str = "Simulation Settings",
-    config: Any = None,
-    include: Sequence[str] | None = None,
-    exclude: Sequence[str] | None = None,
-    extra: Mapping[str, Any] | None = None,
-    sort_keys: bool = True,
-    show_system: bool = True,
-) -> None:
+def print_sim_config(title: str, config, extra: Mapping[str, Any], exclude: Sequence[str] = ()) -> None:
     """설정을 "항목 : 값" 표로 화면에 출력한다. sim_config.txt도 이 출력 형식으로 저장된다.
 
+    맨 위에 실행 환경(실행 시각, 파이썬 버전, 운영체제, 실행 폴더)을, 그 아래에 config(argparse 인자)와
+    extra(덧붙일 값, 예: device·학습 차량 ID)를 항목 이름 순서로 출력한다. 이름이 같으면 extra 값을 쓴다.
+    exclude에 든 항목은 출력하지 않는다.
     쓰는 곳: Test_.py·Test_multi_models.py·Test_tsne.py(시작할 때 설정 표시), write_sim_config(파일 저장).
-
-    - config: argparse 인자, dict, dataclass, 또는 일반 객체(속성 기반)
-    - include: 출력할 항목만 고른다 (None이면 전체)
-    - exclude: 뺄 항목
-    - extra: 덧붙일 값 (예: device, 학습 차량 ID). config와 이름이 같으면 extra 값이 이긴다
-    - show_system: 맨 위에 실행 시각, 파이썬 버전, 운영체제, 실행 폴더를 함께 출력한다
     """
-    cfg = _as_mapping(config)
+    cfg = dict(vars(config))
+    for k in exclude:
+        cfg.pop(k, None)
+    cfg.update(extra)
+    items = sorted(cfg.items(), key=lambda kv: kv[0])
 
-    if include is not None:
-        cfg = {k: cfg.get(k, None) for k in include}
+    sys_lines = [
+        ("timestamp", datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
+        ("python", sys.version.split()[0]),
+        ("platform", f"{platform.system()} {platform.release()} ({platform.machine()})"),
+        ("cwd", os.getcwd()),
+    ]
 
-    if exclude is not None:
-        for k in exclude:
-            cfg.pop(k, None)
-
-    if extra:
-        # extra가 우선권(override)
-        cfg.update(dict(extra))
-
-    items = list(cfg.items())
-    if sort_keys:
-        items.sort(key=lambda kv: kv[0])
-
-    # 시스템 정보(선택)
-    sys_lines = []
-    if show_system:
-        sys_lines = [
-            ("timestamp", datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
-            ("python", sys.version.split()[0]),
-            (
-                "platform",
-                f"{platform.system()} {platform.release()} ({platform.machine()})",
-            ),
-            ("cwd", os.getcwd()),
-        ]
-
-    # 출력 폭 계산
+    # 출력 폭: 가장 긴 항목 이름과 값에 맞추되 60~140자로 제한
     all_items = sys_lines + items
     key_w = max([len(str(k)) for k, _ in all_items] + [3])
-    val_w = 0
-    for _, v in all_items:
-        val_w = max(val_w, len(_fmt(v)))
-
+    val_w = max(len(_fmt(v)) for _, v in all_items)
     line_w = min(max(key_w + 3 + val_w + 2, 60), 140)
 
-    def hr(ch: str = "=") -> str:
-        """표 구분선 문자열."""
-        return ch * line_w
-
-    print(hr("="))
+    print("=" * line_w)
     print(title.center(line_w))
-    print(hr("="))
-
-    if sys_lines:
-        for k, v in sys_lines:
-            print(f"{str(k):<{key_w}} : {_fmt(v)}")
-        print(hr("-"))
-
+    print("=" * line_w)
+    for k, v in sys_lines:
+        print(f"{str(k):<{key_w}} : {_fmt(v)}")
+    print("-" * line_w)
     for k, v in items:
         print(f"{str(k):<{key_w}} : {_fmt(v)}")
-
-    print(hr("="))
-
-
-def _as_mapping(config: Any) -> dict:
-    """print_sim_config 안에서 쓴다. argparse 인자·dict·dataclass·일반 객체를 {이름: 값} dict로 바꾼다."""
-    if config is None:
-        return {}
-    if isinstance(config, Mapping):
-        return dict(config)
-    if is_dataclass(config):
-        return asdict(config)
-    if hasattr(config, "__dict__"):
-        return dict(vars(config))
-    return {"config": config}
+    print("=" * line_w)
 
 
-def _fmt(v: Any, max_len: int = 180) -> str:
-    """print_sim_config 안에서 쓴다. 값 하나를 한 줄 문자열로 바꾼다 (목록은 [a, b], 줄바꿈은 \\n, 너무 길면 ...)."""
-    if v is None:
-        s = "None"
-    elif isinstance(v, (list, tuple, set)):
+def _fmt(v: Any) -> str:
+    """print_sim_config 안에서 쓴다. 값 하나를 한 줄 문자열로 바꾼다 (목록은 [a, b], 줄바꿈은 \\n, 180자가 넘으면 ...)."""
+    if isinstance(v, (list, tuple, set)):
         s = "[" + ", ".join(map(str, list(v))) + "]"
     else:
         s = str(v)
 
     s = s.replace("\n", "\\n")
-    if len(s) > max_len:
-        s = s[: max_len - 3] + "..."
+    if len(s) > 180:
+        s = s[:177] + "..."
     return s
 
 
@@ -455,9 +382,6 @@ def _coerce_value(raw: str):
     "None"이나 "1e-05"(지수 표기)처럼 애매한 값은 문자열 그대로 둔다.
     """
     s = str(raw).strip()
-    if s == "":
-        return ""
-
     sl = s.lower()
     if sl in ("true", "false"):
         return sl == "true"

@@ -22,8 +22,8 @@
 import matplotlib.pyplot as plt
 import pandas as pd
 import os
+import shutil
 import warnings
-import torch
 
 import argparse
 import time
@@ -34,8 +34,6 @@ from mcdl.chart_source import load_cached_features, save_cached_features
 from mcdl.roc import evaluate
 from mcdl.plotting import draw_auc_heatmap, plot_loss_curve_all, plot_roc_curve
 from mcdl.vehicles import load_test_vehicles, load_training_vehicles, split_ids
-
-device = torch.device("cpu")  # 평가는 CPU 전용 (Run이 CPU 모델을 돌려준다)
 
 # 명령줄 옵션 정의. 실제 읽기(parse_args)는 main 안에서 한다 (import만 할 때는 아무것도 실행되지 않게).
 parser = argparse.ArgumentParser(
@@ -129,75 +127,52 @@ def main(argv=None):
     테스트(tests/test_scripts.py)는 Test_multi_models.main([...])처럼 옵션 목록을 직접 넘겨 부른다.
     """
     os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"  # 일부 환경에서 수학 라이브러리 중복 로드 오류를 피하는 설정
-    print(torch.cuda.device_count())  # 사용할 수 있는 GPU 수 (평가는 GPU가 있어도 CPU로 한다)
-
     warnings.filterwarnings("ignore")
 
     args = parser.parse_args(argv)
 
+    run_dir = f"{args.models_dir}/{args.models_idx}"
+    run = Run(run_dir)
+    config = run.config
 
-    run = Run(f"{args.models_dir}/{args.models_idx}")
-
-    # Parse model indices
-    artifact_dir = f"{args.models_dir}/{args.models_idx}/artifact"
-
-    if args.u_model_idx.lower() == "auto":
-        print(f"Scanning artifact directory for U models: {artifact_dir}")
-        u_model_indices = run.checkpoint_numbers("U")
-        if not u_model_indices:
-            print("Warning: No valid U model files found (excluding -1 and 0).")
-            u_model_indices = []
+    def checkpoint_indices(model, option):
+        """평가할 체크포인트 번호 목록: option이 "auto"면 artifact 폴더에서 찾고, 아니면 쉼표로 나눈 번호를 쓴다."""
+        if option.lower() != "auto":
+            return [int(idx.strip()) for idx in option.split(",")]
+        print(f"Scanning artifact directory for {model} models: {run_dir}/artifact")
+        indices = run.checkpoint_numbers(model)
+        if indices:
+            print(f"Found {model} model indices: {indices}")
         else:
-            print(f"Found U model indices: {u_model_indices}")
-    else:
-        u_model_indices = [int(idx.strip()) for idx in args.u_model_idx.split(",")]
+            print(f"Warning: No {model} model checkpoint files found.")
+        return indices
 
-    if args.x_model_idx.lower() == "auto":
-        print(f"Scanning artifact directory for X models: {artifact_dir}")
-        x_model_indices = run.checkpoint_numbers("X")
-        if not x_model_indices:
-            print("Warning: No valid X model files found (excluding -1 and 0).")
-            x_model_indices = []
-        else:
-            print(f"Found X model indices: {x_model_indices}")
-    else:
-        x_model_indices = [int(idx.strip()) for idx in args.x_model_idx.split(",")]
-
-    # Exit if no valid models found
+    u_model_indices = checkpoint_indices("U", args.u_model_idx)
+    x_model_indices = checkpoint_indices("X", args.x_model_idx)
     if not u_model_indices or not x_model_indices:
         print("\nError: No valid model combinations to test. Exiting.")
         exit(1)
 
-    learning_case = run.config.learning_case
-    add_one_output_layer = run.config.add_one_output_layer
-    use_dx = run.config.use_dx
     # 학습 특징 캐시(temp_cache) 파일 이름에 들어가는 계산 조건
     cache_conditions = {
-        "abs_err": not run.config.no_abs_err,
+        "abs_err": not config.no_abs_err,
         "float32": args.use_float32,
         "batch_size": args.inference_batch_size,
     }
 
-    # 플롯 결과 저장 폴더는 한 번만 생성
-    os.makedirs(f"{args.models_dir}/{args.models_idx}/results", exist_ok=True)
-
-    BATTERY_TYPE = run.config.battery_type  # 'DTI' or 'QAS'
-    PREPROCESSING, SKIP_CHARGE_READY = run.config.preprocessing, run.config.skip_charge_ready
-
-    # Determine Dataset Path based on trained model config
-    DATA_BASE_PATH = run.config.split_dir
-    print(f"Using dataset from: {DATA_BASE_PATH}")
+    os.makedirs(f"{run_dir}/results", exist_ok=True)
+    print(f"Using dataset from: {config.split_dir}")
 
     print_sim_config(
         title="Multi-Model Test Run",
         config=args,
         extra={
-            "device": str(device),
-            "learning_case": learning_case,
-            "PREPROCESSING": PREPROCESSING,
-            "SKIP_CHARGE_READY": SKIP_CHARGE_READY,
-            "no_use_dx": not use_dx,
-            "add_one_output_layer": add_one_output_layer,
+            "device": "cpu",  # 평가는 CPU에서 한다 (Run이 CPU 모델을 돌려준다)
+            "learning_case": config.learning_case,
+            "PREPROCESSING": config.preprocessing,
+            "SKIP_CHARGE_READY": config.skip_charge_ready,
+            "no_use_dx": not config.use_dx,
+            "add_one_output_layer": config.add_one_output_layer,
             "u_model_indices": u_model_indices,
             "x_model_indices": x_model_indices,
             "total_combinations": len(u_model_indices) * len(x_model_indices),
@@ -205,274 +180,125 @@ def main(argv=None):
     )
 
     try:
-        plot_loss_curve_all(path=f"{args.models_dir}/{args.models_idx}")
+        plot_loss_curve_all(path=run_dir)
     except Exception as e:
         print(f"Error plotting loss curve: {e}")
 
-    ## =================== Load test data lists =================== ##
-    normal_test = split_ids(DATA_BASE_PATH, BATTERY_TYPE, "test")
-    normal_validate = split_ids(DATA_BASE_PATH, BATTERY_TYPE, "validate")
-    normal_list = [*normal_test, *normal_validate] if args.use_validate else normal_test
-    fault_list = split_ids(DATA_BASE_PATH, BATTERY_TYPE, "fault")
+    # 평가 차량. --use-reverse-pos-neg면 고장 차량을 먼저 둔다
+    normal_list = split_ids(config.split_dir, config.battery_type, "test")
+    if args.use_validate:
+        normal_list += split_ids(config.split_dir, config.battery_type, "validate")
+    fault_list = split_ids(config.split_dir, config.battery_type, "fault")
+    test_list = [fault_list, normal_list] if args.use_reverse_pos_neg else [normal_list, fault_list]
+    # (차량 ID, 고장 여부) 목록 (test_list 순서)
+    test_vehicles = [(i, vehicle_ids is fault_list) for vehicle_ids in test_list for i in vehicle_ids]
 
-    test_list = (
-        [normal_list, fault_list]
-        if not args.use_reverse_pos_neg
-        else [fault_list, normal_list]
-    )
+    all_roc_results = []  # 조합별 ROC 결과 (마지막 비교 그림용)
+    csv_path = f"{run_dir}/AUC_summary_case{config.learning_case}.csv"
 
-    ## =================== Initialize params for AUROC curve  =================== ##
-    total_test_vehicles = len(normal_list) + len(fault_list)
-
-    # Store results for all model combinations
-    all_roc_results = []
-
-    # Define CSV path for incremental saving
-    csv_path = f"{args.models_dir}/{args.models_idx}/AUC_summary_case{learning_case}.csv"
-
+    # --resume: CSV에 이미 있는 조합은 다시 계산하지 않는다
     completed_combinations = set()
-
-    # Initialize completed combinations set if resuming
     if args.resume and os.path.exists(csv_path):
         print(f"Resuming mode enabled. Checking cached results in {csv_path}...")
         try:
             existing_df = pd.read_csv(csv_path)
-            # Check if columns exist
-            if (
-                "u_model_idx" in existing_df.columns
-                and "x_model_idx" in existing_df.columns
-            ):
+            if "u_model_idx" in existing_df.columns and "x_model_idx" in existing_df.columns:
                 for _, row in existing_df.iterrows():
-                    completed_combinations.add(
-                        (int(row["u_model_idx"]), int(row["x_model_idx"]))
-                    )
+                    completed_combinations.add((int(row["u_model_idx"]), int(row["x_model_idx"])))
             print(
                 f"  Found {len(completed_combinations)} already computed combinations. These will be skipped."
             )
         except Exception as e:
             print(f"Warning: Could not read existing CSV for resume: {e}")
 
-    # Clear existing CSV file if it exists to start fresh (ONLY if not resuming)
+    # 이어서 하지 않으면 예전 결과 CSV를 지우고 새로 쓴다
     if not args.resume and os.path.exists(csv_path):
         os.remove(csv_path)
         print(f"Removed previous AUC summary file: {csv_path}")
 
-    # Pre-load all models to avoid repeated loading
     print("\nPre-loading all models...")
-    models_u = {}
-    models_x = {}
-
-    for u_idx in u_model_indices:
-        models_u[u_idx] = run.load_model("U", u_idx)
-        print(f"  Loaded U model: {u_idx}")
-
-    for x_idx in x_model_indices:
-        models_x[x_idx] = run.load_model("X", x_idx)
-        print(f"  Loaded X model: {x_idx}")
-
-
+    nets = {"U": {}, "X": {}}  # 모델 종류 → {체크포인트 번호: 모델}
+    for model, indices in (("U", u_model_indices), ("X", x_model_indices)):
+        for idx in indices:
+            nets[model][idx] = run.load_model(model, idx)
+            print(f"  Loaded {model} model: {idx}")
     print(
-        f"All models loaded successfully. Total: {len(models_u)} U models, {len(models_x)} X models\n"
+        f"All models loaded successfully. Total: {len(nets['U'])} U models, {len(nets['X'])} X models\n"
     )
 
-    # ================= Check if all error/feature files already exist ================= #
-    # If we are using disk cache and all files exist, we can skip loading combined_tensor_train.
+    # disk 캐시에 모든 체크포인트의 학습 특징이 이미 있으면 학습 데이터를 읽지 않는다
+    temp_cache_dir = os.path.join(run_dir, "temp_cache")
     all_files_exist = False
-    if args.cache_strategy == "disk":
-        temp_cache_dir_check = os.path.join(
-            f"{args.models_dir}/{args.models_idx}", "temp_cache"
-        )
-        if os.path.exists(temp_cache_dir_check):
-            missing_u = []
-            for u_idx in u_model_indices:
-                fpath = run.feature_cache_path("U", u_idx, **cache_conditions)
-                if not os.path.exists(fpath):
-                    missing_u.append(u_idx)
+    if args.cache_strategy == "disk" and os.path.exists(temp_cache_dir):
+        missing_u = [u for u in u_model_indices if not run.feature_cache_path("U", u, **cache_conditions).exists()]
+        missing_x = [x for x in x_model_indices if not run.feature_cache_path("X", x, **cache_conditions).exists()]
+        if not missing_u and not missing_x:
+            all_files_exist = True
+            print("All required feature files found in disk cache. Skipping training data loading.")
+        else:
+            print(f"Missing cached files: U={missing_u}, X={missing_x}. Will load training data.")
 
-            missing_x = []
-            for x_idx in x_model_indices:
-                fpath = run.feature_cache_path("X", x_idx, **cache_conditions)
-                if not os.path.exists(fpath):
-                    missing_x.append(x_idx)
-
-            if not missing_u and not missing_x:
-                all_files_exist = True
-                print(
-                    "All required feature files found in disk cache. Skipping training data loading."
-                )
-            else:
-                print(
-                    f"Missing cached files: U={missing_u}, X={missing_x}. Will load training data."
-                )
-
-    # Pre-load training data once to avoid repeated loading per model
+    train_data_cache = None  # [(U 텐서, X 텐서), ...]
     if not all_files_exist:
         print("Pre-loading training data...")
         train_list = split_ids(
-            DATA_BASE_PATH,
-            BATTERY_TYPE,
+            config.split_dir,
+            config.battery_type,
             "train",
-            start=run.config.vehicle_start,
-            end=run.config.vehicle_end,
+            start=config.vehicle_start,
+            end=config.vehicle_end,
         )
-        # List of (tensor, tensorx). source_data_dir의 .pt 캐시가 있으면 그것을 쓴다
-        train_data_cache = load_training_vehicles(args.source_data_dir, run.config, train_list)
-
+        # source_data_dir의 .pt 캐시가 있으면 그것을 쓴다
+        train_data_cache = load_training_vehicles(args.source_data_dir, config, train_list)
         total_samples = sum(t[0].shape[0] for t in train_data_cache)
         print(
             f"Training data loaded: {len(train_data_cache)} vehicles, {total_samples} total samples (Double precision)\n"
         )
-    else:
-        # Just needed to skip the loading block
-        pass
 
-    # Pre-load all test data once to avoid repeated loading
     print("Pre-loading test data...")
     # {vehicle_id: (tensor, tensor_x)}. 캐시 키는 test_list 순서대로 펼친 차량 ID 목록이다
-    flat_test_list = [i for vehicle_ids in test_list for i in vehicle_ids]
-    test_data_cache = load_test_vehicles(args.source_data_dir, run.config, flat_test_list)
-
+    test_data_cache = load_test_vehicles(args.source_data_dir, config, [i for i, _ in test_vehicles])
     print(f"Test data loaded: {len(test_data_cache)} vehicles\n")
 
-    # Initialize caches for training errors to avoid redundant computations
-    import shutil
-
-    # Caching Strategy Setup
-    cache_strategy = args.cache_strategy
-    temp_cache_dir = None
-    u_error_cache = {}  # Used for direct memory storage
-    x_error_cache = {}
-
-    if cache_strategy == "disk":
-        # Create a fixed temporary directory for disk caching (easier manual cleanup)
-        temp_cache_dir = os.path.join(f"{args.models_dir}/{args.models_idx}", "temp_cache")
-
+    if args.cache_strategy == "disk":
         os.makedirs(temp_cache_dir, exist_ok=True)
-        if args.resume:
-            print(
-                f"Using DISK cache for training FEATURES (not raw errors) at: {temp_cache_dir} (Resuming mode)"
-            )
-        else:
-            print(
-                f"Using DISK cache for training FEATURES (not raw errors) at: {temp_cache_dir}"
-            )
+        print(
+            f"Using DISK cache for training FEATURES (not raw errors) at: {temp_cache_dir}"
+            + (" (Resuming mode)" if args.resume else "")
+        )
     else:
-        print(
-            "Using MEMORY cache for training FEATURES (not raw errors) (Optimized RAM usage)"
-        )
+        print("Using MEMORY cache for training FEATURES (not raw errors) (Optimized RAM usage)")
 
-    # Use abs error based on sim_config
-    use_abs_err = not run.config.no_abs_err
-    inference_batch_size = args.inference_batch_size
+    # 체크포인트마다 학습 진단 특징(자기 몫 3개)을 한 번만 계산한다: U 전체(Phase 1) → X 전체(Phase 2)
+    memory_features = {"U": {}, "X": {}}  # memory 전략일 때 모델 종류 → {체크포인트 번호: 특징}
+    for phase, model, indices in ((1, "U", u_model_indices), (2, "X", x_model_indices)):
+        print(f"\nPhase {phase}: Computing and caching {model} FEATURES to {args.cache_strategy}...")
+        for idx in indices:
+            if args.cache_strategy == "disk" and run.feature_cache_path(model, idx, **cache_conditions).exists():
+                print(f"  Found cached {model} features for model {idx}, skipping computation.")
+                continue
+            if train_data_cache is None:
+                raise RuntimeError("Training data not loaded but feature computation needed! (Cache inconsistency)")
 
-    # Phase 1: Compute and Cache U FEATURES (Extracted from errors)
-    print(f"\nPhase 1: Computing and caching U FEATURES to {cache_strategy}...")
-    for u_idx in u_model_indices:
-        # Check for existing cache if resuming OR if we determined all files exist (which implies we should respect them even if resume flag not explicitly set, though likely it is set if we are here)
-        # Actually, if all_files_exist is True, it means we found everything. We should just verify specific file exists.
-
-        fpath = run.feature_cache_path("U", u_idx, **cache_conditions)
-        if cache_strategy == "disk" and os.path.exists(fpath):
-            print(f"  Found cached U features for model {u_idx}, skipping computation.")
-            continue
-
-        # If we are here, we MUST compute.
-        # If 'all_files_exist' was True but we are here, something is wrong (file deleted in between?) OR we are not using disk cache?
-        # Whatever, if we are here, we need train_data_cache.
-        # If all_files_exist was True, train_data_cache is NOT loaded.
-        if "train_data_cache" not in locals() or train_data_cache is None:
-            raise RuntimeError(
-                "Training data not loaded but feature computation needed! (Cache inconsistency)"
+            print(f"  Computing training features for {model} model {idx} (Per-vehicle processing)...")
+            column = 0 if model == "U" else 1  # (U 텐서, X 텐서) 중 이 모델의 입력
+            features = training_signal_features(
+                nets[model][idx],
+                model,
+                [pair[column] for pair in train_data_cache],
+                batch_size=args.inference_batch_size,
+                abs_err=cache_conditions["abs_err"],
+                float32=args.use_float32,
             )
+            if args.cache_strategy == "disk":
+                save_cached_features(run, model, idx, features, conditions=cache_conditions)
+            else:
+                memory_features[model][idx] = features
 
-        print(
-            f"  Computing training features for U model {u_idx} (Per-vehicle processing)..."
-        )
-
-        # 차량마다 재구성 오차 → 신호별 특징을 구해 이어 붙인다
-        feat_u_final = training_signal_features(
-            models_u[u_idx],
-            "U",
-            [t for t, _ in train_data_cache],
-            batch_size=inference_batch_size,
-            abs_err=use_abs_err,
-            float32=args.use_float32,
-        )
-
-        if cache_strategy == "disk":
-            save_cached_features(run, "U", u_idx, feat_u_final, conditions=cache_conditions)
-        else:
-            # Keep in memory
-            u_error_cache[u_idx] = feat_u_final
-
-    # Phase 2: Compute and Cache X FEATURES
-    print(f"\nPhase 2: Computing and caching X FEATURES to {cache_strategy}...")
-    for x_idx in x_model_indices:
-        fpath = run.feature_cache_path("X", x_idx, **cache_conditions)
-        if cache_strategy == "disk" and os.path.exists(fpath):
-            print(f"  Found cached X features for model {x_idx}, skipping computation.")
-            continue
-
-        if "train_data_cache" not in locals() or train_data_cache is None:
-            raise RuntimeError("Training data not loaded but feature computation needed!")
-
-        print(
-            f"  Computing training features for X model {x_idx} (Per-vehicle processing)..."
-        )
-
-        # 차량마다 재구성 오차 → 신호별 특징을 구해 이어 붙인다
-        feat_x_final = training_signal_features(
-            models_x[x_idx],
-            "X",
-            [tx for _, tx in train_data_cache],
-            batch_size=inference_batch_size,
-            abs_err=use_abs_err,
-            float32=args.use_float32,
-        )
-
-        if cache_strategy == "disk":
-            save_cached_features(run, "X", x_idx, feat_x_final, conditions=cache_conditions)
-        else:
-            # Keep in memory
-            x_error_cache[x_idx] = feat_x_final
-
-    # Critical: Release original training data to free up RAM before PCA loop
+    # 관리도 계산 전에 학습 데이터를 메모리에서 내린다
     print("Releasing training data from memory...")
-    if "train_data_cache" in locals() and train_data_cache is not None:
-        del train_data_cache
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
+    train_data_cache = None
 
-    # Determine the list of combinations to process based on fast-search strategy or full search
-    if args.fast_search and len(x_model_indices) > 0 and len(u_model_indices) > 0:
-        print(f"\n{'='*80}")
-        print("FAST SEARCH MODE ENABLED")
-        print("Step 1: Finding best U model using the last X model...")
-        print(f"{'='*80}\n")
-
-        last_x_idx = x_model_indices[-1]
-
-        # Step 1: Run all U models against the last X model
-        step1_results = []
-
-        # Check if we already have results for this step to avoid re-calculation if possible,
-        # but we need the AUC values to sort. We'll rely on the resume logic inside the loop
-        # or just let the main loop handle it, but here we need to enforce the order.
-
-        # We will generate a list of (u, x) tuples to run in order.
-        # However, fast search requires the RESULT of step 1 to proceed to step 2.
-        # So we cannot pre-generate the full list. We must run the loop in two phases.
-
-        # PHASE 1 LOOP
-        combinations_phase1 = [(u, last_x_idx) for u in u_model_indices]
-    else:
-        # Standard full grid search
-        combinations_phase1 = [
-            (u_idx, x_idx) for x_idx in x_model_indices for u_idx in u_model_indices
-        ]
-
-
-    # Function to process a single combination (refactored from original loop)
     def process_combination(u_idx, x_idx):
         """체크포인트 조합 하나(U 번호 u_idx, X 번호 x_idx)를 평가하고 그 AUC를 돌려준다. main 안에서만 쓴다.
 
@@ -480,84 +306,60 @@ def main(argv=None):
         결과는 CSV에 한 줄 추가하고, 조합별 ROC 그림을 저장하고, 전체 비교 그림용 목록(all_roc_results)에 넣는다.
         --resume으로 이미 CSV에 있는 조합이면 계산하지 않고 건너뛴다(--fast-search면 CSV의 AUC를 읽어 돌려준다).
         """
-        # SKIP LOGIC for RESUME (if result already in CSV)
         if (u_idx, x_idx) in completed_combinations:
             print(f"Skipping cached combination: u={u_idx}, x={x_idx}")
-            # We need to retrieve the AUC if we are in fast search mode to determine the winner
-            # Try to read from all_roc_results if available (populated from CSV earlier?)
-            # Since we didn't populate all_roc_results from CSV, we might miss it.
-            # But for fast search Step 1, we critically need the AUC.
-            # If resuming, we should ideally read the AUC from the CSV file row.
-
-            auc_val = 0.0
-            if args.fast_search:
-                # Try to find AUC in existing CSV data
-                try:
-                    if os.path.exists(csv_path):
-                        existing_df = pd.read_csv(csv_path)
-                        match = existing_df[
-                            (existing_df["u_model_idx"] == u_idx)
-                            & (existing_df["x_model_idx"] == x_idx)
-                        ]
-                        if not match.empty:
-                            auc_val = float(match.iloc[0]["AUC"])
-                except:
-                    pass
-            return auc_val
+            # --fast-search는 1단계 AUC로 최고 U를 고르므로, 건너뛴 조합은 CSV에서 AUC를 읽는다
+            if args.fast_search and os.path.exists(csv_path):
+                existing_df = pd.read_csv(csv_path)
+                match = existing_df[
+                    (existing_df["u_model_idx"] == u_idx) & (existing_df["x_model_idx"] == x_idx)
+                ]
+                if not match.empty:
+                    return float(match.iloc[0]["AUC"])
+            return 0.0
 
         print(f"\n{'='*80}")
         print(f"Testing model combination: u_model_idx={u_idx}, x_model_idx={x_idx}")
         print(f"{'='*80}\n")
 
-        # 차량별 최대 CI와 고장 여부 (test_list 순서)
-        vehicle_max_ci = []
-        vehicle_is_fault = []
-
-        ## =================== Load PCA data for each combination  =================== ##
         start_pca_load = time.perf_counter()
-
-        # Load cached features (fast!)
-        if cache_strategy == "disk":
+        if args.cache_strategy == "disk":
             print("  Loading pre-computed FEATURES from disk...")
             u_feat = load_cached_features(run, "U", u_idx, conditions=cache_conditions)
             x_feat = load_cached_features(run, "X", x_idx, conditions=cache_conditions)
         else:
             print("  Using pre-computed FEATURES from memory...")
-            u_feat = u_error_cache[u_idx]
-            x_feat = x_error_cache[x_idx]
+            u_feat = memory_features["U"][u_idx]
+            x_feat = memory_features["X"][x_idx]
 
-        # Fit the control chart on the cached training features (관리도는 학습 특징 행렬을 들고 있지 않는다)
+        # 학습 특징으로 관리도를 만든다 (관리도는 학습 특징 행렬을 들고 있지 않는다)
         chart = ControlChart.fit(combine_signal_features(u_feat, x_feat))
         del u_feat, x_feat
         elapsed_pca_load = time.perf_counter() - start_pca_load
         print(f"PCA results loading/computing time: {elapsed_pca_load:.3f} seconds")
 
-        # Use pre-loaded models
-        net_loaded = models_u[u_idx]
-        netx_loaded = models_x[x_idx]
+        net_loaded = nets["U"][u_idx]
+        netx_loaded = nets["X"][x_idx]
 
+        vehicle_max_ci = []  # 차량별 최대 CI (test_vehicles 순서)
+        vehicle_is_fault = []
         start = time.perf_counter()
-        test_idx = 0
-        for vehicle_ids in test_list:
-            for i in vehicle_ids:
-                if test_idx % 10 == 0:
-                    elapsed = time.perf_counter() - start
-                    h, rem = divmod(elapsed, 3600)
-                    m, s = divmod(rem, 60)
-                    print(
-                        f"Processing vehicle {test_idx}/{total_test_vehicles} | Elapsed: {int(h)}h {int(m)}m {s:.1f}s"
-                    )
+        for n, (vehicle_id, is_fault) in enumerate(test_vehicles):
+            if n % 10 == 0:
+                elapsed = time.perf_counter() - start
+                h, rem = divmod(elapsed, 3600)
+                m, s = divmod(rem, 60)
+                print(
+                    f"Processing vehicle {n}/{len(test_vehicles)} | Elapsed: {int(h)}h {int(m)}m {s:.1f}s"
+                )
 
-                # Use pre-loaded test data
-                tensor, tensor_x = test_data_cache[i]
-
-                # 차량 한 대의 진단 특징 (차량 전체를 한 번에 추론, 오차의 abs 여부는 학습 진단 특징과 같은 설정을 따른다)
-                df_data = vehicle_features(net_loaded, netx_loaded, tensor, tensor_x, abs_err=use_abs_err)
-
-                ## =================== Testing Diagnosis =================== ##
-                vehicle_max_ci.append(chart.max_ci(df_data))
-                vehicle_is_fault.append(vehicle_ids is fault_list)
-                test_idx += 1
+            tensor, tensor_x = test_data_cache[vehicle_id]
+            # 차량 한 대의 진단 특징 (차량 전체를 한 번에 추론, 오차의 abs 여부는 학습 진단 특징과 같은 설정을 따른다)
+            df_data = vehicle_features(
+                net_loaded, netx_loaded, tensor, tensor_x, abs_err=cache_conditions["abs_err"]
+            )
+            vehicle_max_ci.append(chart.max_ci(df_data))
+            vehicle_is_fault.append(is_fault)
 
         elapsed = time.perf_counter() - start
         h, rem = divmod(elapsed, 3600)
@@ -566,18 +368,12 @@ def main(argv=None):
             f"\nCombination (u={u_idx}, x={x_idx}) completed: {int(h)}h {int(m)}m {s:.3f}s\n"
         )
 
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-
-        # =================== ROC / AUC ===================
         # reverse이면 정상 차량을 양성으로 보고 최대 CI < 임계값을 양성으로 판정한다
         result = evaluate(vehicle_max_ci, vehicle_is_fault, reverse=args.use_reverse_pos_neg)
         best, closest = result.best, result.closest_to_01
-
         print(f"AUC = {result.auc:.4f}")
 
-        # Save individual ROC curve
-        roc_save_path = f"{args.models_dir}/{args.models_idx}/results/AUC_ROC_u{u_idx}_x{x_idx}_case{learning_case}.png"
+        roc_save_path = f"{run_dir}/results/AUC_ROC_u{u_idx}_x{x_idx}_case{config.learning_case}.png"
         plot_roc_curve(
             result.fpr,
             result.tpr,
@@ -586,13 +382,10 @@ def main(argv=None):
             closest_to_01_point=closest,
             save_path=roc_save_path,
             title=f"AUC-ROC Curve (u_model={u_idx}, x_model={x_idx})",
-            figsize=(6, 6),
             show=False,
-            dpi=200,
         )
         print(f"ROC curve saved to: {roc_save_path}\n")
 
-        # Store results for combined plot
         all_roc_results.append(
             {
                 "u_idx": u_idx,
@@ -601,11 +394,10 @@ def main(argv=None):
                 "tpr": result.tpr,
                 "auc": result.auc,
                 "best": best,
-                "closest_to_01": closest,
             }
         )
 
-        # =================== Save AUC result immediately to CSV =================== ##
+        # 결과를 바로 CSV에 한 줄 추가한다 (중간에 멈춰도 --resume으로 이어 갈 수 있게)
         auc_record = pd.DataFrame(
             [
                 {
@@ -622,84 +414,55 @@ def main(argv=None):
                 }
             ]
         )
-
         if not os.path.exists(csv_path):
             auc_record.to_csv(csv_path, mode="w", header=True, index=False)
         else:
             auc_record.to_csv(csv_path, mode="a", header=False, index=False)
 
-        # Mark as completed
         completed_combinations.add((u_idx, x_idx))
-
         return result.auc
 
+    if args.fast_search:
+        # 1단계: 마지막 X 체크포인트로 모든 U를 평가해 최고 U를 고른다
+        print(f"\n{'='*80}")
+        print("FAST SEARCH MODE ENABLED")
+        print("Step 1: Finding best U model using the last X model...")
+        print(f"{'='*80}\n")
+        combinations = [(u, x_model_indices[-1]) for u in u_model_indices]
+    else:
+        # 모든 조합 (X 순서로 바깥, U 순서로 안쪽)
+        combinations = [(u_idx, x_idx) for x_idx in x_model_indices for u_idx in u_model_indices]
 
-    # Run Logic
-    best_u_idx = None
+    step1_aucs = [(u_idx, process_combination(u_idx, x_idx)) for u_idx, x_idx in combinations]
 
-    # Phase 1
-    for u_idx, x_idx in combinations_phase1:
-        auc = process_combination(u_idx, x_idx)
-        # Track best U if in fast search mode
-        if args.fast_search and "step1_results" in locals():
-            step1_results.append((u_idx, auc))
-
-    # Phase 2 (Only for Fast Search)
-    if args.fast_search and step1_results:
-        # Find best U
-        best_u_tuple = max(step1_results, key=lambda item: item[1])
-        best_u_idx = best_u_tuple[0]
-        best_auc = best_u_tuple[1]
-
+    if args.fast_search:
+        # 2단계: 최고 U로 모든 X를 평가한다 ((최고 U, 마지막 X)는 1단계에서 이미 했다)
+        best_u_idx, best_auc = max(step1_aucs, key=lambda item: item[1])
         print(f"\n{'='*80}")
         print(f"Step 1 Complete. Best U model: u={best_u_idx} (AUC={best_auc:.4f})")
         print("Step 2: Sweeping all X models using the best U model...")
         print(f"{'='*80}\n")
+        for x_idx in x_model_indices:
+            if (best_u_idx, x_idx) not in completed_combinations:
+                process_combination(best_u_idx, x_idx)
 
-        # In fast search phase 1 we did all U against LAST X.
-        # Now we do BEST U against ALL X.
-        # Note: (best_u_idx, last_x_idx) is already done in phase 1.
-        combinations_phase2 = [
-            (best_u_idx, x)
-            for x in x_model_indices
-            if (best_u_idx, x) not in completed_combinations
-        ]
-
-        for u_idx, x_idx in combinations_phase2:
-            process_combination(u_idx, x_idx)
-
-
-    # Cleanup temp files if disk strategy was used and keep_cache is False
-    if cache_strategy == "disk" and temp_cache_dir and os.path.exists(temp_cache_dir):
+    if args.cache_strategy == "disk" and os.path.exists(temp_cache_dir):
         if args.keep_cache:
-            print(
-                f"Keeping temporary disk cache at: {temp_cache_dir} (--keep-cache enabled)"
-            )
+            print(f"Keeping temporary disk cache at: {temp_cache_dir} (--keep-cache enabled)")
         else:
             print(f"Cleaning up temporary disk cache: {temp_cache_dir}")
             shutil.rmtree(temp_cache_dir)
 
-    if cache_strategy == "memory":
-        # Clear memory cache explicitly
-        u_error_cache.clear()
-        x_error_cache.clear()
-        del u_error_cache, x_error_cache
-
-
-    # =================== Plot all ROC curves on one figure =================== ##
+    # 두 조합 이상이면 모든 ROC 곡선을 한 그림에 모으고, 요약 표와 AUC 히트맵을 남긴다
     if len(all_roc_results) > 1:
         print(f"\n{'='*80}")
         print("Plotting all ROC curves on a single figure...")
         print(f"{'='*80}\n")
 
         fig, ax = plt.subplots(figsize=(10, 8))
-
-        # Plot each ROC curve
         for result in all_roc_results:
             label = f"u={result['u_idx']}, x={result['x_idx']} (AUC={result['auc']:.4f})"
             ax.plot(result["fpr"], result["tpr"], linewidth=2, label=label)
-
-        # Plot diagonal reference line
         ax.plot([0, 1], [0, 1], "k--", linewidth=1, label="Random")
 
         ax.set_xlabel("False Positive Rate", fontsize=12)
@@ -712,14 +475,12 @@ def main(argv=None):
         ax.set_xlim([0.0, 1.0])
         ax.set_ylim([0.0, 1.05])
 
-        combined_roc_path = f"{args.models_dir}/{args.models_idx}/results/AUC_ROC_ALL_COMBINATIONS_case{learning_case}.png"
+        combined_roc_path = f"{run_dir}/results/AUC_ROC_ALL_COMBINATIONS_case{config.learning_case}.png"
         plt.tight_layout()
         plt.savefig(combined_roc_path, dpi=200, bbox_inches="tight")
         plt.close()
-
         print(f"Combined ROC curve saved to: {combined_roc_path}")
 
-        # Print summary table
         print(f"\n{'='*80}")
         print("Summary of all model combinations:")
         print(f"{'='*80}")
@@ -733,11 +494,7 @@ def main(argv=None):
             )
         print(f"{'='*80}\n")
 
-        # =================== Create AUC heatmap visualization =================== ##
-        heatmap_path = (
-            f"{args.models_dir}/{args.models_idx}/AUC_heatmap_case{learning_case}.png"
-        )
-        draw_auc_heatmap(csv_path, heatmap_path)
+        draw_auc_heatmap(csv_path, f"{run_dir}/AUC_heatmap_case{config.learning_case}.png")
 
     print("\n✓ All model combinations tested successfully!")
 

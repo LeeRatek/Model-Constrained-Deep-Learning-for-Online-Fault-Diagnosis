@@ -56,12 +56,12 @@ def manual_errors(model, tensor, batch_size):
 
 def script_features(net, netx, u, x):
     """비교 기준이 되는 테스트 차량 진단 특징 계산. 리팩터링 전 Test_·Test_multi_models·Test_tsne가 하던 방식
-    (열을 직접 자르고, 차량 전체를 한 번에 모델에 넣고(y까지 4개 인자), 오차의 절댓값)을 그대로 옮겼다."""
+    (열을 직접 자르고, 차량 전체를 한 번에 모델에 넣고, 오차의 절댓값)을 그대로 옮겼다."""
     errors = []
     for model, tensor in ((net, u), (netx, x)):
         y = tensor[:, 2 : 2 + N_CELLS]
         with torch.inference_mode():
-            recon = model(tensor[:, :2], tensor[:, 2 + N_CELLS : 2 + 2 * N_CELLS], tensor[:, 2 + 2 * N_CELLS :], y)
+            recon = model(tensor[:, :2], tensor[:, 2 + N_CELLS : 2 + 2 * N_CELLS], tensor[:, 2 + 2 * N_CELLS :])
             errors.append(torch.abs(recon[0] - y).cpu().numpy())
     return diagnosis_features(*errors)
 

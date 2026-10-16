@@ -55,8 +55,8 @@ def load_vehicle(source_data_dir, config, vehicle_id):
     쓰는 곳: Train_.py(학습·검증 차량), Test_.py·Test_tsne.py(평가 차량), 아래 두 함수, mcdl/chart_source.py.
     """
     folder = f"{source_data_dir}/{config.battery_type}/{vehicle_id}"
-    tensor = safe_load(f"{folder}/vin_2.pkl", verbose=False)
-    tensorx = safe_load(f"{folder}/vin_3.pkl", verbose=False)
+    tensor = safe_load(f"{folder}/vin_2.pkl")
+    tensorx = safe_load(f"{folder}/vin_3.pkl")
     return preprocess_loaded_tensor(
         tensor,
         tensorx,
@@ -70,7 +70,7 @@ def load_vehicle(source_data_dir, config, vehicle_id):
 
 
 def load_training_vehicles(source_data_dir, config, ids):
-    """학습 차량 여러 대를 [(U 텐서, X 텐서), ...] 목록으로 돌려준다 (float64).
+    """학습 차량 여러 대를 [(U 텐서, X 텐서), ...] 목록으로 돌려준다 (load_vehicle 결과 그대로, float64).
 
     같은 차량 목록·전처리 설정으로 만든 캐시 파일(source_data_dir/train_data_list_<배터리>_<해시>.pt)이 있으면
     그것을 읽고, 없으면 원본에서 한 대씩 읽은 뒤 캐시 파일을 만들어 둔다.
@@ -93,8 +93,7 @@ def load_training_vehicles(source_data_dir, config, ids):
         for count, vehicle_id in enumerate(ids, start=1):
             if count % 10 == 0:
                 print(f"  Processing vehicle {count}/{len(ids)}")
-            tensor, tensorx = load_vehicle(source_data_dir, config, vehicle_id)
-            vehicles.append((tensor.double(), tensorx.double()))
+            vehicles.append(load_vehicle(source_data_dir, config, vehicle_id))
 
         print(f"Saving training data list to cache: {path}")
         try:
@@ -122,7 +121,6 @@ def load_test_vehicles(source_data_dir, config, ids):
             print(f"Successfully loaded cached test data: {len(vehicles)} vehicles")
         except Exception as e:
             print(f"Error loading test cache: {e}. Will regenerate.")
-            vehicles = {}
 
     if not vehicles:
         print("Cache miss or error. Processing raw test pickle files...")
