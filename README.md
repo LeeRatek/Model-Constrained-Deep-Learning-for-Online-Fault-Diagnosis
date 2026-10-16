@@ -298,7 +298,8 @@ seaborn은 `plot_distribution_with_stats`(data_filter의 분포 그림)가 KDE�
 
 ### 테스트
 
-저장소 루트에서 pytest로 실행합니다. 원본 데이터 없이 CPU에서 30초 안팎에 끝납니다(대부분 스크립트 smoke 테스트).
+저장소 루트에서 pytest로 실행합니다. 원본 데이터 없이 CPU에서 20초 안팎에 끝납니다(대부분 스크립트 smoke 테스트).
+테스트 파일별 설명과 fixture·golden 값·smoke 테스트 같은 용어 풀이는 [tests/README.md](tests/README.md)에 있습니다.
 
 ```bash
 pip install pytest

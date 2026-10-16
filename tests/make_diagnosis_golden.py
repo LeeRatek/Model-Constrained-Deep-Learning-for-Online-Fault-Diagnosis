@@ -1,10 +1,26 @@
-"""tests/fixtures/diagnosis_golden.npz(test_diagnosis.py의 기대값)를 지금 mcdl 구현으로 다시 만든다.
+"""test_diagnosis.py가 정답으로 쓰는 기대값 파일(tests/fixtures/diagnosis_golden.npz)을 다시 만드는 도구.
 
-진단 특징·관리도·ROC 계산을 일부러 바꿨을 때 쓴다. 계산을 바꾸지 않았다면 다시 만들어도 지금 fixture와
-bit 단위로 같은 값이 나온다. pytest가 수집하지 않는 파일 이름이며, 저장소 루트에서 직접 실행한다.
+이름에 쓰인 말
+    golden: 테스트에서 "이 입력을 넣으면 정확히 이 값이 나와야 한다"고 미리 저장해 둔 정답 값을 golden 값
+        (기준이 되는 값이라는 뜻)이라고 부른다. 이 도구는 그 정답 값을 만들기 때문에 이름이 make_..._golden이다.
+    fixture: 테스트가 읽어 쓰려고 미리 준비해 둔 데이터 파일을 부르는 말이다. 그래서 그런 파일을
+        tests/fixtures/ 폴더에 모아 둔다. 이 도구가 만드는 diagnosis_golden.npz도 그중 하나다.
+    mcdl: 이 저장소의 계산 코드가 들어 있는 폴더(파이썬 패키지) 이름. 논문 제목 Model-Constrained Deep
+        Learning의 머리글자다.
 
-    python tests/make_diagnosis_golden.py            # fixture를 덮어쓴다
-    python tests/make_diagnosis_golden.py --check    # 덮어쓰지 않고 지금 fixture와 비교만 한다
+왜 필요한가
+    test_diagnosis.py는 합성 오차(synthetic_errors.py)를 넣어 진단 특징·관리도(T², SPE, CI)·ROC를 계산하고,
+    결과가 이 파일에 저장된 값과 소수점 끝자리까지 완전히 같은지(bit 단위로 같은지) 비교한다.
+    - 계산 코드를 고친 적이 없는데 테스트가 실패하면, 무언가 의도치 않게 바뀐 것이다. 이 도구로 기대값을
+      덮어쓰지 말고 원인을 찾는다.
+    - 계산 방법을 일부러 바꿨다면, 이 도구로 기대값을 새로 만들어 저장하고 바뀐 이유를 커밋 메시지에 남긴다.
+    계산을 바꾸지 않은 상태에서 다시 만들면 지금 파일과 똑같은 값이 나온다(--check로 확인할 수 있다).
+
+실행 (저장소 루트에서)
+    python tests/make_diagnosis_golden.py            # 기대값 파일을 덮어쓴다
+    python tests/make_diagnosis_golden.py --check    # 덮어쓰지 않고 지금 파일과 비교만 한다
+
+파일 이름이 test_로 시작하지 않으므로 pytest(테스트 실행 도구)는 이 파일을 테스트로 실행하지 않는다.
 """
 
 import argparse
@@ -16,6 +32,7 @@ import numpy as np
 import pandas as pd
 
 HERE = Path(__file__).resolve().parent
+# 저장소 루트(mcdl 패키지)와 tests 폴더(synthetic_errors.py)를 import할 수 있게 경로에 넣는다.
 sys.path[:0] = [str(HERE.parent), str(HERE)]
 
 from mcdl.diagnosis import ControlChart, diagnosis_features  # noqa: E402
@@ -26,7 +43,11 @@ FIXTURE = HERE / "fixtures" / "diagnosis_golden.npz"
 
 
 def build():
-    """test_diagnosis.py가 비교하는 기대값 전부."""
+    """test_diagnosis.py가 비교하는 기대값을 전부 계산해 {이름: 배열} dict로 돌려준다.
+
+    합성 오차로: 학습 차량 진단 특징 → 관리도 학습(저장·불러오기 포함) → 테스트 차량별 T²·SPE·CI·최대 CI
+    → ROC(정상 방향, 반대 방향) 순서로 계산한다. 쓰는 곳: main.
+    """
     train, test_normal, test_fault = make_vehicle_errors()
     out = {}
 
@@ -69,6 +90,10 @@ def build():
 
 
 def main():
+    """build로 기대값을 만든 뒤, 기본은 파일에 덮어쓰고 --check면 지금 파일과 항목별로 비교만 한다.
+
+    다른 항목이 있으면 1, 없으면 0을 돌려준다(명령줄 종료 코드). 쓰는 곳: 이 파일 맨 아래 실행부.
+    """
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--check", action="store_true", help="덮어쓰지 않고 지금 fixture와 비교만 한다")
     args = parser.parse_args()

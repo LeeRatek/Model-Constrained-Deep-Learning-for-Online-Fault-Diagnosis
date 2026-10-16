@@ -1,8 +1,17 @@
-"""원본 데이터 로딩과 전처리.
+"""원본 데이터 파일을 읽고 전처리하는 코드.
 
-차량 폴더의 pkl(vin_2·vin_3)을 CPU 텐서로 읽고, battery_type·learning_case 설정대로 전처리한다.
-차량 단위 로딩과 캐시는 mcdl/vehicles.py가, 분할을 만드는 이상 차량 판정은 data_filter.py가 이 module을 쓴다.
-함수 본문은 예전 Function_.py에서 그대로 옮겼다.
+원본 데이터
+    차량마다 data/<배터리 종류>/<차량 ID>/ 폴더에 vin_2.pkl(U-model 입력, 셀 전압 관련)과
+    vin_3.pkl(X-model 입력, 셀 SOC 관련)이 있다. 둘 다 (시점 수 × 열 수) 크기의 torch 텐서를 pickle로
+    저장한 파일이다. 열 구성은 get_input_dimensions가 정한다.
+
+전처리
+    learning_case 번호에 따라 충전 대기 구간(학습에 맞지 않는 앞부분)을 잘라내거나, 열을 0~1로
+    정규화한다(README 5장). DTI 배터리는 단위 변환 등 별도 처리를 한다.
+
+누가 쓰나
+    mcdl/vehicles.py(차량 한 대씩 읽기), mcdl/run.py(모델 크기 정하기), data_filter.py(이상 차량 걸러내기).
+    함수 본문은 예전 공통 함수 파일(Function_.py, 지금은 없음)에서 그대로 옮겨 왔다.
 """
 
 from __future__ import annotations
@@ -17,11 +26,12 @@ import torch
 
 
 def get_convergence_start_index(data, threshold=0.1, stable_window_size=20):
-    """
-    Finds the index where the data stabilizes.
-    Assumes data is 2D (Time, Features) and checks the first column (index 0).
-    Returns the first index `i` + 1 such that the absolute difference between steps
-    in the window [i : i + stable_window_size] is less than the threshold.
+    """DTI 데이터에서 값이 안정되기 시작하는 시점을 찾는다.
+
+    data는 (시점 × 열) 2차원이고, 첫 번째 열(0번)만 본다. 바로 이웃한 시점 사이의 변화량이
+    stable_window_size 시점 동안 계속 threshold보다 작은 첫 구간을 찾아 그 시작 위치(i + 1)를 돌려준다.
+    그런 구간이 없으면 0(자르지 않음)을 돌려준다.
+    쓰는 곳: preprocess_loaded_tensor (DTI의 불안정한 앞부분을 잘라낼 때).
     """
     if isinstance(data, torch.Tensor):
         # We need CPU numpy for checking
@@ -43,7 +53,13 @@ def get_convergence_start_index(data, threshold=0.1, stable_window_size=20):
 
 
 def _to_cpu(obj: Any, *, verbose: bool = True):
+    """safe_load 안에서 쓴다. 읽은 객체 안의 torch 텐서를 모두 CPU로 옮긴다 (리스트·튜플·dict 안쪽까지).
+
+    GPU에서 저장된 파일을 GPU가 없는 컴퓨터에서도 쓸 수 있게 하려는 것이다.
+    """
+
     def log(message: str) -> None:
+        """verbose일 때만 메시지를 출력한다."""
         if verbose:
             print(message)
 
@@ -60,23 +76,28 @@ def _to_cpu(obj: Any, *, verbose: bool = True):
 
 
 def safe_load(path: str, *, verbose: bool = True):
-    """Load a file based on its extension, with optional verbose logging.
+    """파일 확장자에 맞는 방법으로 파일을 읽고, 안의 torch 텐서는 CPU로 옮겨 돌려준다.
 
-    - .pkl/.pickle: pickle (CPU-safe, including torch storages)
-    - .pt/.pth/.ckpt: torch.load (CPU)
-    - .npy/.npz: numpy.load
-
-    For unknown extensions, tries pickle first then torch.
+    - .pkl/.pickle: pickle로 읽는다 (GPU에서 저장된 텐서도 CPU로 읽도록 처리)
+    - .pt/.pth/.ckpt: torch.load로 읽는다 (실패하면 pickle로 다시 시도)
+    - .npy/.npz: numpy.load로 읽는다
+    - 그 밖의 확장자: pickle, 안 되면 torch.load 순서로 시도한다
+    verbose=True면 어떤 방법으로 읽는지 출력한다.
+    쓰는 곳: mcdl/vehicles.py의 load_vehicle(원본 vin_2·vin_3 읽기), data_filter.py.
     """
 
     def log(message: str) -> None:
+        """verbose일 때만 메시지를 출력한다."""
         if verbose:
             print(message)
 
     ext = os.path.splitext(path)[1].lower()
 
     class CPUUnpickler(pickle.Unpickler):
+        """pickle 안의 torch 텐서를 GPU가 아니라 CPU로 복원하는 pickle 읽기 도구."""
+
         def find_class(self, module, name):
+            """torch 텐서 복원 함수를 만나면, CPU로 복원하는 함수로 바꿔 준다."""
             if module == "torch.storage" and name == "_load_from_bytes":
                 return lambda b: torch.load(
                     io.BytesIO(b), map_location=torch.device("cpu"), weights_only=False
@@ -84,6 +105,7 @@ def safe_load(path: str, *, verbose: bool = True):
             return super().find_class(module, name)
 
     def load_pickle():
+        """pickle로 읽는다. CPU 복원 방식이 실패하면 일반 pickle.load로 다시 읽는다."""
         try:
             log("Loading with CPUUnpickler...")
             with open(path, "rb") as f:
@@ -98,6 +120,7 @@ def safe_load(path: str, *, verbose: bool = True):
             return _to_cpu(obj, verbose=verbose)
 
     def load_torch():
+        """torch.load로 CPU에 읽는다."""
         log("Loading with torch.load...")
         return _to_cpu(
             torch.load(path, map_location=torch.device("cpu"), weights_only=False),
@@ -105,6 +128,7 @@ def safe_load(path: str, *, verbose: bool = True):
         )
 
     def load_numpy():
+        """numpy.load로 읽는다."""
         log("Loading with numpy.load...")
         return np.load(path, allow_pickle=True)
 
@@ -128,9 +152,14 @@ def safe_load(path: str, *, verbose: bool = True):
 
 
 def last_index_of(tensor, feature_idx, value, operator="=="):
-    # NOTE: 반환값은 "조건을 만족하는 마지막 인덱스 + 1" 입니다. (없으면 0)
-    # 기존 구현은 torch.Tensor에 대해 np.array(tensor)로 전체 복사 변환이 발생해 매우 느릴 수 있어,
-    # torch 입력은 torch 연산으로만 처리합니다.
+    """한 열(feature_idx)에서 조건(값 operator value)을 만족하는 마지막 시점을 찾아 "그 위치 + 1"을 돌려준다.
+
+    조건을 만족하는 시점이 없으면 0을 돌려준다. 그래서 돌려받은 값부터 데이터를 잘라 쓰면
+    "조건을 만족한 마지막 시점 이후"만 남는다. operator는 "==", "<", "<=", ">", ">=", "!=" 중 하나.
+    예: last_index_of(tensor, 224, -500, "<") → 전류가 -500보다 작았던 마지막 시점 + 1.
+    쓰는 곳: preprocess_loaded_tensor(앞부분 자르기), is_abnormal(이상 차량 판정).
+    """
+    # torch 텐서를 numpy로 통째로 복사하면 매우 느릴 수 있어, torch 입력은 torch 연산으로만 처리한다.
 
     if isinstance(tensor, torch.Tensor):
         if tensor.ndim < 2:
@@ -193,6 +222,11 @@ def last_index_of(tensor, feature_idx, value, operator="=="):
 
 
 def is_abnormal(tensor):
+    """차량 데이터가 비정상(측정 오류로 보이는 값 포함)인지 판정한다.
+
+    첫 번째 열(팩 전압 추정값)에 0보다 작거나 5보다 큰 값이 한 시점이라도 있으면 True.
+    쓰는 곳: data_filter.py (분할을 만들 때 이런 차량을 뺀다).
+    """
     abnormal_data = False
     if (
         last_index_of(tensor, 0, 0, operator="<") != 0
@@ -204,8 +238,9 @@ def is_abnormal(tensor):
 
 def normalize_columns_0_to_1(X, eps=1e-12, exclude_cols=None, exclude_ranges=None):
     """
-    입력 행렬의 각 열을 [0,1] 범위로 정규화합니다.
+    입력 행렬의 각 열을 [0,1] 범위로 정규화합니다 (열마다 (값 - 최솟값) / (최댓값 - 최솟값)).
 
+    쓰는 곳: preprocess_loaded_tensor (learning_case 2·3에서 0~1 정규화를 할 때).
     - torch.Tensor와 numpy.ndarray 모두 지원합니다.
     - 분모(최대-최소)가 0인 열은 eps로 치환합니다.
 
@@ -221,6 +256,7 @@ def normalize_columns_0_to_1(X, eps=1e-12, exclude_cols=None, exclude_ranges=Non
     """
 
     def _build_normalize_mask(n_cols: int):
+        """정규화할 열은 True, 제외할 열(exclude_cols, exclude_ranges)은 False인 배열을 만든다."""
         mask = np.ones(n_cols, dtype=bool)
 
         if exclude_cols is not None:
@@ -315,6 +351,11 @@ def normalize_columns_0_to_1(X, eps=1e-12, exclude_cols=None, exclude_ranges=Non
 
 
 def get_preprocessing_and_skip_charge_ready(learning_case: int):
+    """learning_case 번호(1~4)를 (0~1 정규화 여부, 충전 대기 구간 제거 여부) 두 값으로 바꾼다.
+
+    1: (False, True), 2: (True, True), 3: (True, False), 4: (False, False). 그 밖의 번호는 ValueError.
+    쓰는 곳: mcdl/run.py의 RunConfig.from_mapping (설정의 preprocessing·skip_charge_ready 계산).
+    """
     if learning_case == 1:
         PREPROCESSING = False
         SKIP_CHARGE_READY = True
@@ -333,24 +374,30 @@ def get_preprocessing_and_skip_charge_ready(learning_case: int):
 
 
 def get_input_dimensions(BATTERY_TYPE: str):
+    """배터리 종류별로 차량 텐서의 열 구성(각 구간의 열 개수)을 돌려준다.
+
+    vin_2(U-model 입력)는 [x | y | z | q], vin_3(X-model 입력)은 [x2 | y2 | z2 | q2] 순서로 열이 놓여 있다.
+    셀 수는 QAS 110개, DTI 85개다.
+    쓰는 곳: mcdl/run.py(모델 입력·출력 크기), mcdl/vehicles.py·data_filter.py(전처리), 테스트.
+    """
     dim_dict = dict()
-    dim_dict["x"] = 2  # [estimated pack voltage 1, estimated pack volatage 2]
+    dim_dict["x"] = 2  # 팩 전압 추정값 2개
     dim_dict["y"] = (
         110 if BATTERY_TYPE == "QAS" else 85
-    )  # DTI 일경우 85 이고 QAS일 경우 110인듯 [각 셀의 voltage]
+    )  # 셀 전압 (셀 수만큼): 모델이 재구성하는 대상
     dim_dict["z"] = (
         110 if BATTERY_TYPE == "QAS" else 85
-    )  # DTI 일경우 85 이고 QAS일 경우 110인듯 [각 셀의 estimated voltage diviation]
-    dim_dict["q"] = 3  # [Board Temperature, Board-end SOC, Current]
+    )  # 셀 전압 편차 추정값 (셀 수만큼, 코드에서 Δ 또는 dx로 부른다)
+    dim_dict["q"] = 3  # 보드 온도, 보드단 SOC, 전류
 
-    dim_dict["x2"] = 2  # [estimated pack SOC 1, estimated pack SOC 2]
+    dim_dict["x2"] = 2  # 팩 SOC 추정값 2개
     dim_dict["y2"] = (
         110 if BATTERY_TYPE == "QAS" else 85
-    )  # DTI 일경우 85 이고 QAS일 경우 110인듯 [각 셀의 SOC]
+    )  # 셀 SOC (셀 수만큼): 모델이 재구성하는 대상
     dim_dict["z2"] = (
         110 if BATTERY_TYPE == "QAS" else 85
-    )  # DTI 일경우 85 이고 QAS일 경우 110인듯 [각 셀의 estimated SOC diviation]
-    dim_dict["q2"] = 4  # [Board Temperature, Board-end SOC, Velocity, Current]
+    )  # 셀 SOC 편차 추정값 (셀 수만큼)
+    dim_dict["q2"] = 4  # 보드 온도, 보드단 SOC, 속도, 전류
 
     return dim_dict
 
@@ -365,6 +412,17 @@ def preprocess_loaded_tensor(
     normalize_dx: bool = False,
     normalize_val: float = 1.0,
 ):
+    """차량 한 대의 원본 텐서(vin_2 → tensor, vin_3 → tensorx)를 학습·평가에 쓸 수 있게 전처리한다.
+
+    - QAS: X-model 입력의 속도 열을 0으로 둔다. SKIP_CHARGE_READY면 전류가 -500보다 작았던 마지막
+      시점까지(충전 대기 구간)를 잘라낸다. PREPROCESSING이면 팩 전압이 0 이하이거나 5 초과였던 마지막
+      시점까지를 더 잘라낸 뒤, 편차(Δ) 구간을 뺀 모든 열을 0~1로 정규화한다. normalize_dx면 Δ를
+      normalize_val로 나눈다.
+    - DTI: 값이 안정되기 전의 앞부분을 잘라내고(get_convergence_start_index), 단위를 바꾼다
+      (mV → V, % → 비율). 0~1 정규화는 하지 않는다.
+    두 텐서는 같은 시점으로 함께 잘린다. dim_dict는 get_input_dimensions의 결과다.
+    쓰는 곳: mcdl/vehicles.py의 load_vehicle(학습·평가의 모든 차량), data_filter.py.
+    """
     if BATTERY_TYPE == "DTI":
         # Remove unstable initial data dynamically
         # Uses column 0 to detect convergence (diff < 0.1 for 20 steps)

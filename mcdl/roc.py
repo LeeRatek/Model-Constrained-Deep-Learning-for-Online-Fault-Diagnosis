@@ -1,7 +1,16 @@
-"""차량 단위 ROC 평가.
+"""차량 단위 판정 성능(ROC 곡선과 AUC)을 계산하는 코드.
 
-차량별 최대 CI와 고장 여부로, 임계값 θ를 0 ~ 999.9 (0.1 간격)로 바꿔 가며 ROC 곡선, AUC,
-최적 임계값(Youden J 최대점, (0,1) 최근접점)을 구한다. 용어는 GLOSSARY.md를 따른다.
+무엇을 하나
+    평가 차량마다 판정 점수(최대 CI, mcdl/diagnosis.py)와 실제 고장 여부가 있다. 임계값 θ를 0부터 999.9까지
+    0.1 간격으로 바꿔 가며 "최대 CI > θ이면 고장"으로 판정하고, 임계값마다
+      TPR(고장 차량 중 고장으로 맞힌 비율), FPR(정상 차량 중 잘못 고장으로 판정한 비율)
+    을 구해 ROC 곡선을 만든다. 곡선 아래 면적(AUC)이 1에 가까울수록 정상과 고장을 잘 가른다.
+    추천 임계값 두 개도 고른다.
+      - Youden J 최대점: TPR − FPR이 가장 큰 임계값
+      - (0,1) 최근접점: 곡선 위에서 완벽한 판정점(FPR 0, TPR 1)에 가장 가까운 임계값
+
+누가 쓰나
+    Test_.py, Test_multi_models.py (결과는 콘솔, ROC 그림, AUC_summary CSV에 남는다).
 """
 
 from __future__ import annotations
@@ -10,24 +19,30 @@ from dataclasses import dataclass
 
 import numpy as np
 
-# 임계값 grid. list를 거쳐 만드는 방식까지 기존 스크립트와 같게 둔다 (CSV에 0.30000000000000004 등이 그대로 찍힌다)
+# 검사할 임계값 목록: 0, 0.1, 0.2, …, 999.9 (10,000개).
+# list를 거쳐 만드는 방식까지 예전 스크립트와 같게 두어, 결과 CSV에 찍히는 값(0.30000000000000004 등)이 그대로다.
 _THRESHOLDS = np.asarray(list(np.arange(0, 1000, 0.1)), dtype=float)
 
 
 @dataclass(frozen=True)
 class RocResult:
-    fpr: np.ndarray
-    tpr: np.ndarray
-    auc: float
+    """evaluate의 결과 묶음."""
+
+    fpr: np.ndarray  # ROC 곡선의 FPR 값들 (오름차순)
+    tpr: np.ndarray  # ROC 곡선의 TPR 값들
+    auc: float  # ROC 곡선 아래 면적
     best: dict  # Youden J 최대점: threshold, fpr, tpr, index, youden_j
     closest_to_01: dict  # (0,1) 최근접점: threshold, fpr, tpr, index, distance
 
 
 def evaluate(max_ci, is_fault, reverse: bool = False) -> RocResult:
-    """차량별 최대 CI와 고장 여부로 ROC를 평가한다. 차량 순서는 넘긴 순서를 그대로 쓴다.
+    """차량별 최대 CI 목록과 고장 여부 목록으로 ROC 곡선, AUC, 추천 임계값을 계산한다.
 
-    기본: 고장 차량이 양성이고, 최대 CI > θ이면 양성으로 판정한다.
-    reverse: 정상 차량이 양성이고, 최대 CI < θ이면 양성으로 판정한다 (--use-reverse-pos-neg).
+    max_ci와 is_fault는 같은 차량 순서의 목록이다. 정상 차량과 고장 차량이 모두 있어야 한다(없으면 ValueError).
+    - 기본: 고장 차량을 "양성"으로 보고, 최대 CI > θ이면 양성(고장)으로 판정한다.
+    - reverse=True: 정상 차량을 양성으로 보고, 최대 CI < θ이면 양성으로 판정한다
+      (Test_multi_models.py --use-reverse-pos-neg).
+    쓰는 곳: Test_.py, Test_multi_models.py.
     """
     predict = np.zeros((len(max_ci), len(_THRESHOLDS)), dtype=np.int8)
     y_true = np.zeros(len(max_ci), dtype=np.int8)
@@ -50,10 +65,14 @@ def evaluate(max_ci, is_fault, reverse: bool = False) -> RocResult:
 
 
 def _roc_from_threshold_matrix(y_true, predict_results, predict_thresholds):
-    """threshold grid 기반 ROC point들과 AUC를 계산.
+    """evaluate 안에서 쓴다. 임계값별 판정 결과 표로 ROC 곡선의 점들과 AUC를 계산한다.
+
+    y_true는 차량별 정답(양성 1, 음성 0), predict_results는 (차량 수 × 임계값 수) 판정 결과(양성 1)다.
+    곡선 양 끝에 (0,0)과 (1,1)을 더하고, FPR 오름차순(같으면 TPR 오름차순)으로 정렬해 계단 모양 곡선을 만든다.
 
     Returns:
-        dict: fpr, tpr, thresholds(thr_arr), auc, candidate_idx(finite threshold index), pos_count, neg_count
+        dict: fpr, tpr, thresholds(곡선 점마다의 임계값), auc, candidate_idx(양 끝 점을 뺀 실제 임계값의 위치),
+        pos_count, neg_count(양성·음성 차량 수)
     """
     from sklearn import metrics as sk_metrics
 
@@ -124,7 +143,11 @@ def _roc_from_threshold_matrix(y_true, predict_results, predict_thresholds):
 
 
 def _optimal_thresholds(fpr, tpr, thresholds, *, candidate_idx=None):
-    """ROC curve 상에서 최적 임계값(Youden J, (0,1) 최소거리)을 계산."""
+    """evaluate 안에서 쓴다. ROC 곡선 위에서 추천 임계값 두 개를 고른다.
+
+    Youden J(TPR − FPR)가 가장 큰 점과, (FPR 0, TPR 1)까지 거리가 가장 짧은 점이다. 같은 값이 여럿이면
+    앞쪽(작은 FPR) 점을 고른다. candidate_idx가 있으면 곡선 양 끝의 가상 점(임계값 ±무한대)은 빼고 고른다.
+    """
     fpr = np.asarray(fpr, dtype=float)
     tpr = np.asarray(tpr, dtype=float)
     thr_arr = np.asarray(thresholds, dtype=float)

@@ -1,3 +1,21 @@
+"""시각화 스크립트 (t-SNE + CI): 정상 기준 차량과 대상 차량의 데이터 분포를 2차원 그림으로 비교한다.
+
+t-SNE는 셀 220개 값(셀 전압 + 셀 SOC)처럼 차원이 높은 데이터를, 비슷한 시점끼리 가깝게 2차원 평면에 펼쳐
+보여 주는 시각화 방법이다. 실제 값과 모델의 재구성 값을 각각 그려, 고장 차량이 정상 차량과 어떻게 다르게
+놓이는지 본다. 세 번째 칸에는 대상 차량의 CI 시계열과 임계값 선을 그린다.
+
+실행 예
+    python Test_tsne.py --models-idx <RUN_ID> --fault-idx 338 --save   # 차량 338 하나
+    python Test_tsne.py --models-idx <RUN_ID> --save                   # test + fault 차량 전체를 차례로
+    옵션 전체는 README 7.5절에 있다.
+
+하는 일 (main 순서)
+    1. Run 설정을 읽고, 모델 쌍과 그 관리도를 가져온다(Test_.py와 같은 방식).
+    2. validate 분할 앞쪽 --cnt-max대를 정상 기준 차량으로 한 번 모은다(collect_vehicle_points).
+    3. 대상 차량마다 점을 모아 기준 차량 점과 합쳐 t-SNE 그림을 그린다(mcdl/plotting.py).
+       --save면 models/<RUN_ID>/results_tsne/tSNE_<차량 ID>.png로 저장하고, 아니면 창으로 띄운다.
+"""
+
 import numpy as np
 import os
 import warnings
@@ -13,6 +31,7 @@ from mcdl.plotting import plot_loss_curve_all, plot_tsne_before_after_ci
 
 device = torch.device("cpu")  # 평가는 CPU 전용 (Run이 CPU 모델을 돌려준다)
 
+# 명령줄 옵션 정의. 실제 읽기(parse_args)는 main 안에서 한다 (import만 할 때는 아무것도 실행되지 않게).
 parser = argparse.ArgumentParser(
     description="Run diagnostics plotting with CLI options"
 )
@@ -108,9 +127,11 @@ parser.add_argument(
 )
 
 
-# 예시: normal_list, fault_list를 이미 갖고 있다고 가정
-# 각 vehicle에서 df_data (N×6) 만든 다음 아래만 수행
 def add_vehicle_points(df_data, label, idx):
+    """한 차량의 (시점 × 값) 데이터에서 idx 시점들만 골라, 그 행들과 같은 길이의 라벨 배열(label)을 돌려준다.
+
+    쓰는 곳: collect_vehicle_points (t-SNE에 넣을 점 고르기).
+    """
     Xv = np.asarray(df_data, dtype=float)
     return Xv[idx], np.full(len(idx), label, dtype=int)
 
@@ -127,6 +148,15 @@ def collect_vehicle_points(
     netx_loaded,
     chart,
 ):
+    """차량들(vehicle_ids)에서 t-SNE에 넣을 점(시점)을 골라 모은다. label은 0(정상 기준) 또는 1(대상 차량).
+
+    차량마다: 원본을 읽고 → 진단 특징으로 CI를 계산하고 → 무작위 per_vehicle개 시점에, CI가 임계값을 넘은
+    시점(임계값마다 최대 100개)을 더해 점을 고른다. 고른 시점의 실제 셀 값(before)과 재구성 값(after)을 모으고,
+    점마다 알람 단계(0 없음, 1 첫 번째 임계값 초과, 2 두 번째 임계값 초과)를 기록한다. 시점은 시드 0으로 골라
+    실행할 때마다 같다.
+    돌려주는 값: (점·라벨·알람 단계를 담은 dict, 마지막 차량의 CI 시계열).
+    쓰는 곳: main (기준 정상 차량 묶음 한 번, 대상 차량마다 한 번).
+    """
     X_list_before, Y_list_before = [], []
     X_list_after, Y_list_after = [], []
     alarm_masks = {"before": [], "after": []}
@@ -219,6 +249,10 @@ def collect_vehicle_points(
 
 
 def main(argv=None):
+    """명령줄 옵션을 읽어 t-SNE 그림을 그린다. 순서는 이 파일 맨 위 설명의 "하는 일"과 같다.
+
+    argv를 주면 명령줄 대신 그 목록을 옵션으로 읽는다(테스트에서 이렇게 부른다). 쓰는 곳: 이 파일 맨 아래 실행부.
+    """
     os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
     print(torch.cuda.device_count())
 

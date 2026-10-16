@@ -1,3 +1,22 @@
+"""학습 스크립트: U-model(셀 전압)과 X-model(셀 SOC)을 학습하고, 학습 결과 폴더(Run)를 만든다.
+
+실행 예
+    python Train_.py --dataset-name 10 --ae-u-epochs 13 --ae-x-epochs 13 --ae-u-save-per 1 --ae-x-save-per 1
+    옵션 전체는 README 7.2절, 처음 실행 순서는 README 1장에 있다.
+
+하는 일 (main 순서)
+    1. 분할 파일에서 학습 차량과 검증 차량 ID를 읽고, 차량마다 원본을 전처리해 메모리에 올린다.
+    2. models/<RUN_ID>/ 폴더를 만들고 sim_config.txt(학습 설정 기록)를 쓴다.
+    3. U-model을 학습한다. --ae-u-save-per epoch마다 검증 loss를 재고 체크포인트(net_e<epoch>.pth)를 저장한다.
+    4. X-model도 같은 방식으로 학습한다(netx_e<epoch>.pth).
+    5. 최종 모델로 정상 학습 차량의 진단 특징을 계산해 PCA 관리도를 만들고 pca_arrays.npz 등으로 저장한다.
+       평가 스크립트(Test_.py 등)는 이 폴더를 읽어 평가한다.
+
+다른 파일과의 관계
+    데이터 읽기는 mcdl/vehicles.py, 모델 만들기·저장 규칙은 mcdl/run.py, 진단 특징은 mcdl/reconstruction.py,
+    관리도는 mcdl/diagnosis.py를 쓴다. 모델 구조는 Class_.py에 있다.
+"""
+
 import numpy as np
 import os
 import warnings
@@ -22,6 +41,7 @@ from mcdl.vehicles import load_vehicle, split_ids
 
 
 def set_seed(seed):
+    """파이썬·numpy·torch 난수의 시작값(시드)을 고정해, 같은 시드면 같은 학습 결과가 나오게 한다. 쓰는 곳: main."""
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -32,8 +52,10 @@ def set_seed(seed):
     torch.backends.cudnn.benchmark = False
 
 
+# 학습에 쓸 장치: GPU가 있으면 GPU, 없으면 CPU
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
+# 명령줄 옵션 정의. 실제 읽기(parse_args)는 main 안에서 한다 (import만 할 때는 아무것도 실행되지 않게).
 parser = argparse.ArgumentParser(description="Run MC-AE training with CLI options")
 parser.add_argument("--battery-type", choices=["QAS", "DTI"], default="QAS")
 parser.add_argument(
@@ -114,24 +136,28 @@ parser.add_argument(
 
 # ----------------------------------------Training for MC-AE--------------------------
 class VehicleRows(Dataset):
-    """여러 차량 텐서를 이어 붙이지 않고(메모리 피크 방지) 배치 하나를 (x, y, Δ, q) double로 꺼낸다.
+    """학습 데이터를 배치(시점 묶음) 단위로 꺼내 주는 torch Dataset. 쓰는 곳: 아래 row_loader.
 
-    인덱스는 시점 번호의 목록(배치)이다 (row_loader의 BatchSampler가 넘긴다). 한 차량 안의 연속 구간이면
-    slice로, 아니면 시점을 하나씩 모아 쌓는다. 어느 쪽이든 시점마다 꺼내 collate로 쌓던 예전 방식과
-    값·stride가 같다. 열 구성 [x | y | Δ | q]의 x·y 크기는 호출자가 모델 크기에서 읽어 넘긴다
-    (reconstruct와 같은 규칙).
+    여러 차량의 텐서를 하나로 이어 붙이면 메모리를 두 배로 쓰므로, 차량별 텐서 목록을 그대로 두고
+    "전체 시점 번호 → 몇 번째 차량의 몇 번째 시점"을 계산해 필요한 행만 꺼낸다.
+    한 번에 배치 하나(시점 번호 목록)를 받아 (x, y, Δ, q) 네 덩어리를 float64로 돌려준다.
+    한 차량 안의 연속된 시점이면 한 번에 잘라 오고(빠름), 아니면 시점을 하나씩 모은다.
+    x·y 폭은 호출하는 쪽이 모델 크기에서 읽어 넘긴다(mcdl/reconstruction.py와 같은 규칙).
     """
 
     def __init__(self, tensors, x_dim, y_dim):
+        """tensors: 차량별 (시점 × 열) 텐서 목록, x_dim: x 열 수, y_dim: 셀 수. 차량별 시작 위치를 미리 계산해 둔다."""
         self.tensors = tensors
         self.cumulative = np.cumsum([0] + [t.shape[0] for t in tensors])
         self.x_dim = x_dim
         self.y_dim = y_dim
 
     def __len__(self):
+        """전체 시점 수 (모든 차량의 시점 수 합)."""
         return self.cumulative[-1]
 
     def __getitem__(self, indices):
+        """시점 번호 목록(배치) 하나를 받아 (x, y, Δ, q) 텐서 네 개를 돌려준다. DataLoader가 부른다."""
         # 이진 탐색으로 각 시점이 어느 차량의 몇 번째 시점인지 찾는다
         idx = np.asarray(indices)
         vehicle = np.searchsorted(self.cumulative, idx, side="right") - 1
@@ -142,8 +168,9 @@ class VehicleRows(Dataset):
             rows = torch.stack([self.tensors[v][i] for v, i in zip(vehicle, local)])
         rows = rows.to(torch.double)
 
-        # 열 구간마다 표준 stride의 새 텐서로 만든다 (예전 collate 결과와 stride가 같아야 같은 연산 경로를 탄다).
-        # .contiguous()는 배치가 1행이면 복사하지 않아 원래 행 stride가 남으므로 clone을 쓴다.
+        # 열 구간마다 메모리에 빈틈없이 놓인 새 텐서로 복사한다. 예전 방식(시점을 하나씩 꺼내 쌓기)과 메모리
+        # 배치까지 같아야 행렬 계산이 같은 경로를 타서 결과가 소수점 끝자리까지 같다.
+        # .contiguous()는 배치가 1행일 때 복사하지 않아 메모리 배치가 달라지므로 clone을 쓴다.
         y_start = self.x_dim
         dx_start = y_start + self.y_dim
         q_start = dx_start + self.y_dim
@@ -154,28 +181,31 @@ class VehicleRows(Dataset):
 
 
 def row_loader(tensors, x_dim, y_dim, *, batch_size, shuffle):
-    """VehicleRows를 배치 단위로 읽는 DataLoader.
+    """학습·검증 데이터를 batch_size 시점씩 차례로 내주는 DataLoader를 만든다. 쓰는 곳: train_autoencoder.
 
-    sampler 구성이 DataLoader(shuffle=…, batch_size=…)가 안에서 만드는 것과 같아서, 배치 순서와
-    순회할 때의 전역 RNG 소비가 같다.
+    shuffle=True면 매 epoch 시점 순서를 섞는다. 내부 구성이 torch 기본 DataLoader(shuffle=…, batch_size=…)와
+    같아서, 섞는 순서와 난수를 쓰는 횟수까지 예전 코드와 같다(그래야 같은 시드에서 같은 학습 결과가 나온다).
     """
     rows = VehicleRows(tensors, x_dim, y_dim)
     sampler = RandomSampler(rows) if shuffle else SequentialSampler(rows)
     return DataLoader(rows, sampler=BatchSampler(sampler, batch_size, drop_last=False), batch_size=None)
 
 
+# 모델별 loss 기록 파일 이름 (Run 폴더에 <이름>.csv, <이름>_val.csv로 저장된다)
 LOSS_CSV = {"U": "loss_net", "X": "loss_netx"}
 
 
 def train_autoencoder(
     net, model, train_tensors, val_tensors, *, epochs, save_per, lr, batch_size, shuffle, device, run_dir, save
 ):
-    """U-model 또는 X-model(model = "U"/"X") 하나를 학습한다.
+    """모델 하나(model = "U" 또는 "X")를 학습하고 체크포인트·loss 기록을 Run 폴더에 저장한다. 쓰는 곳: main.
 
-    epoch % save_per == 0이면 검증 loss를 재고 체크포인트를 저장한다. 끝나면 loss CSV와 최종 모델(-1)을 저장한다.
-    val_tensors가 None이면 검증을 건너뛴다 (--no-validation).
-    전역 RNG는 DataLoader를 순회할 때마다 쓰인다 (shuffle을 꺼도). 그래서 학습 결과는 이 함수의 순회 순서
-    (epoch마다 학습 → save_per마다 검증)와 main의 호출 순서(U → X)에 달려 있다.
+    - 손실은 재구성 값과 실제 셀 값의 평균제곱오차(MSE), 최적화는 Adam, 계산은 float64다.
+    - epoch 번호가 save_per의 배수일 때마다 검증 loss를 계산해 출력하고, 체크포인트(<run_dir>/artifact/)를 저장한다.
+    - 끝나면 epoch별 학습 loss(loss_net.csv 등), 검증 loss(loss_net_val.csv 등), 최종 모델(net.pth/netx.pth)을 저장한다.
+    - val_tensors가 None이면 검증을 건너뛴다(--no-validation). save=False면 .pth 파일을 저장하지 않는다(--no-save).
+    재현성 주의: DataLoader는 데이터를 한 바퀴 돌 때마다(섞지 않아도) 난수를 쓴다. 그래서 이 함수 안의 순서
+    (epoch마다 학습 → save_per마다 검증)와 main의 호출 순서(U → X)를 바꾸면 shuffle을 켠 학습 결과가 달라진다.
     """
     optimizer = torch.optim.Adam(net.parameters(), lr=lr)
     loss_f = nn.MSELoss()
@@ -271,8 +301,13 @@ def train_autoencoder(
 
 
 def main(argv=None):
-    os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
-    print(torch.cuda.device_count())
+    """학습 전체를 실행한다 (파일 맨 위 "하는 일" 1~5). argv는 명령줄 옵션 목록이며, None이면 실제 명령줄을 읽는다.
+
+    `python Train_.py ...`로 실행하면 맨 아래의 `if __name__ == "__main__"`이 이 함수를 부른다.
+    테스트(tests/test_scripts.py)는 Train_.main([...])처럼 옵션 목록을 직접 넘겨 부른다.
+    """
+    os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"  # 일부 환경에서 수학 라이브러리 중복 로드 오류를 피하는 설정
+    print(torch.cuda.device_count())  # 사용할 수 있는 GPU 수 (0이면 CPU로 학습)
 
     warnings.filterwarnings("ignore")
 

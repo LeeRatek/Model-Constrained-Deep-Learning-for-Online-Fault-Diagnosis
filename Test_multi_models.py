@@ -1,3 +1,24 @@
+"""시뮬레이션 스크립트 (체크포인트 조합 비교): Run에 저장된 여러 U·X 체크포인트 조합의 진단 성능(AUC)을 비교한다.
+
+학습 중에는 epoch마다 체크포인트가 저장된다. 어느 epoch의 U-model과 어느 epoch의 X-model을 함께 쓸 때 진단이
+가장 잘 되는지 고르기 위한 메인 평가 스크립트다.
+
+실행 예
+    python Test_multi_models.py --models-idx <RUN_ID>                 # 모든 체크포인트 조합
+    python Test_multi_models.py --models-idx <RUN_ID> --fast-search   # 조합 수 줄이기 (U 먼저 고르고 X 훑기)
+    옵션 전체는 README 7.4절에 있다.
+
+하는 일 (main 순서)
+    1. 평가할 U·X 체크포인트 번호를 정하고 모델을 모두 불러온다.
+    2. 학습 차량과 평가 차량(test + fault)을 읽는다. 처음에는 원본에서 읽어 data/에 .pt 캐시 파일을 만들고,
+       다음 실행부터는 캐시를 읽는다(메모리를 많이 쓴다: README 1장 준비물).
+    3. 체크포인트마다 학습 진단 특징(자기 몫 3개)을 계산해 Run 폴더의 temp_cache/에 저장한다(--cache-strategy disk).
+    4. 조합마다 학습 진단 특징으로 관리도를 만들고, 평가 차량의 최대 CI로 ROC/AUC를 계산해
+       AUC_summary_case<C>.csv에 한 줄씩 쌓고 조합별 ROC 그림을 저장한다(process_combination).
+    5. 2개 이상 계산했으면 모든 조합의 ROC 비교 그림과 AUC 히트맵을 저장한다.
+       --keep-cache가 없으면 temp_cache/를 지운다(남겨 두면 Test_.py·Test_tsne.py가 재사용한다).
+"""
+
 import matplotlib.pyplot as plt
 import pandas as pd
 import os
@@ -16,6 +37,7 @@ from mcdl.vehicles import load_test_vehicles, load_training_vehicles, split_ids
 
 device = torch.device("cpu")  # 평가는 CPU 전용 (Run이 CPU 모델을 돌려준다)
 
+# 명령줄 옵션 정의. 실제 읽기(parse_args)는 main 안에서 한다 (import만 할 때는 아무것도 실행되지 않게).
 parser = argparse.ArgumentParser(
     description="Run diagnostics plotting with CLI options for multiple model combinations"
 )
@@ -101,8 +123,13 @@ parser.add_argument(
 
 
 def main(argv=None):
-    os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
-    print(torch.cuda.device_count())
+    """시뮬레이션 전체를 실행한다 (파일 맨 위 "하는 일" 1~5). argv는 명령줄 옵션 목록이며, None이면 실제 명령줄을 읽는다.
+
+    `python Test_multi_models.py ...`로 실행하면 맨 아래의 `if __name__ == "__main__"`이 이 함수를 부른다.
+    테스트(tests/test_scripts.py)는 Test_multi_models.main([...])처럼 옵션 목록을 직접 넘겨 부른다.
+    """
+    os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"  # 일부 환경에서 수학 라이브러리 중복 로드 오류를 피하는 설정
+    print(torch.cuda.device_count())  # 사용할 수 있는 GPU 수 (평가는 GPU가 있어도 CPU로 한다)
 
     warnings.filterwarnings("ignore")
 
@@ -447,6 +474,12 @@ def main(argv=None):
 
     # Function to process a single combination (refactored from original loop)
     def process_combination(u_idx, x_idx):
+        """체크포인트 조합 하나(U 번호 u_idx, X 번호 x_idx)를 평가하고 그 AUC를 돌려준다. main 안에서만 쓴다.
+
+        학습 진단 특징(캐시 또는 메모리)으로 관리도를 만들고, 평가 차량마다 최대 CI를 구해 ROC/AUC를 계산한다.
+        결과는 CSV에 한 줄 추가하고, 조합별 ROC 그림을 저장하고, 전체 비교 그림용 목록(all_roc_results)에 넣는다.
+        --resume으로 이미 CSV에 있는 조합이면 계산하지 않고 건너뛴다(--fast-search면 CSV의 AUC를 읽어 돌려준다).
+        """
         # SKIP LOGIC for RESUME (if result already in CSV)
         if (u_idx, x_idx) in completed_combinations:
             print(f"Skipping cached combination: u={u_idx}, x={x_idx}")

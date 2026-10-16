@@ -1,3 +1,21 @@
+"""데이터 분할 스크립트: 원본 차량 데이터에서 이상한 차량을 빼고, 학습·검증·테스트·고장 차량 목록을 만든다.
+
+학습(Train_.py)과 평가(Test_ 계열)를 하기 전에 한 번 실행한다. 만든 목록은 datasets/<이름>/ 폴더에
+<BT>_filtered_vehicle_ids_<분할>.npy 파일로 저장되고(<BT>는 배터리 종류 QAS 또는 DTI),
+Train_.py --dataset-name <이름>으로 그 분할을 고른다.
+
+실행 예
+    python data_filter.py --dataset-name 10 --train-ratio 0.1 --val-ratio 0.5 --seed 42
+    옵션과 코드 안에 고정된 값(BATTERY_TYPE, max_idx, fault_idx, mode)은 README 7.1절에 정리되어 있다.
+
+하는 일 (mode가 기본값 FILTER_MODE일 때)
+    1. 차량 0 ~ max_idx의 원본(data/<BT>/<ID>/vin_2.pkl, vin_3.pkl)을 읽어 전처리한다.
+    2. 값이 비정상인 차량을 뺀다(mcdl/preprocessing.py의 is_abnormal).
+    3. 차량 ID가 fault_idx 이상이면 고장, 미만이면 정상 차량으로 나눈다.
+    4. 정상 차량을 시드로 고정된 무작위 순서로 train / validate / test로 나눠 .npy로 저장하고,
+       분할 요약을 dataset_info_<BT>.txt에 남긴다.
+"""
+
 import numpy as np
 import os
 import warnings
@@ -7,6 +25,7 @@ import torch
 import argparse
 from enum import IntEnum
 
+# 명령줄 옵션 정의. 실제 읽기(parse_args)는 main 안에서 한다 (import만 할 때는 아무것도 실행되지 않게).
 parser = argparse.ArgumentParser()
 parser.add_argument(
     "--dataset-name", type=str, default="default", help="Name of the dataset folder"
@@ -32,12 +51,23 @@ parser.add_argument(
 
 
 class MODE(IntEnum):
+    """main이 무엇을 할지 고르는 값. main 안의 `mode = ...` 줄을 고쳐서 바꾼다(명령줄 옵션은 없다).
+
+    PLOT_MODE: 차량마다 주요 열의 시계열 그림을 data/data_analysis_at_charge_0/ 아래에 저장하고 끝낸다.
+    FILTER_MODE: 분할 파일(.npy)과 요약(dataset_info_<BT>.txt)을 저장한다 (기본값).
+    ANALYSIS_MODE: 남은 차량 데이터를 모두 이어 붙여, 주요 값의 분포 그림을 화면에 띄운다.
+    """
+
     PLOT_MODE = 1
     FILTER_MODE = 2
     ANALYSIS_MODE = 3
 
 
 def main(argv=None):
+    """명령줄 옵션을 읽어 mode에 맞는 일을 한다. 기본(FILTER_MODE) 순서는 이 파일 맨 위 설명의 "하는 일"과 같다.
+
+    argv를 주면 명령줄 대신 그 목록을 옵션으로 읽는다. 쓰는 곳: 이 파일 맨 아래 실행부.
+    """
     args = parser.parse_args(argv)
 
     os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"

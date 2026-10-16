@@ -1,3 +1,16 @@
+"""AUC 히트맵 스크립트: Test_multi_models.py가 저장한 AUC 표(CSV)를 색 칠한 표 그림(히트맵)으로 다시 그린다.
+
+Test_multi_models.py도 실행이 끝나면 같은 그림을 그린다. 이 스크립트는 모델을 다시 평가하지 않고,
+이미 있는 CSV만으로 그림을 다시 만들 때 쓴다(예: 그림 모양을 바꾼 뒤).
+
+실행 예
+    python Plot_AUC_heatmap.py --models-idx <RUN_ID>          # models/<RUN_ID>/에서 AUC_summary*.csv를 찾는다
+    python Plot_AUC_heatmap.py --csv-path ./models/<RUN_ID>/AUC_summary_case1.csv
+
+결과: CSV와 같은 폴더에 <CSV 이름>_heatmap.png (예: AUC_summary_case1_heatmap.png).
+그리는 일은 mcdl/plotting.py의 draw_auc_heatmap이 한다.
+"""
+
 import argparse
 import os
 import sys
@@ -7,6 +20,7 @@ from mcdl.plotting import draw_auc_heatmap
 # Ensure current directory is in path for imports if needed
 sys.path.append(os.getcwd())
 
+# 명령줄 옵션 정의. 실제 읽기(parse_args)는 main 안에서 한다 (import만 할 때는 아무것도 실행되지 않게).
 parser = argparse.ArgumentParser(description="Generate AUC Heatmap from CSV")
 parser.add_argument(
     "--models-dir",
@@ -39,6 +53,10 @@ parser.add_argument(
 
 
 def main(argv=None):
+    """CSV 경로를 정하고(--csv-path, 없으면 모델 폴더에서 --search-pattern으로 찾은 첫 파일) 히트맵 PNG를 저장한다.
+
+    argv를 주면 명령줄 대신 그 목록을 옵션으로 읽는다. 쓰는 곳: 이 파일 맨 아래 실행부, tests/test_scripts.py.
+    """
     args = parser.parse_args(argv)
     csv_file = args.csv_path
 

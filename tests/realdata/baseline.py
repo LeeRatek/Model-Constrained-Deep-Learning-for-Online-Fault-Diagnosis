@@ -1,18 +1,25 @@
-"""실데이터 기준선 수집·비교 도구 (.scratch/run-module 티켓 01).
+"""실제 데이터로 계산 결과가 바뀌지 않았는지 확인하는 도구: 스크립트 실행 결과를 기록하고(capture) 두 기록을 비교한다(compare).
 
-리팩토링 전후로 같은 명령을 실행해 결과를 bit 단위로 비교한다.
-pytest가 수집하지 않는 파일 이름이며, 저장소 루트에서 직접 실행한다.
+코드를 고치기 전에 한 번 기록하고 고친 뒤에 다시 기록해 둘을 비교하면, 실제 데이터에서 결과가 소수점
+끝자리까지 같은지(bit 단위로 같은지) 알 수 있다. 비교의 기준이 되는 이 기록을 "기준선(baseline)"이라고 부른다.
+실제 데이터(data/)와 학습된 Run이 있어야 해서 pytest 테스트에는 넣지 않았다(파일 이름이 test_로 시작하지 않는다).
 
-    python tests/realdata/baseline.py capture <target> <tag>
-    python tests/realdata/baseline.py compare <target> <tag_a> <tag_b>
+실행 (저장소 루트에서)
+    python tests/realdata/baseline.py capture <target> <tag>            # 기록
+    python tests/realdata/baseline.py compare <target> <tag_a> <tag_b>  # 두 기록 비교
 
-target: test | test_u0 | tsne | multi | train | train_full
-결과:   models/_verify/baselines/<tag>/<target>.pkl  (+ 같은 이름의 .log)
+    target: 무엇을 실행할지. test | test_u0 | tsne | multi | train | train_full (명령은 아래 TARGETS)
+    tag: 기록에 붙이는 이름(예: before, after). 결과는 models/_verify/baselines/<tag>/<target>.pkl과
+         같은 이름의 .log(화면 출력)로 저장된다.
+    평가 target은 models/_verify/260224_090359(실제 Run을 복사해 둔 폴더)가 있어야 한다.
 
-스크립트 코드는 건드리지 않는다. 진단 특징·PCA·T²/SPE·ROC·t-SNE 입력 함수를 기록용 wrapper로
-바꿔 둔 뒤 runpy로 스크립트를 실행한다. 스크립트와 mcdl module은 import할 때 이 wrapper를 가져간다.
-WRAP_TARGETS의 위치 목록에는 지금 위치(mcdl.*)와 예전 위치(Function_)가 함께 있다. 예전 위치는 옛 코드로
-기준선을 다시 뜰 때만 쓰이고, 없는 module이면 건너뛴다.
+어떻게 기록하나
+    스크립트 코드는 고치지 않는다. 대신 진단 특징·PCA·T²/SPE·ROC·t-SNE 계산 함수를 잠시 "감싸는 함수
+    (wrapper)"로 바꿔치기한다(install_wrappers). 감싸는 함수는 원래 함수를 그대로 불러 같은 결과를 돌려주면서,
+    입력·출력의 지문(digest: 값이 1 bit만 달라도 바뀌는 짧은 문자열)을 RECORDS에 남긴다. 그 상태로 스크립트를
+    명령줄에서 실행한 것과 똑같이 실행한다(runpy).
+    WRAP_TARGETS에는 함수의 지금 위치(mcdl.*)와 리팩터링 전 위치(Function_)가 함께 적혀 있다. 예전 위치는
+    옛 코드로 기준선을 다시 기록할 때만 쓰이고, 그 파일이 없으면(지금 코드) 건너뛴다.
 """
 
 import os
@@ -30,12 +37,13 @@ import sys
 import time
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[2]
-VERIFY_DIR = ROOT / "models" / "_verify"
-BASELINE_DIR = VERIFY_DIR / "baselines"
-RUN_ID = "260224_090359"
-TRAIN_MODELS_DIR = "./models/_verify/train"
+ROOT = Path(__file__).resolve().parents[2]  # 저장소 루트
+VERIFY_DIR = ROOT / "models" / "_verify"  # 확인용 Run 복사본과 기록을 두는 폴더
+BASELINE_DIR = VERIFY_DIR / "baselines"  # 기록 저장 위치: <tag>/<target>.pkl
+RUN_ID = "260224_090359"  # 평가 target이 쓰는 Run (models/_verify/ 아래 복사본)
+TRAIN_MODELS_DIR = "./models/_verify/train"  # 학습 target이 새 Run을 만드는 곳
 
+# target 이름 → 실행할 명령 (스크립트 파일 + 옵션)
 TARGETS = {
     "test": [
         "Test_.py",
@@ -98,14 +106,19 @@ TRAIN_TARGETS = ("train", "train_full")
 # sim_config.txt에서 실행 환경에 따라 달라지는 줄 (비교에서 값만 지운다)
 SIM_CONFIG_VOLATILE_KEYS = ("timestamp", "python", "platform", "cwd")
 
+# 실행 중 모은 기록: (기록 이름, {"in": 입력 지문, "out": 출력 지문, "full": 값 자체}) 목록. capture가 파일로 저장한다.
 RECORDS = []
 
 
-# ---------------------------------------------------------------- digest
+# ---------------------------------------------------------------- 지문(digest) 만들기
 
 
 def digest(x):
-    """값을 bit 단위로 구분하는 짧은 문자열로 바꾼다 (dtype·shape·라벨 포함)."""
+    """값의 지문(짧은 문자열)을 만든다. 값·자료형(dtype)·모양(shape)·열 이름 중 하나라도 다르면 지문이 달라진다.
+
+    배열은 메모리 내용의 SHA-256 해시 앞 16자리, 실수 하나는 16진 표기(float.hex)로 남겨 마지막 bit까지 구분한다.
+    쓰는 곳: _wrap, install_wrappers, _digest_train_run.
+    """
     import numpy as np
     import pandas as pd
     import torch
@@ -135,20 +148,24 @@ def digest(x):
 
 
 def _hash(parts):
+    """문자열 조각 목록을 하나로 합쳐 SHA-256 해시 앞 16자리로 줄인다. 쓰는 곳: digest."""
     return hashlib.sha256(json.dumps(parts).encode()).hexdigest()[:16]
 
 
-# ---------------------------------------------------------------- 기록용 wrapper
+# ---------------------------------------------------------------- 기록용 감싸는 함수(wrapper)
 
 
 def _as_diagnosis_feature_output(features):
-    """diagnosis_features는 DataFrame만 돌려준다. 이전 DiagnosisFeature의 (df, None) 모양으로 기록한다."""
+    """지금 diagnosis_features는 DataFrame 하나만 돌려주지만, 예전 DiagnosisFeature는 (DataFrame, None)을 돌려줬다.
+
+    예전 코드로 뜬 기준선과 비교할 수 있게 예전 모양으로 바꿔 기록한다. 쓰는 곳: WRAP_TARGETS.
+    """
     return features, None
 
 
-# (기록 이름, 함수가 있을 수 있는 위치들, 옵션). 함수를 다른 module로 옮겨도 같은 기록 이름을 써서
-# 이전 기준선(before1)과 그대로 비교한다. 위치는 존재하는 것만 감싼다.
-# 위치에 세 번째 값(dict)이 있으면 그 위치에만 추가 옵션을 적용한다.
+# 기록할 함수 목록: (기록 이름, 함수가 있을 수 있는 위치들, 옵션). 함수를 다른 파일로 옮겨도 같은 기록 이름을 써서
+# 예전에 뜬 기준선과 그대로 비교한다. 위치는 실제로 있는 것만 감싼다.
+# 위치에 세 번째 값(dict)이 있으면 그 위치에만 추가 옵션을 적용한다. 옵션의 뜻은 _wrap 설명에 있다.
 WRAP_TARGETS = [
     (
         "DiagnosisFeature",
@@ -201,10 +218,20 @@ def _wrap(
     keep_last_args=False,
     legacy_out=None,
 ):
-    """legacy_out: 옮긴 함수의 반환 모양이 바뀐 경우, 이전 함수의 반환 모양으로 바꿔 기록한다."""
+    """module의 함수 attr를 기록하는 감싸는 함수로 바꿔치기한다. 기록은 name이라는 이름으로 RECORDS에 쌓인다.
+
+    옵션
+        inputs=True: 입력(인자)의 지문도 남긴다.        output=False: 출력 지문을 남기지 않는다.
+        keep_full=True: 출력 값 자체도 남긴다(다를 때 얼마나 다른지 보려고).
+        drop_kwargs: 입력 지문에서 뺄 키워드 인자 이름들.
+        keep_last_args=True: 마지막 호출의 위치 인자를 LAST_ARGS[name]에 둔다.
+        legacy_out: 옮긴 함수의 반환 모양이 바뀐 경우, 예전 함수의 반환 모양으로 바꿔 기록하는 함수.
+    쓰는 곳: install_wrappers.
+    """
     orig = getattr(module, attr)
 
     def wrapper(*args, **kwargs):
+        """원래 함수를 그대로 불러 결과를 돌려주고, 그 사이에 입력·출력 지문을 RECORDS에 남긴다."""
         out = orig(*args, **kwargs)
         recorded = legacy_out(out) if legacy_out else out
         payload = {}
@@ -224,6 +251,11 @@ def _wrap(
 
 
 def install_wrappers():
+    """WRAP_TARGETS의 함수들과 t-SNE 계산(sklearn TSNE.fit_transform)을 기록하는 함수로 바꿔치기한다.
+
+    스크립트를 실행하기 전에 한 번 부른다. 스크립트와 mcdl 파일들은 그 뒤에 import되므로 바뀐 함수를 쓰게 된다.
+    쓰는 곳: capture.
+    """
     import importlib
 
     from sklearn.manifold import TSNE
@@ -240,6 +272,7 @@ def install_wrappers():
     orig_fit_transform = TSNE.fit_transform
 
     def fit_transform(self, X, *args, **kwargs):
+        """원래 t-SNE 계산을 그대로 하고, 입력·출력 지문과 출력 값 자체를 RECORDS에 남긴다."""
         Z = orig_fit_transform(self, X, *args, **kwargs)
         RECORDS.append(("TSNE.fit_transform", {"in": digest(X), "out": digest(Z), "full": Z}))
         return Z
@@ -251,20 +284,33 @@ def install_wrappers():
 
 
 class _Tee(io.TextIOBase):
+    """화면 출력을 여러 곳(화면과 .log 파일)에 동시에 쓰는 출력 대상. 쓰는 곳: capture."""
+
     def __init__(self, *streams):
+        """출력을 함께 보낼 대상들(예: 원래 화면 출력, 열어 둔 로그 파일)을 받는다."""
         self.streams = streams
 
     def write(self, s):
+        """글 s를 모든 대상에 쓴다."""
         for st in self.streams:
             st.write(s)
         return len(s)
 
     def flush(self):
+        """모든 대상의 버퍼를 비워 실제로 출력되게 한다."""
         for st in self.streams:
             st.flush()
 
 
 def capture(target, tag):
+    """target 명령을 실행하며 기록을 모아 models/_verify/baselines/<tag>/<target>.pkl로 저장한다.
+
+    화면 출력은 같은 이름의 .log에도 남긴다. 실행이 끝나면 target에 따라 기록을 하나 더 붙인다.
+        test, test_u0: 최종 ROC 결과(임계값별 판정, 최적 임계값)
+        multi: AUC_summary_case1.csv 내용
+        train, train_full: 새로 생긴 학습 Run 폴더의 모든 파일 지문
+    쓰는 곳: main.
+    """
     import numpy as np
     import torch
 
@@ -340,15 +386,26 @@ def capture(target, tag):
 
 
 def _last_full(name):
+    """RECORDS에서 name으로 남긴 마지막 기록의 값 자체(full)를 찾는다. 쓰는 곳: capture."""
     return next(payload["full"] for n, payload in reversed(RECORDS) if n == name)
 
 
 def _train_run_dirs():
+    """학습 target의 결과 폴더(models/_verify/train) 아래 Run 폴더 이름들.
+
+    실행 전후의 목록을 비교해 새로 생긴 Run을 찾는다. 쓰는 곳: capture.
+    """
     base = ROOT / TRAIN_MODELS_DIR
     return {p.name for p in base.iterdir() if p.is_dir()} if base.exists() else set()
 
 
 def _digest_train_run(run_dir):
+    """학습 Run 폴더 안 파일마다 기록을 하나씩 만든다.
+
+    체크포인트(.pth)와 .npz는 항목별 지문, sim_config.txt는 환경 관련 줄을 지운 글, pca_manifest.json은 Run 폴더
+    이름을 <RUN_ID>로 바꾼 글(실행할 때마다 폴더 이름이 달라지므로), 나머지는 파일 내용의 해시로 남긴다.
+    쓰는 곳: capture.
+    """
     import numpy as np
     import torch
 
@@ -374,6 +431,10 @@ def _digest_train_run(run_dir):
 
 
 def _normalize_sim_config(text):
+    """sim_config.txt 글에서 실행할 때마다 달라지는 줄(SIM_CONFIG_VOLATILE_KEYS)의 값을 <ignored>로 바꾼다.
+
+    쓰는 곳: _digest_train_run.
+    """
     lines = []
     for line in text.splitlines():
         key = line.split(":", 1)[0].strip()
@@ -387,6 +448,10 @@ def _normalize_sim_config(text):
 
 
 def compare(target, tag_a, tag_b):
+    """두 기록(tag_a, tag_b)을 기록 순서대로 하나씩 비교해, 다른 곳을 최대 50개까지 출력한다.
+
+    모두 같으면 0, 다르면 1을 돌려준다(명령줄 종료 코드). 쓰는 곳: main.
+    """
     a = _load(tag_a, target)
     b = _load(tag_b, target)
     ra, rb = a["records"], b["records"]
@@ -414,11 +479,13 @@ def compare(target, tag_a, tag_b):
 
 
 def _load(tag, target):
+    """저장된 기록 파일(baselines/<tag>/<target>.pkl) 하나를 읽는다. 쓰는 곳: compare."""
     with open(BASELINE_DIR / tag / f"{target}.pkl", "rb") as f:
         return pickle.load(f)
 
 
 def _first_name_diff(ra, rb):
+    """두 기록 목록에서 기록 이름이 처음 달라지는 위치를 설명하는 글. 쓰는 곳: compare."""
     for i, ((na, _), (nb, _)) in enumerate(zip(ra, rb)):
         if na != nb:
             return f"#{i} {na} vs {nb}"
@@ -426,6 +493,10 @@ def _first_name_diff(ra, rb):
 
 
 def _equal(x, y):
+    """두 기록 값이 완전히 같은지 본다. 배열은 자료형·모양·값(NaN끼리는 같다고 본다), dict·list는 안쪽까지 비교한다.
+
+    쓰는 곳: compare, _describe_diff.
+    """
     import numpy as np
 
     if type(x) is not type(y):
@@ -446,6 +517,10 @@ def _equal(x, y):
 
 
 def _describe_diff(x, y):
+    """두 값이 어떻게 다른지 한 줄로 설명한다(실수 배열은 최대 절대 차이, 다른 배열은 다른 원소 수, dict는 다른 키).
+
+    쓰는 곳: compare.
+    """
     import numpy as np
 
     if isinstance(x, np.ndarray) and isinstance(y, np.ndarray) and x.shape == y.shape:
@@ -462,6 +537,7 @@ def _describe_diff(x, y):
 
 
 def main():
+    """명령줄에서 capture 또는 compare를 골라 실행한다. 쓰는 곳: 이 파일 맨 아래 실행부."""
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest="cmd", required=True)

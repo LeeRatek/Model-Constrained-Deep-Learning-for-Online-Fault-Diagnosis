@@ -1,4 +1,11 @@
-"""진입 스크립트 smoke 테스트. tmp 작업 폴더의 가짜 원본 데이터로 학습(Train_.main)부터 평가까지 잇는다."""
+"""실행 스크립트(Train_.py, Test_.py 등 저장소 루트의 .py) smoke 테스트.
+
+smoke 테스트: 결과 값이 정확한지까지는 따지지 않고, 전체 흐름이 오류 없이 끝까지 돌아가고 기대한 파일이
+생기는지만 빠르게 확인하는 테스트. (전자 제품에 처음 전원을 넣어 연기가 나지 않는지 보는 데서 온 말이다.)
+
+임시 작업 폴더에 가짜 원본 데이터(fake_vehicles.py)와 분할 파일을 만들고, 학습(Train_.main)으로 작은 Run을
+만든 뒤 그 Run으로 Test_, Test_tsne, Test_multi_models, Plot_AUC_heatmap을 차례로 실행한다(약 20초).
+"""
 
 import contextlib
 import importlib
@@ -7,7 +14,7 @@ import sys
 
 import matplotlib
 
-matplotlib.use("Agg")
+matplotlib.use("Agg")  # 그림 창을 띄우지 않고 파일로만 그린다 (테스트 중 창이 뜨지 않게)
 
 import pandas as pd
 import pytest
@@ -16,13 +23,18 @@ from fake_vehicles import N_STEPS, write_fake_vehicles, write_split
 from mcdl.diagnosis import ControlChart
 from mcdl.run import Run
 
-SPLITS = {"train": [0, 1], "validate": [2], "test": [3, 4], "fault": [5, 6]}
+SPLITS = {"train": [0, 1], "validate": [2], "test": [3, 4], "fault": [5, 6]}  # 가짜 분할 (차량 ID)
 DEBUG_VEHICLE = 338  # Test_ --debug가 고정해 평가하는 차량
 MAIN_SCRIPTS = ["Train_", "data_filter", "Test_", "Test_tsne", "Test_multi_models", "Plot_AUC_heatmap"]
 
 
 @pytest.mark.parametrize("name", MAIN_SCRIPTS)
 def test_import_runs_nothing(name, monkeypatch, capsys):
+    """스크립트를 import만 하면 아무것도 실행·출력되지 않고 main 함수만 준비되는지 본다.
+
+    그래야 테스트나 다른 코드가 스크립트의 함수를 안전하게 가져다 쓸 수 있다. 명령줄에 없는 옵션을 넣어 두어,
+    import 중에 옵션을 읽으려 하면 바로 실패하게 만든다.
+    """
     monkeypatch.setattr(sys, "argv", ["prog", "--no-such-option"])  # import 때 파싱하면 SystemExit가 난다
     sys.modules.pop(name, None)
 
@@ -34,7 +46,11 @@ def test_import_runs_nothing(name, monkeypatch, capsys):
 
 @pytest.fixture(scope="module")
 def workspace(tmp_path_factory):
-    """가짜 원본 데이터(data/QAS/<id>)와 루트 분할 .npy를 둔 작업 폴더. 스크립트는 상대 경로를 쓰므로 cwd를 옮긴다."""
+    """가짜 원본 데이터(data/QAS/<id>)와 루트 분할 .npy를 둔 임시 작업 폴더. 스크립트는 상대 경로를 쓰므로
+    이 파일의 테스트가 도는 동안 작업 폴더(cwd)를 여기로 옮겨 둔다.
+
+    scope="module"이라 이 파일의 테스트 전체가 한 번 만든 폴더를 함께 쓴다(테스트마다 새로 만들지 않는다).
+    """
     root = tmp_path_factory.mktemp("workspace")
     write_fake_vehicles(root / "data", [i for ids in SPLITS.values() for i in ids] + [DEBUG_VEHICLE])
     for split, ids in SPLITS.items():
@@ -54,7 +70,7 @@ def run_main(name, argv):
     return out.getvalue()
 
 
-TRAIN_ARGS = [
+TRAIN_ARGS = [  # 빨리 끝나도록 1 epoch만 학습하는 Train_.py 옵션
     "--source-data-dir", "data",
     "--ae-u-epochs", "1",
     "--ae-x-epochs", "1",
@@ -65,7 +81,10 @@ TRAIN_ARGS = [
 
 @pytest.fixture(scope="module")
 def trained_run(workspace):
-    """Train_.main으로 학습 차량 2대·검증 차량 1대, 1 epoch Run을 만든다."""
+    """Train_.main으로 학습 차량 2대·검증 차량 1대, 1 epoch Run을 만들고 그 폴더 경로를 돌려준다.
+
+    이 파일의 평가 스크립트 테스트들이 이 Run 하나를 함께 쓴다.
+    """
     run_main("Train_", ["--models-dir", "models", *TRAIN_ARGS])
     (run_dir,) = (workspace / "models").iterdir()
     return run_dir
@@ -77,6 +96,7 @@ def training_rows(run_dir):
 
 
 def test_train_creates_a_run(trained_run):
+    """학습이 Run 폴더에 설정 파일, 체크포인트(0번과 최종), 검증 loss, 관리도를 남기는지 본다."""
     run = Run(trained_run)
 
     assert run.config.battery_type == "QAS"
@@ -90,6 +110,7 @@ def test_train_creates_a_run(trained_run):
 
 
 def test_train_debug_uses_one_vehicle_and_writes_no_sim_config(workspace):
+    """Train_ --debug는 학습 차량 1대만 쓰고 sim_config.txt를 남기지 않는지 본다."""
     out = run_main("Train_", ["--models-dir", "models_debug", "--debug", *TRAIN_ARGS])
 
     (run_dir,) = (workspace / "models_debug").iterdir()
@@ -118,6 +139,7 @@ def test_train_checkpoint_schedule_with_shuffle_and_validation(workspace):
 
 
 def test_test_evaluates_the_run_with_either_option_name(trained_run):
+    """Test_가 Run을 평가해 AUC와 ROC 그림을 내는지, 옛 옵션 이름 --models-folder로도 되는지 본다."""
     for option in ("--models-folder", "--models-idx"):
         out = run_main("Test_", ["--models-dir", "models", option, trained_run.name, "--source-data-dir", "data"])
 
@@ -127,6 +149,7 @@ def test_test_evaluates_the_run_with_either_option_name(trained_run):
 
 
 def test_test_models_dir_defaults_to_model_dir_env(trained_run, monkeypatch):
+    """--models-dir를 주지 않으면 환경 변수 MODEL_DIR의 폴더를 쓰는지 본다."""
     monkeypatch.setenv("MODEL_DIR", "models")
     module = importlib.reload(importlib.import_module("Test_"))  # parser 기본값은 import 때 정해진다
 
@@ -138,6 +161,11 @@ def test_test_models_dir_defaults_to_model_dir_env(trained_run, monkeypatch):
 
 
 def test_test_debug_fixes_vehicle_and_keeps_chart_pair(trained_run):
+    """Test_ --debug는 차량 338 하나만 평가하고, 관리도도 고른 모델 쌍(0, 0)으로 다시 계산하는지 본다.
+
+    예전에는 --debug일 때 관리도만 최종 모델 쌍 것을 쓰는 버그가 있었다
+    (.scratch/known-bugs/issues/11-test-debug-chart-pair-mismatch.md).
+    """
     out = run_main(
         "Test_",
         ["--models-dir", "models", "--models-idx", trained_run.name, "--source-data-dir", "data",
@@ -146,10 +174,11 @@ def test_test_debug_fixes_vehicle_and_keeps_chart_pair(trained_run):
 
     assert f"vehicle ID={DEBUG_VEHICLE}..." in out
     assert all(f"vehicle ID={i}..." not in out for ids in (SPLITS["test"], SPLITS["fault"]) for i in ids)
-    assert "Recomputing the control chart for (u=0, x=0)" in out  # 관리도도 모델과 같은 쌍 (known-bugs 11)
+    assert "Recomputing the control chart for (u=0, x=0)" in out  # 관리도도 모델과 같은 쌍
 
 
 def test_tsne_saves_the_plot(trained_run):
+    """Test_tsne --save가 고장 차량 하나의 t-SNE 그림 파일을 저장하는지 본다."""
     fault = SPLITS["fault"][0]
 
     run_main(
@@ -162,6 +191,8 @@ def test_tsne_saves_the_plot(trained_run):
 
 
 def test_multi_evaluates_all_checkpoint_pairs_and_heatmap(trained_run):
+    """Test_multi_models가 체크포인트 쌍 4개(U·X 각각 0번과 최종)를 모두 평가해 AUC 표와 히트맵을 남기고,
+    임시 캐시를 지우는지 본다. 이어서 Plot_AUC_heatmap이 그 표로 히트맵을 다시 그리는지도 본다."""
     out = run_main(
         "Test_multi_models",
         ["--models-dir", "models", "--models-idx", trained_run.name, "--source-data-dir", "data"],

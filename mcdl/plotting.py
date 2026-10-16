@@ -1,7 +1,16 @@
-"""스크립트가 쓰는 그림 함수.
+"""실행 스크립트들이 결과를 그림(PNG)으로 남길 때 쓰는 그림 함수 모음.
 
-loss 곡선, ROC 곡선, 진단 시계열(T²·SPE·CI), 입력 시계열·분포, 모델 파라미터, t-SNE, AUC 히트맵을 그린다.
-함수 본문은 예전 Function_.py에서 그대로 옮겼다.
+함수와 쓰는 곳
+    plot_loss_curve_all             학습·검증 loss 곡선                     Test_.py, Test_multi_models.py, Test_tsne.py
+    plot_roc_curve                  ROC 곡선과 추천 임계값 두 점             Test_.py, Test_multi_models.py
+    plot_diagnostics_triplet        차량 한 대의 T²·SPE·CI 시계열(3단)       Test_.py (진단 그림 모드)
+    plot_net_layer_params_by_index  모델 층의 가중치·편향 막대그래프         Test_.py
+    plot_tsne_before_after_ci       실제 값·재구성 값 t-SNE와 CI             Test_tsne.py
+    draw_auc_heatmap                체크포인트 조합별 AUC 히트맵             Test_multi_models.py, Plot_AUC_heatmap.py
+    plot_testX_timeseries           입력 데이터 열들의 시계열               data_filter.py (그림 모드)
+    plot_distribution_with_stats    값 분포 히스토그램과 평균·표준편차      data_filter.py (분석 모드)
+나머지(load_loss_csv, plot_loss_curve, plot_timeseries)는 위 함수들이 안에서 쓰는 도우미다.
+그림 함수는 계산 결과(수치)에 영향을 주지 않는다. 함수 본문은 예전 공통 함수 파일(Function_.py)에서 그대로 옮겼다.
 """
 
 from __future__ import annotations
@@ -19,7 +28,7 @@ from sklearn.preprocessing import StandardScaler
 
 
 def load_loss_csv(loss_csv_path, *, delimiter=",", skiprows: int = 1):
-    """Train_.py에서 저장한 loss CSV(epoch,avg_loss)를 로드.
+    """Train_.py가 저장한 loss CSV(열: epoch, avg_loss)를 읽는다. 쓰는 곳: plot_loss_curve.
 
     Returns:
         (epochs, losses): np.ndarray, np.ndarray
@@ -53,10 +62,10 @@ def plot_loss_curve(
     yscale=None,
     png_compress_level=1,
 ):
-    """Loss curve를 플로팅.
+    """epoch별 loss 곡선 하나를 그린다. 쓰는 곳: plot_loss_curve_all.
 
     입력은 (1) loss_csv_path 또는 (2) epochs/losses 배열 둘 중 하나.
-    속도를 위해 downsample, tight_layout 옵션을 제공.
+    속도를 위해 downsample(몇 epoch마다 하나씩 그릴지), tight_layout 옵션을 제공.
 
     Returns:
         (epochs, losses): 플롯에 사용된 배열
@@ -124,6 +133,12 @@ def plot_loss_curve(
 
 
 def plot_loss_curve_all(path):
+    """Run 폴더(path)의 loss CSV 네 개로 loss 곡선 그림 네 장을 그려 같은 폴더에 저장한다.
+
+    loss_net.png(U-model 학습), loss_netx.png(X-model 학습), loss_net_val.png·loss_netx_val.png(검증).
+    이미 그림 파일이 있으면 다시 그리지 않는다. 화면에는 띄우지 않는다.
+    쓰는 곳: Test_.py, Test_multi_models.py, Test_tsne.py (평가 시작 때, 실패해도 평가는 계속한다).
+    """
     save_path = f"{path}/loss_net.png"
     if not os.path.exists(save_path):
         plot_loss_curve(
@@ -184,7 +199,12 @@ def plot_roc_curve(
     show: bool = True,
     dpi: int = 200,
 ):
-    """ROC 커브를 플로팅하고(옵션으로) 최적점들을 표시."""
+    """ROC 곡선을 그리고, 추천 임계값 두 점(Youden J 최대점, (0,1) 최근접점)을 표시한다.
+
+    fpr, tpr, auc_val과 두 점은 mcdl/roc.py evaluate의 결과를 그대로 넘긴다. save_path가 있으면 저장하고,
+    show=True면 창으로 띄운다(창을 닫아야 다음으로 진행된다).
+    쓰는 곳: Test_.py(results/AUC_ROC<C>.png), Test_multi_models.py(조합별 ROC).
+    """
 
     fpr = np.asarray(fpr, dtype=float)
     tpr = np.asarray(tpr, dtype=float)
@@ -281,7 +301,11 @@ def plot_testX_timeseries(
     close=None,
 ):
     """
-    test_X 시계열 데이터(형상: [T, 1, 7] 또는 [T, 7])를 시간(x축) 대비 다중 라인(y축)으로 그립니다.
+    입력 데이터의 여러 열을 시간(x축)에 따른 선으로 그립니다 (형상: [T, F] 또는 [T, 1, F]).
+
+    seperate=True면 열마다 그림을 따로, False면 한 그림에 모아 그립니다. _range=[시작 열, 끝 열]로 그릴 열을
+    고르고([-1]이면 전체), start_idx로 앞의 시점을 건너뜁니다.
+    쓰는 곳: data_filter.py (PLOT_MODE에서 차량별 입력 열을 그림 파일로 저장).
 
     Args:
         test_X: torch.Tensor | np.ndarray | pd.DataFrame
@@ -371,6 +395,10 @@ def plot_timeseries(
     ax=None,
     close=None,
 ):
+    """plot_testX_timeseries 안에서 쓴다. [T, F](또는 [T, 1, F]) 데이터의 열마다 선 하나씩 그린다.
+
+    ax를 넘기면 그 축에 그리고 저장·표시는 호출한 쪽에 맡긴다. 아니면 새 그림을 만들어 저장·표시한다.
+    """
     # 입력을 numpy 2D [T, F]로 변환
     if isinstance(test_X, torch.Tensor):
         arr = test_X.detach().cpu().numpy()
@@ -457,12 +485,13 @@ def plot_diagnostics_triplet(
     - 하단: CI(Comprehensive Index; CI)
 
     CI 서브플롯에만 `thresholds`로 전달된 값들을 수평선으로 표시합니다.
+    쓰는 곳: Test_.py (AUC_ANALYSIS = False인 진단 그림 모드, 차량마다 한 장).
 
     Args:
         t2_array: (N,) 형태의 1D 배열
         spe_array: (N,) 형태의 1D 배열
         CI_array: (N,) 형태의 1D 배열
-        thresholds: 수평 임계선 값 리스트/튜플(예: diagnosis_thresholds 결과)
+        thresholds: 수평 임계선 값 리스트/튜플(예: [10.4, 87.5])
         sigma_levels: 각 임계선 라벨 리스트(예: ["3σ", "4.5σ", "6σ"]). None이면 자동 라벨.
         title: 전체 Figure 타이틀
         x_label: 공통 x축 라벨(기본: "Time")
@@ -473,6 +502,7 @@ def plot_diagnostics_triplet(
     """
 
     def _to_1d(a):
+        """pandas Series나 배열을 1차원 numpy 배열로 바꾼다."""
         if isinstance(a, pd.Series):
             return a.values
         return np.asarray(a).reshape(-1)
@@ -584,6 +614,12 @@ def plot_distribution_with_stats(
     ddof=1,
     block=False,
 ):
+    """값들의 분포(히스토그램)를 그리고 평균과 평균±표준편차 선, 개수·평균·표준편차·분산을 함께 표시한다.
+
+    kde=True면 seaborn으로 매끈한 밀도 곡선도 그린다(seaborn이 없으면 히스토그램만). normal_fit=True면
+    같은 평균·표준편차의 정규분포 곡선을 겹쳐 그린다. 통계값 dict(mean, std, var, count)를 돌려준다.
+    쓰는 곳: data_filter.py (ANALYSIS_MODE에서 전압·온도·SOC·전류 등의 분포를 화면에 표시).
+    """
     # 1D 벡터로 변환
     try:
         import torch
@@ -691,6 +727,13 @@ def plot_net_layer_params_by_index(
     normalize_y=True,
     max_xtick_labels=30,  # <- 추가: xtick 라벨 너무 많으면 일부만 표시
 ):
+    """모델(net)의 층마다 가중치와 편향 값을 막대그래프로 그린다 (학습된 모델이 어떤 값을 갖는지 보는 용도).
+
+    layer_names의 각 층(예: "fc1", "fc2")에 대해 그림 한 장씩, save_dir가 있으면
+    "<net_name>_<층 이름>_params_by_index[_normalized].png"로 저장한다. normalize_y=True면 값을 최대 절댓값으로
+    나눠 -1~1 범위로 맞춘 그림이고 파일 이름 끝에 _normalized가 붙는다.
+    쓰는 곳: Test_.py (U-model·X-model의 fc1·fc2를 Run 폴더에 저장).
+    """
     for layer_name in layer_names:
         layer = getattr(net, layer_name, None)
         if layer is None:
@@ -704,6 +747,7 @@ def plot_net_layer_params_by_index(
         )
 
         def _downsample(arr, max_n):
+            """값이 max_n개보다 많으면 일정 간격으로 건너뛰며 골라 (고른 위치, 고른 값)을 돌려준다(그림이 너무 빽빽해지지 않게)."""
             n = arr.size
             if n <= max_n:
                 idx = np.arange(n)
@@ -713,6 +757,7 @@ def plot_net_layer_params_by_index(
             return idx, arr[idx]
 
         def _bar_width_from_idx(idx):
+            """막대 폭: 막대 사이 간격(중앙값)에 bar_width_ratio를 곱한 값."""
             if idx.size <= 1:
                 base = 1.0
             else:
@@ -723,6 +768,7 @@ def plot_net_layer_params_by_index(
             return base * float(bar_width_ratio)
 
         def _normalize_minus1_to_1(y):
+            """최솟값을 -1, 최댓값을 1로 맞추는 정규화. 지금은 어디서도 쓰지 않는다(normalize_by_max_abs를 쓴다)."""
             y = np.asarray(y, dtype=float)
             y_min = float(np.nanmin(y))
             y_max = float(np.nanmax(y))
@@ -731,6 +777,7 @@ def plot_net_layer_params_by_index(
             return 2.0 * (y - y_min) / (y_max - y_min) - 1.0
 
         def normalize_by_max_abs(y):
+            """값을 최대 절댓값으로 나눠 -1~1 범위로 맞춘다(0의 위치와 부호는 그대로). normalize_y=True일 때 쓴다."""
             y = np.asarray(y, dtype=float)
             max_abs = np.nanmax(np.abs(y))
             if not np.isfinite(max_abs) or max_abs == 0:
@@ -738,6 +785,7 @@ def plot_net_layer_params_by_index(
             return y / max_abs
 
         def _annotate(ax, xs, ys):
+            """막대 위(음수면 아래)에 값을 글자로 적는다. annotate_values=False면 적지 않고, 앞 annotate_max개까지만 적는다."""
             if not annotate_values:
                 return
             n = len(xs)
@@ -760,6 +808,7 @@ def plot_net_layer_params_by_index(
                 )
 
         def _set_integer_xticks(ax, x_positions):
+            """x축 눈금을 정수(1부터 세는 값 번호)로만 표시한다. 눈금이 max_xtick_labels개보다 많으면 고르게 일부만 표시한다."""
             # x_positions는 이미 정수(1-based)라고 가정
             x_positions = np.asarray(x_positions, dtype=int)
             n = x_positions.size
@@ -890,6 +939,15 @@ def plot_tsne_before_after_ci(
     args,
     vehicle_idx,
 ):
+    """기준 정상 차량과 대상 차량의 데이터를 t-SNE로 2차원에 그려 비교하고, 대상 차량의 CI도 함께 그린다.
+
+    t-SNE는 고차원 데이터를 비슷한 점끼리 가깝게 2차원에 펼쳐 보여 주는 시각화 방법이다.
+    그림은 1×3: [실제 셀 값(before)의 t-SNE | 재구성 값(after)의 t-SNE | 대상 차량 CI 시계열과 임계선].
+    X_list_*/Y_list_*는 점들과 라벨(0 정상, 1 대상 차량), alarm_masks는 점마다 CI가 임계값을 넘었는지(0/1/2),
+    thresholds는 임계값 두 개다. args에서 그림 옵션(--x-start, --no-alarm*, --save 등)과 저장 위치를 읽는다.
+    args.save면 <models_dir>/<models_idx>/results_tsne/tSNE_<vehicle_idx>.png로 저장하고, 아니면 창으로 띄운다.
+    쓰는 곳: Test_tsne.py.
+    """
     # ===== 리스트 -> 배열로 변환 (행 단위로 쌓였다는 가정) =====
     X_before = np.vstack(X_list_before).astype(float)  # (M1, D)
     y_before = np.asarray(Y_list_before, dtype=int)  # (M1,)
@@ -1081,7 +1139,11 @@ def plot_tsne_before_after_ci(
 
 def draw_auc_heatmap(csv_path, save_path, title_suffix=""):
     """
-    Draws AUC heatmap from a CSV file containing 'u_model_idx', 'x_model_idx', and 'AUC' columns.
+    AUC_summary CSV(열: u_model_idx, x_model_idx, AUC)로 체크포인트 조합별 AUC 히트맵을 그려 save_path에 저장한다.
+
+    가로축은 U-model 체크포인트 번호, 세로축은 X-model 체크포인트 번호다. CSV가 없거나 열이 모자라면
+    오류 메시지만 출력하고 끝낸다.
+    쓰는 곳: Test_multi_models.py(평가가 끝날 때), Plot_AUC_heatmap.py(CSV로 다시 그릴 때).
     """
     # Read the CSV
     if not os.path.exists(csv_path):

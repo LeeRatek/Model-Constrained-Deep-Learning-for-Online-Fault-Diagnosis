@@ -1,3 +1,21 @@
+"""평가 스크립트 (모델 쌍 하나): 학습된 Run의 U-model·X-model 한 쌍으로 평가 차량을 진단하고 ROC/AUC를 계산한다.
+
+실행 예
+    python Test_.py --models-idx <RUN_ID>                                  # 최종 모델 쌍 (-1, -1)
+    python Test_.py --models-idx <RUN_ID> --u-model-idx 2 --x-model-idx 0  # 특정 체크포인트 쌍
+    옵션 전체는 README 7.3절에 있다.
+
+하는 일 (main 순서)
+    1. Run 폴더의 sim_config.txt에서 학습 설정을 읽는다(배터리 종류, 전처리, 분할 등을 학습 때와 똑같이 쓰려고).
+    2. 평가 차량 목록을 읽는다: test 분할(정상)과 fault 분할(고장).
+    3. 모델 쌍의 관리도를 가져온다(mcdl/chart_source.py: 캐시 → 저장된 파일 → 다시 계산).
+    4. 차량마다 원본을 읽어 진단 특징을 계산하고, 관리도로 최대 CI(차량의 이상 점수)를 구한다.
+    5. 모든 차량의 최대 CI와 고장 여부로 ROC/AUC와 추천 임계값을 계산해 출력하고, ROC 그림을 저장·표시한다.
+    코드의 AUC_ANALYSIS를 False로 바꾸면 4·5 대신 차량별 T²·SPE·CI 시계열 그림을 저장한다(진단 그림 모드).
+
+결과물: models/<RUN_ID>/results/AUC_ROC<learning_case>.png, 모델 층 그림, loss 곡선 그림 (README 8장).
+"""
+
 import os
 import warnings
 import torch
@@ -18,6 +36,7 @@ from mcdl.plotting import (
 
 device = torch.device("cpu")  # 평가는 CPU 전용 (Run이 CPU 모델을 돌려준다)
 
+# 명령줄 옵션 정의. 실제 읽기(parse_args)는 main 안에서 한다 (import만 할 때는 아무것도 실행되지 않게).
 parser = argparse.ArgumentParser(
     description="Run diagnostics plotting with CLI options"
 )
@@ -56,8 +75,13 @@ parser.add_argument(
 
 
 def main(argv=None):
-    os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
-    print(torch.cuda.device_count())
+    """평가 전체를 실행한다 (파일 맨 위 "하는 일" 1~5). argv는 명령줄 옵션 목록이며, None이면 실제 명령줄을 읽는다.
+
+    `python Test_.py ...`로 실행하면 맨 아래의 `if __name__ == "__main__"`이 이 함수를 부른다.
+    테스트(tests/test_scripts.py)는 Test_.main([...])처럼 옵션 목록을 직접 넘겨 부른다.
+    """
+    os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"  # 일부 환경에서 수학 라이브러리 중복 로드 오류를 피하는 설정
+    print(torch.cuda.device_count())  # 사용할 수 있는 GPU 수 (평가는 GPU가 있어도 CPU로 한다)
 
     warnings.filterwarnings("ignore")
 
