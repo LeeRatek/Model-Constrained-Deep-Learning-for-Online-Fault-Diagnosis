@@ -323,7 +323,7 @@ def plot_tsne_before_after_ci(*, X_before, X_after, labels, alarm_levels, CI_arr
     X_before·X_after는 같은 시점들의 실제 값과 재구성 값(행 목록), labels는 점마다 0(정상 기준) 또는 1(대상 차량),
     alarm_levels는 점마다 CI가 임계값을 넘었는지(0 없음, 1 첫 번째, 2 두 번째 임계값 초과)다.
     args에서 그림 옵션(--x-start, --x-tick-step, --no-alarm*, --save)과 저장 위치를 읽는다.
-    args.save면 <models_dir>/<models_idx>/results_tsne/tSNE_<vehicle_idx>.png로 저장하고, 아니면 창으로 띄운다.
+    args.save면 <models_dir>/<models_idx>/results_tsne/tSNE_<vehicle_idx>.png로 저장하고 그림을 닫는다. 아니면 창으로 띄운다.
     쓰는 곳: Test_tsne.py.
     """
     X_before = np.vstack(X_before).astype(float)  # (점 수, 셀 값 수)
@@ -404,6 +404,7 @@ def plot_tsne_before_after_ci(*, X_before, X_after, labels, alarm_levels, CI_arr
         save_path = f"{args.models_dir}/{args.models_idx}/results_tsne/tSNE_{vehicle_idx}.png"
         os.makedirs(os.path.dirname(save_path), exist_ok=True)
         fig.savefig(save_path, dpi=150)
+        plt.close(fig)  # 대상 차량마다 그리므로, 닫지 않으면 그림이 메모리에 계속 쌓인다
     else:
         plt.show()
 

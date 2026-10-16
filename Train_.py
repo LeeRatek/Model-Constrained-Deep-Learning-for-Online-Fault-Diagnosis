@@ -312,22 +312,17 @@ def main(argv=None):
     if args.debug:
         print("현재 디버그 모드로 실행 중입니다.")
 
-    # 데이터 로딩과 모델 생성에 함께 쓰는 Run 설정 (디버그 모드에서는 use_dx를 끈다)
+    # 데이터 로딩과 모델 생성에 함께 쓰는 Run 설정 (디버그 모드에서는 use_dx를 끈다).
+    # 분할 폴더(split_dir)도 여기서 정해지며, 평가 스크립트가 sim_config.txt를 읽어 정하는 폴더와 같다.
     run_config = RunConfig.from_mapping({**vars(args), "no_use_dx": args.no_use_dx or args.debug})
 
     data_path = make_model_path_based_timestamp(base=args.models_dir)
 
     start = time.perf_counter()
 
-    if args.dataset_name:
-        dataset_base_path = f"./datasets/{args.dataset_name}"
-        print(f"Dataset path: {dataset_base_path}")
-    else:
-        print("Dataset path: . (Legacy)")
-        dataset_base_path = "."
-
+    print(f"Dataset path: {run_config.split_dir}")
     train_list = split_ids(
-        dataset_base_path, args.battery_type, "train", start=args.vehicle_start, end=args.vehicle_end
+        run_config.split_dir, args.battery_type, "train", start=args.vehicle_start, end=args.vehicle_end
     )
     if args.debug:
         train_list = train_list[:1]
@@ -346,7 +341,7 @@ def main(argv=None):
         print("Validation skipped by user request.")
         v_vehicle_tensors = v_vehicle_tensorsx = None
     else:
-        validate_list = split_ids(dataset_base_path, args.battery_type, "validate")
+        validate_list = split_ids(run_config.split_dir, args.battery_type, "validate")
         if args.debug:
             validate_list = validate_list[:1]
         v_vehicle_tensors = []

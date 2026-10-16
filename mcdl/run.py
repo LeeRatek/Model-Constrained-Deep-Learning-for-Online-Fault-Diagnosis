@@ -88,7 +88,7 @@ class RunConfig:
 
         쓰는 곳: Run.__init__(sim_config.txt에서 읽은 값), Train_.py main(명령줄 인자 vars(args)).
         없는 항목은 LEGACY_DEFAULTS로 채우고, preprocessing·skip_charge_ready·split_dir는 여기서 계산한다.
-        battery_type이나 learning_case가 없으면 ValueError를 낸다.
+        battery_type이나 learning_case가 없으면 ValueError를, dataset_name의 분할 폴더가 없으면 FileNotFoundError를 낸다.
         """
         missing = [k for k in REQUIRED_KEYS if values.get(k) is None]
         if missing:
@@ -126,7 +126,10 @@ class Run:
     """
 
     def __init__(self, path):
-        """폴더의 sim_config.txt를 읽어 self.config(RunConfig)를 만든다. 필수 항목이 없으면 파일 경로와 함께 ValueError."""
+        """폴더의 sim_config.txt를 읽어 self.config(RunConfig)를 만든다.
+
+        필수 항목이 없으면 ValueError, 기록된 분할 폴더가 없으면 FileNotFoundError를 sim_config.txt 경로와 함께 낸다.
+        """
         self.path = Path(path)
         sim_path = self.path / "sim_config.txt"
         raw = _parse_sim_config(sim_path.read_text(encoding="utf-8"))
@@ -136,8 +139,8 @@ class Run:
         }
         try:
             self.config = RunConfig.from_mapping(values)
-        except ValueError as e:
-            raise ValueError(f"{sim_path}: {e}") from e
+        except (ValueError, FileNotFoundError) as e:
+            raise type(e)(f"{sim_path}: {e}") from e
 
     def checkpoint_numbers(self, model: str) -> list[int]:
         """artifact 폴더에 저장된 체크포인트 번호 목록. model은 "U" 또는 "X".
@@ -336,22 +339,21 @@ def _build_model(config: RunConfig, model: str):
 
 
 def _split_dir(dataset_name) -> str:
-    """RunConfig.from_mapping 안에서 쓴다. 학습 때 쓴 분할(--dataset-name)이 있는 폴더를 정한다.
+    """RunConfig.from_mapping 안에서 쓴다. 분할(--dataset-name)이 있는 폴더를 정한다. 학습과 평가가 같은 규칙을 쓴다.
 
-    이름이 있고 ./datasets/<이름> 폴더가 있으면 그 폴더, 이름이 없거나 "default"면 저장소 루트(".")를 쓴다.
-    기록된 폴더가 없으면 경고를 출력하고 루트를 쓴다.
+    이름이 없거나 "None"(이름 없이 학습한 Run의 sim_config.txt 기록)이면 저장소 루트("."), 그 밖의 이름은
+    ./datasets/<이름>이다. 그 폴더가 없으면 FileNotFoundError를 낸다(다른 분할로 학습·평가하지 않도록).
     """
-    if dataset_name is None:
+    name = "" if dataset_name is None else str(dataset_name).strip()
+    if not name or name.lower() == "none":
         return "."
-    name = str(dataset_name).strip()
-    if name and name.lower() != "none" and name != "default":
-        candidate = f"./datasets/{name}"
-        if os.path.isdir(candidate):
-            return candidate
-        print(
-            f"[Warning] Dataset folder '{candidate}' recorded in config not found. Falling back to root."
+    folder = f"./datasets/{name}"
+    if not os.path.isdir(folder):
+        raise FileNotFoundError(
+            f"분할 폴더가 없습니다: {folder} (dataset_name={name}). "
+            f"저장소 루트에서 실행했는지, data_filter.py --dataset-name {name}으로 만들었는지 확인하세요."
         )
-    return "."
+    return folder
 
 
 def _parse_sim_config(text: str) -> dict:

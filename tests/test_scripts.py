@@ -16,6 +16,7 @@ import matplotlib
 
 matplotlib.use("Agg")  # 그림 창을 띄우지 않고 파일로만 그린다 (테스트 중 창이 뜨지 않게)
 
+import matplotlib.pyplot as plt
 import pandas as pd
 import pytest
 
@@ -120,6 +121,30 @@ def test_train_debug_uses_one_vehicle_and_writes_no_sim_config(workspace):
     assert training_rows(run_dir) == N_STEPS  # 학습 차량 1대
 
 
+def test_train_and_evaluation_read_the_same_named_split(workspace):
+    """--dataset-name default(data_filter.py의 기본 이름)로 학습하면 datasets/default 분할로 학습하고,
+    평가 쪽(Run)도 같은 폴더를 읽는지 본다. 예전에는 학습만 이 폴더를 쓰고 평가는 루트 분할을 읽었다
+    (.scratch/known-bugs/issues/15-train-eval-split-dir-differ.md)."""
+    split_dir = workspace / "datasets" / "default"
+    split_dir.mkdir(parents=True)
+    write_split(split_dir, "train", [2])  # 루트 분할(학습 차량 2대)과 다른 차량 1대
+    write_split(split_dir, "validate", [3])
+
+    run_main("Train_", ["--models-dir", "models_named", "--dataset-name", "default", *TRAIN_ARGS])
+
+    (run_dir,) = (workspace / "models_named").iterdir()
+    assert Run(run_dir).config.split_dir == "./datasets/default"
+    assert training_rows(run_dir) == N_STEPS  # datasets/default의 학습 차량 1대로 학습했다
+
+
+def test_train_stops_when_the_named_split_is_missing(workspace):
+    """--dataset-name의 분할 폴더가 없으면 루트 분할로 학습하지 않고, Run 폴더를 만들기 전에 오류로 멈추는지 본다."""
+    with pytest.raises(FileNotFoundError, match="datasets/no_such_split"):
+        run_main("Train_", ["--models-dir", "models_missing", "--dataset-name", "no_such_split", *TRAIN_ARGS])
+
+    assert not (workspace / "models_missing").exists()
+
+
 def test_train_checkpoint_schedule_with_shuffle_and_validation(workspace):
     """3 epoch, save-per 2: 체크포인트와 검증 loss는 epoch 0, 2에만 남고, 학습 loss는 epoch마다 남는다."""
     run_main(
@@ -178,8 +203,13 @@ def test_test_debug_fixes_vehicle_and_keeps_chart_pair(trained_run):
 
 
 def test_tsne_saves_the_plot(trained_run):
-    """Test_tsne --save가 고장 차량 하나의 t-SNE 그림 파일을 저장하는지 본다."""
+    """Test_tsne --save가 고장 차량 하나의 t-SNE 그림 파일을 저장하고, 저장한 그림을 닫는지 본다.
+
+    대상 차량마다 그림을 그리므로 닫지 않으면 차량 수만큼 그림이 메모리에 쌓인다
+    (.scratch/known-bugs/issues/14-tsne-figures-not-closed.md).
+    """
     fault = SPLITS["fault"][0]
+    plt.close("all")  # 앞선 테스트가 열어 둔 그림(창 표시용 ROC 등)은 세지 않는다
 
     run_main(
         "Test_tsne",
@@ -188,6 +218,7 @@ def test_tsne_saves_the_plot(trained_run):
     )
 
     assert (trained_run / "results_tsne" / f"tSNE_{fault}.png").exists()
+    assert plt.get_fignums() == []
 
 
 def test_multi_evaluates_all_checkpoint_pairs_and_heatmap(trained_run):
