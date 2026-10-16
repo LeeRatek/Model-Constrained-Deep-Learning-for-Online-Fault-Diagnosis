@@ -1,11 +1,3 @@
-Model-Constrained Deep Learning for Online Fault Diagnosis in Li-ion Batteries over Stochastic Conditions for the Proposed Scenario Code. 
-The meaning of the code file is as follows:
-Train: Training of the network in Fig 1(b) and Fig 1(c) of the proposed method with the directed linear layer in Fig 1(d)
-Test: Test on sample data
-Class: the desired class
-Function: the required function
-Dataset acquisition link: https://doi.org/10.5281/zenodo.10656500
-
 # Model-Constrained Deep Learning for Online Fault Diagnosis
 
 **Model-Constrained Deep Learning for Online Fault Diagnosis in Li-ion Batteries over Stochastic Conditions** 논문의 제안 기법(MC-AE + PCA 기반 T²/SPE 진단) 코드를 바탕으로, 데이터 분할 → 학습 → 체크포인트별 평가(시뮬레이션) → 시각화 파이프라인을 정리한 저장소입니다.
@@ -147,6 +139,9 @@ z = fc4(z)                              # --add-one-output-layer 일 때만, Lin
 ├── Class_.py               [모듈] CombinedAE, CustomSigmoidFunc 클래스
 ├── mcdl/                   [모듈] deep module 패키지 (run.py: Run 폴더 읽기·쓰기, 모델 생성·로드 / reconstruction.py: 재구성·재구성 오차·차량 진단 특징 / diagnosis.py: 진단 특징·관리도 / chart_source.py: 모델 쌍의 관리도 공급원 / vehicles.py: 분할 차량 ID·차량 텐서 로딩 / roc.py: 차량 단위 ROC 평가 / preprocessing.py: 원본 pkl 로딩·전처리 / plotting.py: 그림 함수)
 ├── tests/                  pytest 테스트, realdata/baseline.py: 실데이터 기준선 비교 도구
+├── GLOSSARY.md             용어집 (Run, 관리도, 진단 특징 등)
+├── .scratch/               리팩토링·버그 수정의 spec과 티켓 (로컬 이슈 트래커)
+├── docs/agents/            에이전트 작업 규칙 (이슈 트래커, triage 라벨, 용어집 위치)
 ├── pytest.ini              pytest 설정 (저장소 루트를 import 경로에 추가)
 ├── QAS_filtered_vehicle_ids_{normal,fault,train,validate,test}.npy   QAS 기본 분할
 ├── DTI_filtered_vehicle_ids_{normal,fault,train,validate,test}.npy   DTI 기본 분할
@@ -178,20 +173,20 @@ z = fc4(z)                              # --add-one-output-layer 일 때만, Lin
 
 | 패키지 | 버전 |
 |---|---|
-| torch / torchvision | 2.9.1 / 0.24.1 |
+| torch | 2.9.1 |
 | numpy | 2.3.5 |
 | pandas | 2.3.3 |
 | scikit-learn | 1.8.0 |
 | scipy | 1.16.3 |
 | matplotlib | 3.10.8 |
-| seaborn | 0.13.2 |
+| seaborn (선택) | 0.13.2 |
 
 ```bash
-pip install torch==2.9.1 torchvision==0.24.1 numpy==2.3.5 pandas==2.3.3 \
+pip install torch==2.9.1 numpy==2.3.5 pandas==2.3.3 \
     scikit-learn==1.8.0 scipy==1.16.3 matplotlib==3.10.8 seaborn==0.13.2
 ```
 
-`requirements.txt`는 `.gitignore`에 포함되어 있어 저장소에 올라가지 않습니다. 로컬에 있으면 `pip install -r requirements.txt`로 설치해도 됩니다.
+seaborn은 `plot_distribution_with_stats`(data_filter의 분포 그림)가 KDE를 그릴 때만 쓰며, 없으면 matplotlib 히스토그램으로 그립니다. `requirements.txt`는 `.gitignore`에 포함되어 있어 저장소에 올라가지 않습니다. 로컬에 있으면 `pip install -r requirements.txt`로 설치해도 됩니다.
 
 ### 환경 변수
 
@@ -204,7 +199,7 @@ pip install torch==2.9.1 torchvision==0.24.1 numpy==2.3.5 pandas==2.3.3 \
 
 ### 테스트
 
-저장소 루트에서 pytest로 실행합니다. 원본 데이터 없이 CPU에서 몇 초 안에 끝납니다.
+저장소 루트에서 pytest로 실행합니다. 원본 데이터 없이 CPU에서 30초 안팎에 끝납니다(대부분 스크립트 smoke 테스트).
 
 ```bash
 pip install pytest
@@ -213,6 +208,7 @@ python -m pytest
 
 - `tests/test_run.py`: `mcdl/run.py` 테스트. `tmp_path`에 만든 합성 Run과 실제 sim_config 사본(`tests/fixtures/`)을 사용합니다.
 - `tests/test_scripts.py`: 진입 스크립트 smoke 테스트. `tmp_path`의 가짜 원본 데이터로 `Train_.main` → `Test_.main` → `Test_tsne.main` → `Test_multi_models.main` → `Plot_AUC_heatmap.main`을 이어서 실행합니다(약 20초). 스크립트를 import만 하면 아무것도 실행되지 않는지도 확인합니다.
+- `tests/test_train_rows.py`: 학습 DataLoader(`Train_.row_loader`) 테스트. 시점마다 꺼내 쌓던 예전 방식과 배치 값·stride·이후 난수가 같은지 shuffle·batch 크기·dtype별로 확인합니다.
 - `tests/test_chart_source.py`: 관리도 공급원 테스트. `tmp_path`의 Run과 작은 가짜 원본 데이터(QAS 열 구성 pkl)로 캐시·npz·재계산 분기를 모두 실행합니다.
 - `tests/test_reconstruction.py`: 재구성·재구성 오차·진단 특징 테스트 (작은 CombinedAE와 합성 차량 텐서). 테스트 차량 진단 특징이 기존 스크립트 방식과 bit 단위로 같은지도 확인합니다.
 - `tests/test_vehicles.py`: 차량 데이터 테스트. `tmp_path`의 가짜 원본 데이터와 분할 `.npy`로 분할 범위, 전처리, `.pt` 캐시 재사용과 해시 규칙을 확인합니다 (가짜 데이터는 `tests/fake_vehicles.py`).
@@ -322,7 +318,7 @@ Run(`models/<RUN_ID>/`)을 다루는 module입니다. 평가 스크립트(Test_,
 | `RunConfig.from_mapping(values)` | sim_config 값 또는 학습 인자(`vars(args)`)에서 설정을 만듭니다. 기본값·파생값 계산이 모이는 곳 |
 | `build_model_pair(config)`, `checkpoint_filename(model, n)` | 설정에 맞는 새 모델 쌍 (U를 먼저 생성), 체크포인트 파일 이름 규칙 |
 | `make_model_path_based_timestamp(base)`, `save_net_state(model, models_dir, filename)` | 새 Run 폴더 경로(`<base>/<RUN_ID>`, 서울 시간 기준 `26MMDD_HHMMSS`), 체크포인트(CPU state_dict) 저장 (Train_) |
-| `write_sim_config(path, args, extra)` | 학습 인자를 `path/sim_config.txt`에 쓰고 그 텍스트를 돌려줍니다 (Train_) |
+| `write_sim_config(path, args, extra, exclude=None)` | 학습 인자를 `path/sim_config.txt`에 쓰고 그 텍스트를 돌려줍니다. `exclude` 키는 쓰지 않습니다 (Train_은 `debug`를 뺍니다) |
 | `print_sim_config(...)` | 설정 표 출력. sim_config.txt 형식이 여기서 정해지며, Test 계열은 시작할 때 콘솔 출력에 씁니다 |
 
 ### mcdl/reconstruction.py
@@ -602,6 +598,7 @@ python Test_tsne.py --models-idx <RUN_ID> --u-model-idx -1 --x-model-idx -1 --sa
 | 옵션 | 기본값 | 설명 |
 |---|---|---|
 | `--models-idx` | `260206_084839` | `RUN_ID`. 배터리 타입과 전처리 설정(`normalize_dx` 등)은 이 Run의 sim_config에서 읽습니다 |
+| `--models-dir` / `--source-data-dir` | `./models` / `./data` | 결과 위치 / 원본 데이터 위치 |
 | `--u-model-idx` / `--x-model-idx` | -1 / -1 | 관리도 출처는 Test_.py와 같은 순서 (7.3) |
 | `--fault-idx` | -1 | -1: test(정상) + fault 전체를 차례로, N: 차량 N 하나 |
 | `--thr THR0 THR1` | 10.4 87.5 | CI 알람 임계값 2개 |
@@ -644,7 +641,7 @@ models/<RUN_ID>/                                  RUN_ID = 26MMDD_HHMMSS (KST, �
 
 - `<C>` = learning_case, `<idx>` = -1(최종 모델) 또는 epoch 번호입니다.
 - 용량: `.pth`는 개당 약 100 KB입니다. `pca_data_nor.csv`는 학습 샘플 수에 비례하며, 약 636만 샘플 기준 약 815 MB입니다. 평가 스크립트는 `pca_data_nor.csv`를 읽지 않습니다.
-- 기존 실행 폴더에 있는 `results_ci/`, `results_tsne_before/`, `results_tsne_u*_x*/` 등은 현재 주석 처리된 코드나 수동 정리로 생긴 폴더입니다.
+- 기존 실행 폴더에 있는 `results_ci/`, `results_tsne_before/`, `results_tsne_u*_x*/` 등은 예전 코드나 수동 정리로 생긴 폴더이며, 지금 스크립트는 만들지 않습니다.
 
 ### `AUC_summary_case<C>.csv` 열
 
