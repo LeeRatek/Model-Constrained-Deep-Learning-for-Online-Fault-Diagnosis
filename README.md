@@ -15,6 +15,7 @@
 7. [스크립트별 사용법](#7-스크립트별-사용법)
 8. [결과물 정리](#8-결과물-정리)
 9. [주의사항 및 알려진 제약](#9-주의사항-및-알려진-제약)
+10. [커스터마이징 가이드](#10-커스터마이징-가이드)
 
 ---
 
@@ -39,6 +40,104 @@ python Test_tsne.py --models-idx <RUN_ID> --u-model-idx -1 --x-model-idx -1 --fa
 ```
 
 `--dataset-name`을 생략하면 저장소 루트의 기본 분할(`QAS_filtered_vehicle_ids_*.npy`)을 사용합니다.
+
+처음이라면 위 명령보다 아래 단계별 안내를 먼저 따라 하기를 권합니다.
+
+### 처음 실행해 보기 (단계별)
+
+처음 보는 사람이 환경을 만들고, 작은 규모로 학습·평가를 한 바퀴 돌려 결과 파일을 확인하는 순서입니다. 아래 시간은 이 저장소에서 CPU로 실제 실행해 잰 값입니다.
+
+**준비물**
+
+| 항목 | 필요량 | 비고 |
+|---|---|---|
+| Python | 3.12 | GPU는 없어도 됩니다. 평가 스크립트는 GPU가 있어도 CPU로 돕니다 |
+| 디스크 | QAS 원본 약 49 GB | `Test_multi_models.py`는 `data/`에 전처리 캐시(`.pt`)를 추가로 만듭니다. 기본 분할 전체 기준 학습 26.7 GB, 테스트 14.3 GB입니다 |
+| 메모리 | 아래 3단계 규모로 약 15 GB | `Train_.py`는 학습·검증 차량을 모두 메모리에 올립니다(3단계 규모 약 8 GB, 기본 분할 전체 약 33 GB). `Test_multi_models.py`는 `.pt` 캐시를 통째로 올립니다(테스트 차량 100대만으로 약 14 GB, 학습 차량 209대까지 약 41 GB). `Test_.py`·`Test_tsne.py`는 차량을 한 대씩 읽습니다 |
+
+**1단계 - 환경 만들기**
+
+```bash
+conda create -n bms-mcdl python=3.12 -y
+conda activate bms-mcdl
+pip install torch==2.9.1 numpy==2.3.5 pandas==2.3.3 scikit-learn==1.8.0 scipy==1.16.3 matplotlib==3.10.8 seaborn==0.13.2 pytest
+python -m pytest        # 원본 데이터 없이 30초 안팎. 모두 passed면 코드와 환경이 정상입니다
+```
+
+**2단계 - 데이터 놓기**
+
+[Zenodo 데이터셋](https://doi.org/10.5281/zenodo.10656500)을 받아 `data/QAS/<차량 ID>/vin_2.pkl` 구조로 둡니다(5장). 잘 놓였는지는 다음으로 확인합니다.
+
+```bash
+python -c "from mcdl.preprocessing import safe_load; print(safe_load('data/QAS/0/vin_2.pkl', verbose=False).shape)"
+# torch.Size([43546, 225])  ← (시점 수, 열 수). 열 수가 225이면 QAS U-model 입력입니다
+```
+
+**3단계 - 작게 학습하기** (약 1.5분)
+
+루트 기본 분할의 학습 차량 중 앞의 10대로 3 epoch만 학습합니다. 검증 차량 50대도 함께 읽습니다.
+
+```bash
+python Train_.py --vehicle-end 9 --ae-u-epochs 3 --ae-x-epochs 3 --ae-u-save-per 1 --ae-x-save-per 1
+```
+
+- `models/` 아래에 실행 시각 이름의 폴더(RUN_ID, 예: `261016_093750`)가 생깁니다. 콘솔에는 이 이름이 나오지 않으므로 `models/`에서 가장 최근 폴더를 찾습니다.
+- 폴더 안에 `sim_config.txt`, `artifact/net_e0.pth … net.pth`, `artifact/netx_e0.pth … netx.pth`, `loss_*.csv`, `pca_arrays.npz`가 있으면 성공입니다.
+
+**4단계 - 평가하기** (약 40초)
+
+```bash
+python Test_.py --models-idx <RUN_ID>
+```
+
+- 콘솔 마지막에 `AUC = 0.85…`, `Best threshold (Youden J) ≈ …`가 나옵니다(위 작은 학습 기준 0.8524).
+- ROC 그림 창이 뜨며, 창을 닫아야 스크립트가 끝납니다. 창 없이 파일로만 저장하려면 `MPLBACKEND=Agg`를 설정하고 실행합니다(PowerShell: `$env:MPLBACKEND="Agg"`).
+- 그림은 `models/<RUN_ID>/results/AUC_ROC1.png`에 저장됩니다.
+
+**5단계 - 체크포인트 비교하기** (약 3분)
+
+```bash
+python Test_multi_models.py --models-idx <RUN_ID> --fast-search
+```
+
+- 체크포인트 조합별 AUC가 `models/<RUN_ID>/AUC_summary_case1.csv`에 쌓입니다. 위 작은 학습에서는 7개 조합이고, AUC가 가장 높은 조합은 (u=0, x=0)의 0.900이었습니다.
+- **확인 포인트:** CSV의 `-1,-1` 줄 AUC가 4단계의 Test_ AUC와 같아야 합니다(두 스크립트가 같은 계산을 합니다).
+- 첫 실행에서 `data/`에 `.pt` 캐시를 만들고, 다음 실행부터 재사용합니다(자동으로 지우지 않습니다).
+
+**6단계 - 시각화** (각 30초 이내)
+
+```bash
+python Test_tsne.py --models-idx <RUN_ID> --fault-idx 338 --save     # results_tsne/tSNE_338.png
+python Plot_AUC_heatmap.py --models-idx <RUN_ID>                     # AUC_summary_case1_heatmap.png
+```
+
+**7단계 - 결과 보기**
+
+| 파일 | 보는 법 |
+|---|---|
+| `AUC_summary_case1.csv` | 조합별 AUC와 최적 임계값. 열 설명은 [8장](#8-결과물-정리) |
+| `AUC_heatmap_case1.png` | 가로 U 체크포인트 × 세로 X 체크포인트의 AUC |
+| `results/AUC_ROC*.png` | ROC 곡선과 최적점 2개(Youden J, (0,1) 최근접) |
+| `results_tsne/tSNE_<id>.png` | 정상 기준 차량과 대상 차량의 실제값·재구성값 t-SNE, 대상 차량 CI |
+| `loss_*.png` | 학습·검증 loss 곡선 (Test 계열이 처음 실행될 때 그립니다) |
+
+용어(Run, 관리도, CI, 체크포인트 번호 등)는 [GLOSSARY.md](GLOSSARY.md)에 정리되어 있습니다.
+
+**본 실험 규모로 늘리기**
+
+위 흐름이 돌면 차량 수와 epoch를 늘립니다. 예를 들어 위의 요약 명령처럼 `--dataset-name 10 --ae-u-epochs 13 --ae-x-epochs 13`으로 학습합니다. 시간과 메모리는 학습 차량의 행 수와 epoch에 비례해 늘어나므로, 한 단계씩 늘려 가며 확인하는 것을 권합니다. 옵션 전체는 [7장](#7-스크립트별-사용법)에 있습니다.
+
+**자주 만나는 문제**
+
+| 증상 | 원인과 해결 |
+|---|---|
+| 출력을 파일로 리디렉션하면 `UnicodeEncodeError: 'cp949' …` | Windows 콘솔 인코딩 문제입니다. `PYTHONIOENCODING=utf-8`을 설정하고 실행합니다 |
+| `FileNotFoundError: …_filtered_vehicle_ids_….npy` | 저장소 루트가 아닌 곳에서 실행했거나, `--dataset-name` 폴더가 `datasets/`에 없습니다 |
+| `FileNotFoundError: data/QAS/<id>/vin_2.pkl` | 2단계 데이터 배치를 확인합니다. 다른 위치에 두었다면 `--source-data-dir` 또는 `SOURCE_DIR`을 씁니다 |
+| `Test_.py`가 끝나지 않음 | ROC 그림 창이 열려 있습니다. 창을 닫거나 `MPLBACKEND=Agg`로 실행합니다 |
+| `Test_multi_models.py`에서 메모리 부족 | `.pt` 캐시를 통째로 올리기 때문입니다(준비물 표). 학습 차량 범위를 줄인 Run으로 먼저 돌려 봅니다 |
+| `error: unrecognized arguments` | 옵션 이름을 확인합니다. 예전의 `--lstm-*`, `--vin*-start`, `--sigma-levels` 등은 지워졌습니다 |
+| `Error: No valid model combinations to test` | `models/<RUN_ID>/artifact/`에 체크포인트(`.pth`)가 없습니다 |
 
 ### 목적별 실행 파일
 
@@ -214,6 +313,7 @@ python -m pytest
 - `tests/test_vehicles.py`: 차량 데이터 테스트. `tmp_path`의 가짜 원본 데이터와 분할 `.npy`로 분할 범위, 전처리, `.pt` 캐시 재사용과 해시 규칙을 확인합니다 (가짜 데이터는 `tests/fake_vehicles.py`).
 - `tests/test_diagnosis.py`: 진단 특징 → 관리도 → CI → ROC 테스트. 고정 seed 합성 오차(`tests/synthetic_errors.py`)에 대한 기대값(`tests/fixtures/diagnosis_golden.npz`)과 bit 단위로 비교합니다. 기대값은 Windows·numpy 2.3.5 환경에서 만들었으므로 다른 플랫폼에서는 ULP 수준 차이로 실패할 수 있습니다.
 - `realdata` 마커가 붙은 테스트는 `models/260224_090359`가 있을 때만 돕니다.
+- `tests/make_diagnosis_golden.py`: `test_diagnosis.py`의 기대값을 지금 구현으로 다시 만드는 도구입니다. 진단 계산을 일부러 바꿨을 때만 씁니다(10장). `--check`는 덮어쓰지 않고 비교만 합니다.
 
 **실데이터 기준선 비교**: 리팩토링 전후 수치가 bit 단위로 같은지 확인하는 도구입니다. pytest가 수집하지 않으며 직접 실행합니다.
 
@@ -689,3 +789,71 @@ models/<RUN_ID>/                                  RUN_ID = 26MMDD_HHMMSS (KST, �
 ### 알려진 제약
 
 - `data/GIS`는 `--battery-type` 선택지(QAS, DTI)에 없어 사용할 수 없습니다.
+
+---
+
+## 10. 커스터마이징 가이드
+
+코드를 바꾸려는 사람을 위한 안내입니다. 먼저 [6장](#6-모듈-구성)에서 module별 역할을 보고, 바꾸려는 일에 해당하는 아래 항목을 따라갑니다.
+
+### 어디를 고치나
+
+| 하고 싶은 일 | 고칠 곳 | 함께 챙길 것 |
+|---|---|---|
+| 학습률·epoch·batch·학습 차량 범위 바꾸기 | 코드 수정 없이 `Train_.py` 옵션 (7.2절) | 옵션 값은 `sim_config.txt`에 자동으로 기록됩니다 |
+| 학습/검증/테스트 분할 바꾸기 | `data_filter.py` 옵션, 파일 위쪽의 `BATTERY_TYPE`·`max_idx`·`fault_idx` | 만든 분할은 `Train_.py --dataset-name <이름>`으로 씁니다. 평가 스크립트는 sim_config의 `dataset_name`을 따라 같은 분할을 읽습니다 |
+| 전처리 바꾸기 | `mcdl/preprocessing.py`의 `preprocess_loaded_tensor`, learning_case 조합은 `get_preprocessing_and_skip_charge_ready` | `.pt` 캐시 이름(해시)에는 전처리 코드가 들어가지 않습니다. 코드를 바꾸면 `data/*.pt`를 직접 지웁니다 |
+| 학습 옵션 새로 추가 | `Train_.py`의 parser에 옵션 추가 | sim_config에는 자동으로 기록됩니다. 평가에서도 그 값이 필요하면 아래 "설정 항목 추가"를 따릅니다 |
+| 모델 구조 바꾸기 | `Class_.py`의 `CombinedAE`, 모델 생성은 `mcdl/run.py`의 `_build_model` | 아래 "모델 구조" 참고 |
+| 학습 루프(손실·optimizer·검증) 바꾸기 | `Train_.py`의 `train_autoencoder` (U·X가 함께 씁니다) | shuffle을 켜면 DataLoader 순회 순서가 결과에 영향을 줍니다 (7.2절의 재현성) |
+| 진단 특징 바꾸기 | `mcdl/diagnosis.py`의 `signal_features`·`diagnosis_features`, 상수 `_EWMA_ALPHA`·`_X_WINDOW` | 아래 "진단 특징·관리도" 참고 |
+| 관리한계(95%)·CI 식 바꾸기 | `mcdl/diagnosis.py`의 `_pca`, `ControlChart.score` | 아래 "진단 특징·관리도" 참고 |
+| ROC 임계값 범위·간격 바꾸기 | `mcdl/roc.py`의 `_THRESHOLDS` (0 ~ 999.9, 0.1 간격) | `tests/test_diagnosis.py`의 ROC 기대값이 바뀝니다 |
+| 평가 지표 추가 | `mcdl/roc.py`의 `evaluate`·`RocResult`, CSV 열은 `Test_multi_models.py`의 `auc_record` | 8장의 CSV 열 설명도 함께 고칩니다 |
+| 그림 모양 바꾸기 | `mcdl/plotting.py` | 결과 수치에는 영향이 없습니다 |
+| 새 배터리 타입 추가 | 아래 "새 배터리 타입" 참고 | |
+
+### 설정 항목 추가 (평가에서도 쓰는 학습 옵션)
+
+평가 스크립트는 학습 인자를 직접 받지 않고, Run 폴더의 `sim_config.txt`를 `mcdl/run.py`의 `RunConfig`로 읽습니다.
+
+1. `Train_.py`의 parser에 옵션을 추가합니다. 값은 sim_config에 자동으로 기록됩니다.
+2. `mcdl/run.py`의 `RunConfig`에 같은 이름의 필드를 추가합니다.
+3. 같은 파일의 `LEGACY_DEFAULTS`에 기본값을 넣습니다. 그 키가 없는 예전 Run은 이 값으로 읽히므로, 예전 Run도 계속 평가할 수 있습니다.
+4. `RunConfig.from_mapping`에서 그 값을 채우고, 필요한 곳(`_build_model`, 전처리 등)에서 `config.<이름>`으로 씁니다.
+5. `tests/test_run.py`에 예전 sim_config(키 없음)와 새 sim_config(키 있음)를 읽는 경우를 추가합니다.
+
+### 모델 구조
+
+- 학습(`train_autoencoder`)과 재구성(`mcdl/reconstruction.py`의 `reconstruct`)은 모델을 `model(x, dx, q)`로 부르고 `(ŷ, z)`를 받습니다. 이 호출 형태를 유지하면 다른 곳을 고칠 필요가 없습니다.
+- 차량 텐서의 열 구간 `[x | y | Δ | q]`는 모델의 `fc1.in_features`(x 크기)와 `fc3.out_features`(셀 수)에서 읽습니다. 이 두 층의 이름이나 의미를 바꾸면 `reconstruct`와 `Train_.py`의 `train_autoencoder`도 함께 고칩니다.
+- 구조가 바뀌면 예전 Run의 체크포인트(`state_dict`)는 새 모델에 load되지 않습니다. 구조를 옵션으로 고르게 하려면 위 "설정 항목 추가"로 옵션을 만들고, `_build_model`이 그 값을 `CombinedAE`에 넘기게 합니다(`add_one_output_layer`가 그런 예입니다).
+
+### 진단 특징·관리도
+
+- 진단 특징 6개의 정의와 열 순서는 [2장](#2-방법-개요)의 진단 특징 표와 `mcdl/diagnosis.py`가 같아야 합니다. 학습 쪽(관리도)과 테스트 쪽이 같은 함수(`vehicle_features` → `diagnosis_features`)를 쓰므로 한 곳만 고치면 됩니다.
+- 특징이나 관리도 계산을 바꾸면, 예전 Run에 저장된 관리도(`pca_arrays.npz`)와 `temp_cache/` 특징은 예전 계산 기준으로 남습니다. 새 계산으로 평가하려면 다시 학습하거나, `temp_cache/`를 지우고 체크포인트를 지정해 관리도를 다시 계산하게 합니다(7.3절의 관리도 순서 3번). 최종 모델 쌍(-1/-1)은 저장된 `pca_arrays.npz`를 먼저 쓴다는 점에 주의합니다.
+- `tests/test_diagnosis.py`는 이 계산들을 고정된 기대값과 bit 단위로 비교하므로, 일부러 바꾸면 실패합니다. 바뀐 값이 의도한 것인지 확인한 뒤 기대값을 다시 만듭니다.
+
+```bash
+python tests/make_diagnosis_golden.py --check   # 지금 fixture와 무엇이 달라졌는지만 봅니다
+python tests/make_diagnosis_golden.py           # 기대값(tests/fixtures/diagnosis_golden.npz)을 새로 만듭니다
+```
+
+### 새 배터리 타입
+
+1. 데이터를 `data/<BT>/<id>/vin_2.pkl`, `vin_3.pkl`로 둡니다.
+2. `mcdl/preprocessing.py`의 `get_input_dimensions`에 열 구간을 추가하고, `preprocess_loaded_tensor`에 그 타입의 전처리 분기를 추가합니다(QAS·DTI 분기 참고).
+3. `Train_.py`의 `--battery-type` 선택지(`choices`)에 추가합니다.
+4. `data_filter.py` 위쪽의 `BATTERY_TYPE`, `max_idx`(최대 차량 ID), `fault_idx`(고장 차량 시작 ID)를 맞추고 분할을 만듭니다. 분할 파일 이름은 `<BT>_filtered_vehicle_ids_<분할>.npy`입니다.
+5. `Test_.py --debug`는 차량 338(QAS)을 고정해 평가하므로, 새 타입에서는 쓰지 않거나 차량 ID를 바꿉니다.
+
+### 바꾼 뒤 확인하기
+
+| 무엇을 바꿨나 | 확인 방법 |
+|---|---|
+| 무엇이든 | `python -m pytest`. 학습부터 평가까지 가짜 데이터로 실행하는 smoke 테스트(`tests/test_scripts.py`)가 포함됩니다 |
+| 결과가 바뀌면 안 되는 정리(리팩토링) | 실데이터 기준선 도구([4장](#4-환경-설정)의 테스트 절)로 바꾸기 전과 후를 각각 기록하고 bit 단위로 비교합니다. 예: `capture test before` → 수정 → `capture test after` → `compare test before after`. 이 도구는 `models/_verify/260224_090359`(기준 Run 사본)과 `data/`를 전제로 하므로, 다른 Run으로 쓰려면 도구 위쪽의 `RUN_ID`·`TARGETS`를 고칩니다 |
+| 결과가 바뀌는 수정 | 같은 도구로 무엇이 얼마나 바뀌었는지 비교하고, 바뀐 이유를 기록합니다. 이 저장소의 버그 수정 기록(`.scratch/known-bugs/`)이 그 예입니다 |
+
+`.scratch/`에는 지금까지의 리팩토링과 버그 수정의 spec·티켓·검증 결과가 남아 있어, 비슷한 변경을 할 때 참고할 수 있습니다.
