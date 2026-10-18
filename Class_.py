@@ -8,7 +8,7 @@ MC-AE는 Model-Constrained AutoEncoder의 줄임말이다. 입력을 받아 셀 
     X-model: 셀 SOC를 재구성한다 (입력 vin_3.pkl, 체크포인트 파일 netx*.pth)
 
 LSTM은 팩 단위 측정값 7개(vin_1.pkl)로 다음 시점의 대표 셀 전압과 SOC를 예측하는 모델이다(논문 원본 코드에서 복원).
-MC-AE와 따로 학습하고(Train_.py --lstm-training), 진단 계산에는 쓰지 않는다.
+MC-AE와 따로 학습하고(Train_lstm.py), 진단 계산에는 쓰지 않는다.
 
 누가 쓰나
     MC-AE는 직접 만들지 않고 mcdl/run.py의 build_model_pair(새 모델), Run.load_model(저장된 모델 불러오기)로 만든다.
@@ -108,7 +108,7 @@ class LSTM(nn.Module):
     입력은 (batch, 시점, 7), 출력은 (batch, 시점, 2)다. 이 저장소에서는 한 시점(시점 축 길이 1)씩 넣어
     다음 시점 값을 예측하도록 학습한다(mcdl/lstm.py의 prepare_training_data).
     저장한 모델 파일(artifact/lstm.pth)은 이 클래스를 이름으로 찾으므로 층 이름(lstm, out)을 바꾸면 안 된다.
-    쓰는 곳: Train_.py의 train_lstm, mcdl/lstm.py의 load_lstm_model.
+    쓰는 곳: mcdl/lstm.py의 train_lstm(Train_lstm.py가 부름)과 load_lstm_model.
     """
 
     def __init__(self):

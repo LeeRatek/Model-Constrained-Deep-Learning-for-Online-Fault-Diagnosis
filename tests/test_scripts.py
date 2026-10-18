@@ -10,6 +10,7 @@ smoke 테스트: 결과 값이 정확한지까지는 따지지 않고, 전체 �
 import contextlib
 import importlib
 import io
+import shutil
 import sys
 
 import matplotlib
@@ -28,7 +29,7 @@ from mcdl.run import Run
 
 SPLITS = {"train": [0, 1], "validate": [2], "test": [3, 4], "fault": [5, 6]}  # 가짜 분할 (차량 ID)
 DEBUG_VEHICLE = 338  # Test_ --debug가 고정해 평가하는 차량
-MAIN_SCRIPTS = ["Train_", "data_filter", "Test_", "Test_tsne", "Test_multi_models", "Plot_AUC_heatmap"]
+MAIN_SCRIPTS = ["Train_", "Train_lstm", "data_filter", "Test_", "Test_tsne", "Test_multi_models", "Plot_AUC_heatmap"]
 
 
 @pytest.mark.parametrize("name", MAIN_SCRIPTS)
@@ -147,21 +148,37 @@ def test_train_stops_when_the_named_split_is_missing(workspace):
     assert not (workspace / "models_missing").exists()
 
 
-def test_train_lstm_is_saved_and_leaves_mc_ae_unchanged(workspace, trained_run):
-    """--lstm-training이면 LSTM 모델(artifact/lstm.pth)과 loss 기록(loss_lstm.csv)을 저장하고,
-    MC-AE 체크포인트는 LSTM 없이 같은 옵션으로 학습한 Run(trained_run)과 완전히 같은지 본다.
+def test_train_lstm_needs_only_vin1_and_saves_only_the_lstm(workspace):
+    """Train_lstm.py가 MC-AE와 상관없이 LSTM만 학습하는지 본다.
 
-    LSTM은 MC-AE 학습이 모두 끝난 뒤에 학습하므로, 난수를 써도 MC-AE 결과가 바뀌지 않아야 한다.
+    학습 차량의 vin_1.pkl만 있는 데이터 폴더로 실행해도 끝까지 돌고(vin_2·vin_3를 읽지 않는다), Run 폴더에는
+    sim_config.txt, loss_lstm.csv, artifact/lstm.pth만 남는다(MC-AE 체크포인트·관리도 없음). 이 Run을 평가 쪽(Run)에
+    주면 LSTM 전용 Run이라는 오류로 멈춘다. 같은 시드로 다시 학습하면 같은 가중치가 나온다.
     """
-    run_main("Train_", ["--models-dir", "models_lstm", *TRAIN_ARGS, "--lstm-training", "--lstm-epochs", "2"])
+    for vehicle_id in SPLITS["train"]:
+        folder = workspace / "data_vin1_only" / "QAS" / str(vehicle_id)
+        folder.mkdir(parents=True)
+        shutil.copy(workspace / "data" / "QAS" / str(vehicle_id) / "vin_1.pkl", folder)
+    lstm_args = ["--source-data-dir", "data_vin1_only", "--epochs", "2"]
+
+    run_main("Train_lstm", ["--models-dir", "models_lstm", *lstm_args])
+    run_main("Train_lstm", ["--models-dir", "models_lstm_again", *lstm_args])
 
     (run_dir,) = (workspace / "models_lstm").iterdir()
+    assert sorted(p.relative_to(run_dir).as_posix() for p in run_dir.rglob("*") if p.is_file()) == [
+        "artifact/lstm.pth",
+        "loss_lstm.csv",
+        "sim_config.txt",
+    ]
     assert pd.read_csv(run_dir / "loss_lstm.csv").epoch.tolist() == [0, 1]
     lstm = load_lstm_model(run_dir / "artifact")
     assert lstm(torch.rand(4, 1, 7, dtype=torch.float64)).shape == (4, 1, 2)
-    for name in ("net.pth", "netx.pth", "net_e0.pth", "netx_e0.pth"):
-        saved, reference = (torch.load(d / "artifact" / name) for d in (run_dir, trained_run))
-        assert all(torch.equal(saved[k], reference[k]) for k in reference), name
+    with pytest.raises(ValueError, match="LSTM만 학습한 Run"):
+        Run(run_dir)
+
+    (again_dir,) = (workspace / "models_lstm_again").iterdir()
+    again = load_lstm_model(again_dir / "artifact").state_dict()
+    assert all(torch.equal(value, again[name]) for name, value in lstm.state_dict().items())
 
 
 def test_train_checkpoint_schedule_with_shuffle_and_validation(workspace):

@@ -1,4 +1,4 @@
-"""팩 상태 예측 LSTM(Class_.py의 LSTM)의 학습 데이터 만들기, 모델 저장·불러오기 (논문 원본 코드에서 복원).
+"""팩 상태 예측 LSTM(Class_.py의 LSTM)의 학습 데이터 만들기, 학습, 모델 저장·불러오기 (논문 원본 코드에서 복원).
 
 학습 데이터
     차량마다 vin_1.pkl에 팩 단위 측정값 7개가 시점마다 들어 있다(모양: 시점 × 1 × 7, 0~1로 정규화된 값).
@@ -6,7 +6,8 @@
     현재 시점의 이 두 값을 예측하도록 학습한다(prepare_training_data).
 
 누가 쓰나
-    Train_.py(--lstm-training: 학습 차량 전체로 LSTM 하나를 학습해 Run 폴더 artifact/lstm.pth로 저장).
+    Train_lstm.py(학습 차량 전체로 LSTM 하나를 학습해 Run 폴더 artifact/lstm.pth로 저장). MC-AE 학습(Train_.py)과는
+    데이터·모델·결과를 공유하지 않는다.
 """
 
 from __future__ import annotations
@@ -15,8 +16,10 @@ import os
 
 import pandas as pd
 import torch
+import torch.nn as nn
+from torch.utils.data import DataLoader, TensorDataset
 
-from Class_ import LSTM_INPUT_SIZE
+from Class_ import LSTM, LSTM_INPUT_SIZE
 
 LSTM_TIME_STEP = 1  # LSTM에 한 번에 넣는 시점 수
 
@@ -54,7 +57,7 @@ def prepare_training_data(vin1, device):
 
     입력 train_X: 시점 t-1의 7개 값 (시점 수 − 1, 1, 7). 정답 train_y: 시점 t의 마지막 두 열(대표 셀 전압, SOC)
     (시점 수 − 1, 1, 2). 둘 다 float64로 device에 올린다.
-    쓰는 곳: Train_.py의 train_lstm (차량마다 따로 만들어 이어 붙이므로 차량 경계를 넘는 쌍은 생기지 않는다).
+    쓰는 곳: 아래 train_lstm (차량마다 따로 만들어 이어 붙이므로 차량 경계를 넘는 쌍은 생기지 않는다).
     """
     vin1_df = pd.DataFrame(vin1.cpu().detach().numpy()[:, 0, :])
     reframed = series_to_supervised(vin1_df, 1, 1)
@@ -69,10 +72,41 @@ def prepare_training_data(vin1, device):
     return train_X, train_y
 
 
+def train_lstm(vin1_tensors, *, epochs, lr, batch_size, device):
+    """학습 차량들의 vin_1 텐서로 팩 상태 예측 LSTM 하나를 학습해 (모델, epoch별 평균 loss 목록)을 돌려준다.
+
+    차량마다 "한 시점 전 7개 값 → 현재 대표 셀 전압·SOC" 쌍을 만들어 이어 붙이고, 매 epoch 섞어서
+    batch_size씩 학습한다. 손실은 MSE, 최적화는 Adam, 계산은 float64다(모델 구조·하이퍼파라미터는 논문 원본 코드와 같다).
+    쓰는 곳: Train_lstm.py.
+    """
+    pairs = [prepare_training_data(v, device) for v in vin1_tensors]
+    train_X = torch.cat([X for X, _ in pairs])
+    train_y = torch.cat([y for _, y in pairs])
+    loader = DataLoader(TensorDataset(train_X, train_y), batch_size=batch_size, shuffle=True)
+
+    lstm = LSTM().to(device).double()
+    optimizer = torch.optim.Adam(lstm.parameters(), lr=lr)
+    loss_func = nn.MSELoss()
+    epoch_losses = []
+    for epoch in range(epochs):
+        total_loss = 0.0
+        num_batches = 0
+        for b_x, b_y in loader:
+            loss = loss_func(b_y, lstm(b_x))
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            total_loss += loss.item()
+            num_batches += 1
+        epoch_losses.append(total_loss / num_batches)
+        print(f"LSTM Epoch: {epoch:2d} | Train Loss: {epoch_losses[-1]:.6e}")
+    return lstm, epoch_losses
+
+
 def save_lstm_model(model, models_dir, filename="lstm.pth"):
     """학습한 LSTM을 CPU로 옮겨 모델 객체째 models_dir/filename에 저장한다 (원본 코드와 같은 저장 방식).
 
-    모델 객체째 저장하므로 불러올 때 Class_.py의 LSTM 클래스가 있어야 한다. 쓰는 곳: Train_.py.
+    모델 객체째 저장하므로 불러올 때 Class_.py의 LSTM 클래스가 있어야 한다. 쓰는 곳: Train_lstm.py.
     """
     os.makedirs(models_dir, exist_ok=True)
     torch.save(model.to(torch.device("cpu")), os.path.join(models_dir, filename))

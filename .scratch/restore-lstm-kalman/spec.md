@@ -25,6 +25,20 @@
   `prepare_training_data`, `save_lstm_model`, `load_lstm_model`). 그 밖의 지운 함수와 `monitering.py`는 복원하지 않는다.
 - **Q3 위치:** `mcdl/kalman.py`, `mcdl/lstm.py`, `Class_.py`의 `LSTM`.
 
+### 2026-10-19 변경: LSTM 학습을 MC-AE와 분리 (Q1 대체)
+
+- 사용자 지적: Q1 구현은 `Train_.py --lstm-training`이 MC-AE 학습 뒤에 LSTM을 덧붙이는 방식이라, LSTM만 학습할 수 없었다.
+  LSTM은 MC-AE와 의존성이 없어야 한다.
+- 사용자 결정: LSTM 전용 스크립트. `Train_lstm.py`를 만들고 `Train_.py`의 `--lstm-*` 옵션을 없앴다(Train_.py는 MC-AE 전용, LSTM을 넣기 전 f632fd3와 같은 동작).
+  - `Train_lstm.py`: vin_1만 읽어 LSTM 하나를 학습하고 자기 Run 폴더에 `sim_config.txt`(`model : LSTM`), `loss_lstm.csv`, `artifact/lstm.pth`만 저장한다.
+    옵션은 `--battery-type`, `--dataset-name`, `--vehicle-start/end`, `--models-dir`, `--source-data-dir`, `--epochs`(300), `--lr`(1e-4), `--batchsize`(100), `--seed`(42).
+  - 함께 쓰는 코드: `train_lstm`은 `mcdl/lstm.py`로, `set_seed`는 `mcdl/run.py`로 옮겼다. 분할 폴더 규칙 `_split_dir`는 `resolve_split_dir`로 공개해
+    learning_case 없이도 쓴다.
+  - `Run`은 sim_config에 `model : LSTM`이 있으면 "LSTM만 학습한 Run" ValueError로 멈춘다.
+- 검증: `tests/test_scripts.py::test_train_lstm_needs_only_vin1_and_saves_only_the_lstm`(vin_1만 있는 데이터 폴더로 실행, 저장 파일 3개, Run 거부,
+  같은 시드 재현). 실데이터 train·train_full·test 기록(sp01)이 fx01과 sim_config까지 같다. 실데이터 LSTM 전용 학습(차량 2대, 5 epoch) 14초,
+  loss 0.175 → 0.005.
+
 ## Verification
 
 - `tests/test_kalman.py`: 원본 코드(a93ea3a^의 Function_.py)로 합성 입력에서 만든 기대값(`tests/fixtures/kalman_golden.npz`, 10개 항목)과 bit 단위로 같다.

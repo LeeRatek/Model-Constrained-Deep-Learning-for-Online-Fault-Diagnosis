@@ -137,7 +137,7 @@ python Plot_AUC_heatmap.py --models-idx <RUN_ID>                     # AUC_summa
 | `FileNotFoundError: data/QAS/<id>/vin_2.pkl` | 2단계 데이터 배치를 확인합니다. 다른 위치에 두었다면 `--source-data-dir` 또는 `SOURCE_DIR`을 씁니다 |
 | `Test_.py`가 끝나지 않음 | ROC 그림 창이 열려 있습니다. 창을 닫거나 `MPLBACKEND=Agg`로 실행합니다 |
 | `Test_multi_models.py`에서 메모리 부족 | `.pt` 캐시를 통째로 올리기 때문입니다(준비물 표). 학습 차량 범위를 줄인 Run으로 먼저 돌려 봅니다 |
-| `error: unrecognized arguments` | 옵션 이름을 확인합니다. 예전의 `--lstm-load`, `--vin*-start`, `--sigma-levels` 등은 지워졌습니다 |
+| `error: unrecognized arguments` | 옵션 이름을 확인합니다. 예전의 `--vin*-start`, `--sigma-levels` 등은 지워졌고, `Train_.py`의 `--lstm-*` 옵션은 없습니다(LSTM은 `Train_lstm.py`로 학습) |
 | `Error: No valid model combinations to test` | `models/<RUN_ID>/artifact/`에 체크포인트(`.pth`)가 없습니다 |
 
 ### 목적별 실행 파일
@@ -148,6 +148,7 @@ python Plot_AUC_heatmap.py --models-idx <RUN_ID>                     # AUC_summa
 |---|---|---|
 | 차량 분할 (train / validate / test / fault) | `data_filter.py` | `datasets/<name>/*.npy`, `dataset_info_<BT>.txt` |
 | 학습 | `Train_.py` | `artifact/*.pth`, `loss_*.csv`, `pca_*`, `sim_config.txt` |
+| 팩 상태 예측 LSTM 학습 (MC-AE와 별개) | `Train_lstm.py` | `artifact/lstm.pth`, `loss_lstm.csv`, `sim_config.txt` |
 | 테스트 (모델 조합 1개) | `Test_.py` | `results/AUC_ROC<C>.png`, 콘솔의 AUC·최적 임계값 |
 | 시뮬레이션 (체크포인트 조합별 성능 비교, 모델 선택) | `Test_multi_models.py` | `AUC_summary_case<C>.csv`, `results/AUC_ROC_*.png`, `AUC_heatmap_case<C>.png` |
 | AUC 히트맵 다시 그리기 | `Plot_AUC_heatmap.py` | `AUC_summary_case<C>_heatmap.png` |
@@ -230,7 +231,8 @@ z = fc4(z)                              # --add-one-output-layer 일 때만, Lin
 
 ```
 .
-├── Train_.py               [실행] MC-AE(U·X) 학습 + 학습 데이터 PCA 관리한계 저장 (+ 선택: LSTM 학습)
+├── Train_.py               [실행] MC-AE(U·X) 학습 + 학습 데이터 PCA 관리한계 저장
+├── Train_lstm.py           [실행] 팩 상태 예측 LSTM 학습 (MC-AE와 별개)
 ├── Test_.py                [실행] 단일 (U, X) 모델 조합 평가 → ROC/AUC
 ├── Test_multi_models.py    [실행] 체크포인트 (U, X) 조합 전수 평가 → AUC 표·ROC·히트맵
 ├── Test_tsne.py            [실행] 기준 정상 차량 vs 대상 차량 t-SNE + CI 시각화
@@ -317,7 +319,7 @@ python -m pytest
 - `realdata` 마커가 붙은 테스트는 `models/260224_090359`가 있을 때만 돕니다.
 - `tests/make_diagnosis_golden.py`: `test_diagnosis.py`의 기대값을 지금 구현으로 다시 만드는 도구입니다. 진단 계산을 일부러 바꿨을 때만 씁니다(10장). `--check`는 덮어쓰지 않고 비교만 합니다.
 - `tests/test_kalman.py`: 칼만 필터(`mcdl/kalman.py`)가 원본 코드(a93ea3a^의 Function_.py)로 만든 기대값(`tests/fixtures/kalman_golden.npz`)과 bit 단위로 같은지 확인합니다. 입력은 고정 seed 합성 측정값(`tests/synthetic_battery.py`), 기대값 재생성 도구는 `tests/make_kalman_golden.py`입니다.
-- `tests/test_lstm.py`: LSTM 학습 데이터 구성(한 시점 전 → 현재 두 열), 출력 모양, 저장·불러오기를 확인합니다. `test_scripts.py`는 `--lstm-training`이 MC-AE 체크포인트를 바꾸지 않는지도 확인합니다.
+- `tests/test_lstm.py`: LSTM 학습 데이터 구성(한 시점 전 → 현재 두 열), 출력 모양, 저장·불러오기를 확인합니다. `test_scripts.py`는 `Train_lstm.py`가 `vin_1.pkl`만으로 LSTM만 학습해 저장하는지도 확인합니다.
 
 **실데이터 기준선 비교**: 리팩토링 전후 수치가 bit 단위로 같은지 확인하는 도구입니다. pytest가 수집하지 않으며 직접 실행합니다.
 
@@ -343,7 +345,7 @@ Zenodo 데이터셋을 받아 `data/` 아래에 다음 구조로 둡니다.
 data/
 ├── QAS/                    차량 ID 0 ~ 392 (393대), 셀 110개
 │   ├── 0/
-│   │   ├── vin_1.pkl       LSTM 입력 (T, 1, 7). Train_ --lstm-training일 때만 읽음
+│   │   ├── vin_1.pkl       LSTM 입력 (T, 1, 7). Train_lstm.py만 읽음
 │   │   ├── vin_2.pkl       U-model 입력 (T, 225)
 │   │   └── vin_3.pkl       X-model 입력 (T, 226)
 │   ├── 1/ ...
@@ -390,7 +392,8 @@ N = 110 (QAS) / 85 (DTI)이며, 열 구간은 `get_input_dimensions()`에 정의
 
 | 파일 | import 하는 모듈 |
 |---|---|
-| `Train_.py` | Class_, mcdl.run, mcdl.diagnosis, mcdl.reconstruction, mcdl.vehicles, mcdl.lstm, mcdl.preprocessing |
+| `Train_.py` | mcdl.run, mcdl.diagnosis, mcdl.reconstruction, mcdl.vehicles |
+| `Train_lstm.py` | mcdl.lstm, mcdl.preprocessing, mcdl.run, mcdl.vehicles |
 | `Test_.py` | mcdl.run, mcdl.reconstruction, mcdl.chart_source, mcdl.vehicles, mcdl.roc, mcdl.plotting |
 | `Test_multi_models.py` | mcdl.run, mcdl.diagnosis, mcdl.reconstruction, mcdl.chart_source, mcdl.vehicles, mcdl.roc, mcdl.plotting |
 | `Test_tsne.py` | mcdl.run, mcdl.reconstruction, mcdl.chart_source, mcdl.vehicles, mcdl.plotting |
@@ -470,10 +473,11 @@ U-model·X-model로 차량 텐서 `[x | y | Δ | q]`를 재구성해 재구성 �
 
 ### mcdl/lstm.py
 
-팩 상태 예측 LSTM의 학습 데이터와 저장·불러오기입니다(논문 원본 코드의 Function_.py에서 복원). Train_ `--lstm-training`이 씁니다.
+팩 상태 예측 LSTM의 학습 데이터, 학습, 저장·불러오기입니다(논문 원본 코드의 Function_.py에서 복원). `Train_lstm.py`가 씁니다.
 
 | 이름 | 설명 |
 |---|---|
+| `train_lstm(vin1_tensors, epochs=, lr=, batch_size=, device=)` | 차량별 학습 쌍을 이어 붙여 LSTM 하나를 학습하고 (모델, epoch별 loss)를 돌려줍니다. Adam, MSE, float64, 매 epoch 셔플 |
 | `prepare_training_data(vin1, device)` | 차량 한 대의 `vin_1` (T, 1, 7) → 입력 (T−1, 1, 7)(한 시점 전 7개 값), 정답 (T−1, 1, 2)(현재 시점의 마지막 두 열) |
 | `series_to_supervised(data, n_in=1, n_out=1)` | 시계열을 [과거 n_in 시점 | 현재부터 n_out 시점] 표로 바꾸는 도우미 |
 | `save_lstm_model(model, models_dir)`, `load_lstm_model(models_dir, device=None)` | 모델 객체째 `lstm.pth`로 저장·불러오기 (원본과 같은 방식, 불러올 때 `Class_.LSTM` 필요) |
@@ -581,7 +585,8 @@ python Train_.py --battery-type QAS --dataset-name 10 --learning-case 1 \
 4. U-model을 학습합니다. `--ae-u-save-per` epoch마다 검증 loss를 계산하고 `net_e<epoch>.pth`를 저장하며, 종료 후 `net.pth`를 저장합니다.
 5. X-model도 같은 방식으로 학습해 `netx_e<epoch>.pth`, `netx.pth`를 저장합니다. U·X 모두 같은 함수(`train_autoencoder`)로 학습합니다.
 6. 최종 모델로 학습 차량의 재구성 오차 → 진단 특징 → PCA를 계산해 `pca_*`를 저장합니다.
-7. `--lstm-training`이면 학습 차량의 `vin_1.pkl`로 팩 상태 예측 LSTM을 학습해 `artifact/lstm.pth`와 `loss_lstm.csv`를 저장합니다. MC-AE 학습이 끝난 뒤에 하므로 MC-AE 결과(체크포인트, 관리도)는 이 옵션과 상관없이 같습니다.
+
+팩 상태 예측 LSTM은 이 스크립트와 따로 `Train_lstm.py`로 학습합니다([7.6절](#76-lstm-학습--train_lstmpy)).
 
 콘솔에는 저장 주기마다 `Epoch | Train Loss | Val Loss`와 총 소요 시간이 출력됩니다.
 
@@ -611,12 +616,8 @@ python Train_.py --battery-type QAS --dataset-name 10 --learning-case 1 \
 | `--no-save` | off | `.pth` 체크포인트 저장 생략 (loss·PCA·sim_config는 저장) |
 | `--seed` | 42 | 난수 시드 |
 | `--debug` | off | 빠른 확인용: 학습·검증 차량 1대씩, `use_dx = False`, `sim_config.txt` 미생성 |
-| `--lstm-training` | off | 팩 상태 예측 LSTM도 학습 (위 동작 순서 7) |
-| `--lstm-epochs` / `--lstm-lr` / `--lstm-batchsize` | 300 / 1e-4 / 100 | LSTM epoch, Adam 학습률, 배치 크기 (매 epoch 셔플) |
 
 **결과물**: `sim_config.txt`, `artifact/*.pth`, `loss_*.csv`, `pca_*` (상세는 [8장](#8-결과물-정리))
-
-**LSTM** (논문 원본 코드에서 복원): 양방향 LSTM(은닉 18) + 선형층으로, 한 시점 전의 팩 측정값 7개(`vin_1.pkl`)로 현재 시점의 대표 셀 전압과 SOC(`vin_1`의 마지막 두 열)를 예측합니다. 데이터의 x 열(팩 추정값 2개) 중 하나가 이런 LSTM 예측값입니다. 저장한 모델은 `mcdl.lstm.load_lstm_model("models/<RUN_ID>/artifact")`로 불러옵니다. 평가 스크립트는 LSTM을 쓰지 않습니다.
 
 ### 7.3 테스트 (단일 조합) — `Test_.py`
 
@@ -743,6 +744,27 @@ python Test_tsne.py --models-idx <RUN_ID> --u-model-idx -1 --x-model-idx -1 --sa
 
 **결과물**: `results_tsne/tSNE_<id>.png` — [t-SNE (실제값) | t-SNE (재구성값) | 대상 차량 CI + 임계선] 1×3 그림
 
+### 7.6 LSTM 학습 — `Train_lstm.py`
+
+팩 상태 예측 LSTM만 학습합니다(논문 원본 코드에서 복원). 양방향 LSTM(은닉 18) + 선형층으로, 한 시점 전의 팩 측정값 7개(`vin_1.pkl`)로 현재 시점의 대표 셀 전압과 SOC(`vin_1`의 마지막 두 열)를 예측합니다. 데이터의 x 열(팩 추정값 2개) 중 하나가 이런 LSTM 예측값입니다.
+
+MC-AE 학습(`Train_.py`)과 데이터·모델·결과를 공유하지 않습니다. `vin_1.pkl`만 읽고, 학습 차량 목록을 정하는 분할 규칙만 같이 씁니다. 둘 다 필요하면 각각 실행합니다.
+
+```bash
+python Train_lstm.py --dataset-name 10 --epochs 300
+```
+
+| 옵션 | 기본값 | 설명 |
+|---|---|---|
+| `--battery-type` | `QAS` | `QAS` 또는 `DTI` |
+| `--dataset-name` | 없음 | `./datasets/<name>/` 분할 사용. 미지정 시 루트 `*.npy`. 규칙은 Train_.py와 같음 |
+| `--vehicle-start` / `--vehicle-end` | 0 / -1 | 학습 차량 리스트 슬라이스 (end 포함, -1은 끝까지) |
+| `--models-dir` / `--source-data-dir` | `./models` / `./data` | 결과 저장 위치 / 원본 데이터 위치 |
+| `--epochs` / `--lr` / `--batchsize` | 300 / 1e-4 / 100 | epoch, Adam 학습률, 배치 크기 (매 epoch 셔플) |
+| `--seed` | 42 | 난수 시드 (같은 시드면 같은 가중치) |
+
+**결과물**: 새 Run 폴더 `models/<RUN_ID>/`에 `sim_config.txt`(`model : LSTM` 포함), `loss_lstm.csv`, `artifact/lstm.pth`. MC-AE 모델과 관리도가 없으므로, 이 폴더를 평가 스크립트에 주면 "LSTM만 학습한 Run" 오류로 멈춥니다. 저장한 모델은 `mcdl.lstm.load_lstm_model("models/<RUN_ID>/artifact")`로 불러옵니다.
+
 ---
 
 ## 8. 결과물 정리
@@ -752,10 +774,8 @@ models/<RUN_ID>/                                  RUN_ID = 26MMDD_HHMMSS (KST, �
 ├── sim_config.txt                                Train_             학습 설정 전체 (Test 계열이 읽음)
 ├── artifact/
 │   ├── net_e<N>.pth, net.pth                     Train_             U-model state_dict (주기별 / 최종)
-│   ├── netx_e<N>.pth, netx.pth                   Train_             X-model state_dict (주기별 / 최종)
-│   └── lstm.pth                                  Train_             LSTM 모델 객체 (--lstm-training)
+│   └── netx_e<N>.pth, netx.pth                   Train_             X-model state_dict (주기별 / 최종)
 ├── loss_net.csv, loss_netx.csv                   Train_             epoch별 평균 학습 loss
-├── loss_lstm.csv                                 Train_             LSTM epoch별 평균 학습 loss (--lstm-training)
 ├── loss_net_val.csv, loss_netx_val.csv           Train_             save-per 주기마다의 검증 loss
 ├── pca_arrays.npz                                Train_             PCA 결과·관리한계 (최종 모델 기준)
 ├── pca_manifest.json                             Train_             pca_* 타입·shape·경로
@@ -772,6 +792,11 @@ models/<RUN_ID>/                                  RUN_ID = 26MMDD_HHMMSS (KST, �
 │   ├── AUC_ROC_u<U>_x<X>_case<C>.png             Test_multi_models  조합별 ROC
 │   └── AUC_ROC_ALL_COMBINATIONS_case<C>.png      Test_multi_models  전체 ROC 비교
 └── results_tsne/tSNE_<id>.png                    Test_tsne (--save) t-SNE + CI
+
+models/<RUN_ID>/                                  Train_lstm.py로 만든 LSTM 전용 Run (위 MC-AE Run과 별개)
+├── sim_config.txt                                Train_lstm         학습 설정 (model : LSTM)
+├── loss_lstm.csv                                 Train_lstm         epoch별 평균 학습 loss
+└── artifact/lstm.pth                             Train_lstm         LSTM 모델 객체
 ```
 
 - `<C>` = learning_case, `<idx>` = -1(최종 모델) 또는 epoch 번호입니다.
@@ -806,7 +831,7 @@ models/<RUN_ID>/                                  RUN_ID = 26MMDD_HHMMSS (KST, �
 
 - **저장소 루트에서 실행**해야 합니다 (상대 경로 사용).
 - **`sim_config.txt`를 지우거나 고치지 마세요.** Test 계열 스크립트가 학습 설정을 복원할 때 이 파일을 읽습니다. 학습 시 준 `--dataset-name`도 여기에 기록되어, 테스트가 같은 분할을 자동으로 사용합니다.
-- **분할 폴더는 학습과 평가가 같은 규칙으로 정합니다.** `dataset_name`이 없거나 `None`이면 루트 기본 분할, 그 밖의 이름(`default` 포함)은 `./datasets/<이름>/`입니다. 그 폴더가 없으면 다른 분할로 넘어가지 않고 오류로 멈춥니다(`mcdl/run.py`의 `_split_dir`). Run을 다른 컴퓨터로 옮겨 평가할 때는 `datasets/<이름>/`도 함께 옮기세요.
+- **분할 폴더는 학습(Train_, Train_lstm)과 평가가 같은 규칙으로 정합니다.** `dataset_name`이 없거나 `None`이면 루트 기본 분할, 그 밖의 이름(`default` 포함)은 `./datasets/<이름>/`입니다. 그 폴더가 없으면 다른 분할로 넘어가지 않고 오류로 멈춥니다(`mcdl/run.py`의 `resolve_split_dir`). Run을 다른 컴퓨터로 옮겨 평가할 때는 `datasets/<이름>/`도 함께 옮기세요.
 - **`--debug`를 주면 빠른 확인용으로 동작이 바뀝니다.** 디버거(VS Code 등)로 실행하는 것만으로는 동작이 바뀌지 않습니다. 디버거에서 이 동작을 쓰려면 launch.json의 `args`에 `--debug`를 넣으세요.
 
   | 스크립트 | `--debug`일 때 |

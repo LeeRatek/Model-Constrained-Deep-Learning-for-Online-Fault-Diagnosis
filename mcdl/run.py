@@ -8,10 +8,11 @@ Run이란
 누가 쓰나
     - 평가 스크립트(Test_.py, Test_multi_models.py, Test_tsne.py): Run(...)으로 폴더를 열어 설정과 모델을 받는다.
     - 학습 스크립트(Train_.py): 새 Run 폴더 이름을 정하고, 설정 기록을 쓰고, 새 모델을 만들고, 가중치를 저장한다.
+    - LSTM 학습 스크립트(Train_lstm.py): 새 Run 폴더 이름, 설정 기록, 분할 폴더 규칙, 시드 고정을 함께 쓴다.
 
 이 파일이 정하는 규칙
     sim_config.txt의 형식, 예전 Run에 없는 설정 항목의 기본값, 체크포인트 파일 이름(net_e3.pth 등),
-    U-model·X-model을 만드는 방법이 모두 여기에 있다. 규칙을 바꿀 때는 이 파일만 고치면 된다.
+    분할 폴더를 정하는 규칙, U-model·X-model을 만드는 방법이 모두 여기에 있다. 규칙을 바꿀 때는 이 파일만 고치면 된다.
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ import ast
 import io
 import os
 import platform
+import random
 import re
 import sys
 from contextlib import redirect_stdout
@@ -29,6 +31,7 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 from zoneinfo import ZoneInfo
 
+import numpy as np
 import torch
 
 from Class_ import CombinedAE, CustomSigmoidFunc
@@ -114,7 +117,7 @@ class RunConfig:
             vehicle_end=v["vehicle_end"],
             preprocessing=preprocessing,
             skip_charge_ready=skip_charge_ready,
-            split_dir=_split_dir(values.get("dataset_name")),
+            split_dir=resolve_split_dir(values.get("dataset_name")),
         )
 
 
@@ -128,11 +131,16 @@ class Run:
     def __init__(self, path):
         """폴더의 sim_config.txt를 읽어 self.config(RunConfig)를 만든다.
 
-        필수 항목이 없으면 ValueError, 기록된 분할 폴더가 없으면 FileNotFoundError를 sim_config.txt 경로와 함께 낸다.
+        필수 항목이 없거나 Train_lstm.py로 만든 LSTM 전용 Run이면 ValueError, 기록된 분할 폴더가 없으면
+        FileNotFoundError를 sim_config.txt 경로와 함께 낸다.
         """
         self.path = Path(path)
         sim_path = self.path / "sim_config.txt"
         raw = _parse_sim_config(sim_path.read_text(encoding="utf-8"))
+        if raw.get("model") == "LSTM":
+            raise ValueError(
+                f"{sim_path}: Train_lstm.py로 LSTM만 학습한 Run입니다. MC-AE 모델과 관리도가 없어 평가할 수 없습니다."
+            )
         # dataset_name은 폴더 이름이므로 숫자로 바꾸지 않는다 (예: "05"가 5가 되지 않게)
         values = {
             k: v if k == "dataset_name" else _coerce_value(v) for k, v in raw.items()
@@ -228,7 +236,7 @@ def write_sim_config(path, args, extra, exclude: Sequence[str] = ()) -> str:
 
     args는 명령줄 인자, extra는 덧붙일 값(학습 차량 ID 목록 등)이다. exclude에 든 항목은 쓰지 않는다
     (Train_.py는 기록할 필요가 없는 --debug를 뺀다). 형식은 print_sim_config의 출력과 같다.
-    쓰는 곳: Train_.py.
+    쓰는 곳: Train_.py, Train_lstm.py.
     """
     buf = io.StringIO()
     with redirect_stdout(buf):
@@ -251,11 +259,26 @@ def save_net_state(model, models_dir, filename):
     torch.save(state, os.path.join(models_dir, filename))
 
 
+def set_seed(seed):
+    """파이썬·numpy·torch 난수의 시작값(시드)을 고정해, 같은 시드면 같은 학습 결과가 나오게 한다.
+
+    쓰는 곳: Train_.py, Train_lstm.py (학습 시작 때).
+    """
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+
 def make_model_path_based_timestamp(base):
     """새 Run 폴더 경로 "<base>/<RUN_ID>"를 만든다. RUN_ID는 서울 시간 기준 "26MMDD_HHMMSS"이다.
 
     연도 자리는 "26"으로 고정되어 있다. 폴더 자체는 만들지 않는다(처음 저장할 때 생긴다).
-    쓰는 곳: Train_.py (학습 시작 시 결과 폴더 이름을 정한다).
+    쓰는 곳: Train_.py, Train_lstm.py (학습 시작 시 결과 폴더 이름을 정한다).
     """
     now = datetime.now(ZoneInfo("Asia/Seoul"))
     return os.path.join(base, now.strftime("26%m%d_%H%M%S"))
@@ -338,11 +361,12 @@ def _build_model(config: RunConfig, model: str):
     )
 
 
-def _split_dir(dataset_name) -> str:
-    """RunConfig.from_mapping 안에서 쓴다. 분할(--dataset-name)이 있는 폴더를 정한다. 학습과 평가가 같은 규칙을 쓴다.
+def resolve_split_dir(dataset_name) -> str:
+    """분할(--dataset-name)이 있는 폴더를 정한다. MC-AE 학습·평가와 LSTM 학습이 모두 이 규칙을 쓴다.
 
     이름이 없거나 "None"(이름 없이 학습한 Run의 sim_config.txt 기록)이면 저장소 루트("."), 그 밖의 이름은
     ./datasets/<이름>이다. 그 폴더가 없으면 FileNotFoundError를 낸다(다른 분할로 학습·평가하지 않도록).
+    쓰는 곳: RunConfig.from_mapping(Train_.py·평가 스크립트), Train_lstm.py.
     """
     name = "" if dataset_name is None else str(dataset_name).strip()
     if not name or name.lower() == "none":
