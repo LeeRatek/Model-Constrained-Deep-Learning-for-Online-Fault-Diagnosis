@@ -1,4 +1,5 @@
-"""모델 정의: 셀 전압·셀 SOC를 재구성하는 MC-AE(CombinedAE)와 그 출력 함수(CustomSigmoidFunc).
+"""모델 정의: 셀 전압·셀 SOC를 재구성하는 MC-AE(CombinedAE)와 그 출력 함수(CustomSigmoidFunc),
+팩 상태를 예측하는 LSTM.
 
 MC-AE는 Model-Constrained AutoEncoder의 줄임말이다. 입력을 받아 셀 값을 "다시 계산"(재구성)하도록 학습하는
 작은 신경망으로, 논문 Fig. 1(b)(c)의 네트워크와 Fig. 1(d)의 directed linear layer에 해당한다.
@@ -6,9 +7,12 @@ MC-AE는 Model-Constrained AutoEncoder의 줄임말이다. 입력을 받아 셀 
     U-model: 셀 전압을 재구성한다 (입력 vin_2.pkl, 체크포인트 파일 net*.pth)
     X-model: 셀 SOC를 재구성한다 (입력 vin_3.pkl, 체크포인트 파일 netx*.pth)
 
+LSTM은 팩 단위 측정값 7개(vin_1.pkl)로 다음 시점의 대표 셀 전압과 SOC를 예측하는 모델이다(논문 원본 코드에서 복원).
+MC-AE와 따로 학습하고(Train_.py --lstm-training), 진단 계산에는 쓰지 않는다.
+
 누가 쓰나
-    모델은 직접 만들지 않고 mcdl/run.py의 build_model_pair(새 모델), Run.load_model(저장된 모델 불러오기)로 만든다.
-    학습은 Train_.py, 재구성 계산은 mcdl/reconstruction.py가 한다.
+    MC-AE는 직접 만들지 않고 mcdl/run.py의 build_model_pair(새 모델), Run.load_model(저장된 모델 불러오기)로 만든다.
+    학습은 Train_.py, 재구성 계산은 mcdl/reconstruction.py가 한다. LSTM의 학습 데이터·저장은 mcdl/lstm.py가 맡는다.
 """
 
 import torch
@@ -93,3 +97,34 @@ class CombinedAE(nn.Module):
             z = self.fc4(z)
         re = self.decode(z)
         return re, z
+
+
+LSTM_INPUT_SIZE = 7  # vin_1.pkl의 열 수 (LSTM 입력 크기)
+
+
+class LSTM(nn.Module):
+    """팩 상태 예측 모델: 양방향 LSTM(은닉 18개) + 선형층. 입력 7개 → 출력 2개(대표 셀 전압, SOC).
+
+    입력은 (batch, 시점, 7), 출력은 (batch, 시점, 2)다. 이 저장소에서는 한 시점(시점 축 길이 1)씩 넣어
+    다음 시점 값을 예측하도록 학습한다(mcdl/lstm.py의 prepare_training_data).
+    저장한 모델 파일(artifact/lstm.pth)은 이 클래스를 이름으로 찾으므로 층 이름(lstm, out)을 바꾸면 안 된다.
+    쓰는 곳: Train_.py의 train_lstm, mcdl/lstm.py의 load_lstm_model.
+    """
+
+    def __init__(self):
+        """층을 만든다. 양방향이라 LSTM 출력은 정방향 18개 + 역방향 18개 = 36개이고, 선형층이 이를 2개로 줄인다."""
+        super(LSTM, self).__init__()
+        self.lstm = nn.LSTM(
+            input_size=LSTM_INPUT_SIZE,
+            hidden_size=18,
+            num_layers=1,
+            batch_first=True,  # 입력·출력의 첫 번째 축이 batch
+            bidirectional=True,
+        )
+        self.out = nn.Linear(36, 2)
+
+    def forward(self, x):
+        """시점마다 LSTM 출력을 선형층에 통과시켜 (batch, 시점, 2) 예측값을 돌려준다."""
+        r_out, _ = self.lstm(x, None)
+        outs = [self.out(r_out[:, time_step, :]) for time_step in range(r_out.size(1))]
+        return torch.stack(outs, dim=1)

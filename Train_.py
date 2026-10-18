@@ -11,10 +11,12 @@
     4. X-model도 같은 방식으로 학습한다(netx_e<epoch>.pth).
     5. 최종 모델로 정상 학습 차량의 진단 특징을 계산해 PCA 관리도를 만들고 pca_arrays.npz 등으로 저장한다.
        평가 스크립트(Test_.py 등)는 이 폴더를 읽어 평가한다.
+    6. --lstm-training이면 학습 차량의 vin_1.pkl로 팩 상태 예측 LSTM을 학습해 artifact/lstm.pth로 저장한다.
+       MC-AE 학습이 모두 끝난 뒤에 하므로 MC-AE 결과(체크포인트, 관리도)에는 영향이 없다.
 
 다른 파일과의 관계
     데이터 읽기는 mcdl/vehicles.py, 모델 만들기·저장 규칙은 mcdl/run.py, 진단 특징은 mcdl/reconstruction.py,
-    관리도는 mcdl/diagnosis.py를 쓴다. 모델 구조는 Class_.py에 있다.
+    관리도는 mcdl/diagnosis.py, LSTM 학습 데이터·저장은 mcdl/lstm.py를 쓴다. 모델 구조는 Class_.py에 있다.
 """
 
 import numpy as np
@@ -22,11 +24,14 @@ import os
 import warnings
 import torch
 import torch.nn as nn
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, TensorDataset
 from torch.utils.data import BatchSampler, DataLoader, RandomSampler, SequentialSampler
 import time
 import argparse
 import random
+from Class_ import LSTM
+from mcdl.lstm import prepare_training_data, save_lstm_model
+from mcdl.preprocessing import safe_load
 from mcdl.run import (
     RunConfig,
     build_model_pair,
@@ -132,6 +137,15 @@ parser.add_argument(
     action="store_true",
     help="빠른 확인용: 학습·검증 차량 1대씩, use_dx 끔, sim_config.txt 생략",
 )
+# 팩 상태 예측 LSTM (MC-AE 학습이 끝난 뒤 따로 학습한다)
+parser.add_argument(
+    "--lstm-training",
+    action="store_true",
+    help="학습 차량의 vin_1.pkl로 LSTM을 학습해 artifact/lstm.pth와 loss_lstm.csv를 저장한다",
+)
+parser.add_argument("--lstm-epochs", type=int, default=300)
+parser.add_argument("--lstm-lr", type=float, default=1e-4)
+parser.add_argument("--lstm-batchsize", type=int, default=100)
 
 
 # ----------------------------------------Training for MC-AE--------------------------
@@ -293,6 +307,37 @@ def train_autoencoder(
         save_net_state(model=net, models_dir=f"{run_dir}/artifact/", filename=checkpoint_filename(model, -1))
 
 
+def train_lstm(vin1_tensors, *, epochs, lr, batch_size, device):
+    """학습 차량들의 vin_1 텐서로 팩 상태 예측 LSTM 하나를 학습해 (모델, epoch별 평균 loss 목록)을 돌려준다.
+
+    차량마다 "한 시점 전 7개 값 → 현재 대표 셀 전압·SOC" 쌍을 만들어(mcdl/lstm.py) 이어 붙이고, 매 epoch 섞어서
+    batch_size씩 학습한다. 손실은 MSE, 최적화는 Adam, 계산은 float64다(모델 구조·하이퍼파라미터는 논문 원본 코드와 같다).
+    쓰는 곳: main (--lstm-training).
+    """
+    pairs = [prepare_training_data(v, device) for v in vin1_tensors]
+    train_X = torch.cat([X for X, _ in pairs])
+    train_y = torch.cat([y for _, y in pairs])
+    loader = DataLoader(TensorDataset(train_X, train_y), batch_size=batch_size, shuffle=True)
+
+    lstm = LSTM().to(device).double()
+    optimizer = torch.optim.Adam(lstm.parameters(), lr=lr)
+    loss_func = nn.MSELoss()
+    epoch_losses = []
+    for epoch in range(epochs):
+        total_loss = 0.0
+        num_batches = 0
+        for b_x, b_y in loader:
+            loss = loss_func(b_y, lstm(b_x))
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            total_loss += loss.item()
+            num_batches += 1
+        epoch_losses.append(total_loss / num_batches)
+        print(f"LSTM Epoch: {epoch:2d} | Train Loss: {epoch_losses[-1]:.6e}")
+    return lstm, epoch_losses
+
+
 def main(argv=None):
     """학습 전체를 실행한다 (파일 맨 위 "하는 일" 1~5). argv는 명령줄 옵션 목록이며, None이면 실제 명령줄을 읽는다.
 
@@ -421,6 +466,30 @@ def main(argv=None):
     print(f"{int(h)}시간 {int(m)}분 {s:.3f}초")
 
     chart.save(f"{data_path}/", df_data)
+
+    # 팩 상태 예측 LSTM. MC-AE 학습·관리도가 모두 끝난 뒤라 난수를 써도 MC-AE 결과는 그대로다
+    if args.lstm_training:
+        print("Training LSTM for pack state prediction...")
+        vin1_tensors = [
+            safe_load(f"{args.source_data_dir}/{args.battery_type}/{vehicle_id}/vin_1.pkl") for vehicle_id in train_list
+        ]
+        lstm, lstm_losses = train_lstm(
+            vin1_tensors,
+            epochs=args.lstm_epochs,
+            lr=args.lstm_lr,
+            batch_size=args.lstm_batchsize,
+            device=device,
+        )
+        np.savetxt(
+            os.path.join(f"{data_path}/", "loss_lstm.csv"),
+            np.column_stack((np.arange(len(lstm_losses)), lstm_losses)),
+            delimiter=",",
+            fmt=["%.0f", "%.6e"],
+            header="epoch,avg_loss",
+            comments="",
+        )
+        if not args.no_save:
+            save_lstm_model(lstm, f"{data_path}/artifact/")
 
 
 if __name__ == "__main__":

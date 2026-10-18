@@ -137,7 +137,7 @@ python Plot_AUC_heatmap.py --models-idx <RUN_ID>                     # AUC_summa
 | `FileNotFoundError: data/QAS/<id>/vin_2.pkl` | 2단계 데이터 배치를 확인합니다. 다른 위치에 두었다면 `--source-data-dir` 또는 `SOURCE_DIR`을 씁니다 |
 | `Test_.py`가 끝나지 않음 | ROC 그림 창이 열려 있습니다. 창을 닫거나 `MPLBACKEND=Agg`로 실행합니다 |
 | `Test_multi_models.py`에서 메모리 부족 | `.pt` 캐시를 통째로 올리기 때문입니다(준비물 표). 학습 차량 범위를 줄인 Run으로 먼저 돌려 봅니다 |
-| `error: unrecognized arguments` | 옵션 이름을 확인합니다. 예전의 `--lstm-*`, `--vin*-start`, `--sigma-levels` 등은 지워졌습니다 |
+| `error: unrecognized arguments` | 옵션 이름을 확인합니다. 예전의 `--lstm-load`, `--vin*-start`, `--sigma-levels` 등은 지워졌습니다 |
 | `Error: No valid model combinations to test` | `models/<RUN_ID>/artifact/`에 체크포인트(`.pth`)가 없습니다 |
 
 ### 목적별 실행 파일
@@ -230,14 +230,14 @@ z = fc4(z)                              # --add-one-output-layer 일 때만, Lin
 
 ```
 .
-├── Train_.py               [실행] MC-AE(U·X) 학습 + 학습 데이터 PCA 관리한계 저장
+├── Train_.py               [실행] MC-AE(U·X) 학습 + 학습 데이터 PCA 관리한계 저장 (+ 선택: LSTM 학습)
 ├── Test_.py                [실행] 단일 (U, X) 모델 조합 평가 → ROC/AUC
 ├── Test_multi_models.py    [실행] 체크포인트 (U, X) 조합 전수 평가 → AUC 표·ROC·히트맵
 ├── Test_tsne.py            [실행] 기준 정상 차량 vs 대상 차량 t-SNE + CI 시각화
 ├── Plot_AUC_heatmap.py     [실행] AUC_summary CSV → 히트맵 (재)생성
 ├── data_filter.py          [실행] 이상 차량 제거 + train/validate/test 분할
-├── Class_.py               [모듈] CombinedAE, CustomSigmoidFunc 클래스
-├── mcdl/                   [모듈] deep module 패키지 (run.py: Run 폴더 읽기·쓰기, 모델 생성·로드 / reconstruction.py: 재구성·재구성 오차·차량 진단 특징 / diagnosis.py: 진단 특징·관리도 / chart_source.py: 모델 쌍의 관리도 공급원 / vehicles.py: 분할 차량 ID·차량 텐서 로딩 / roc.py: 차량 단위 ROC 평가 / preprocessing.py: 원본 pkl 로딩·전처리 / plotting.py: 그림 함수)
+├── Class_.py               [모듈] CombinedAE, CustomSigmoidFunc, LSTM 클래스
+├── mcdl/                   [모듈] deep module 패키지 (run.py: Run 폴더 읽기·쓰기, 모델 생성·로드 / reconstruction.py: 재구성·재구성 오차·차량 진단 특징 / diagnosis.py: 진단 특징·관리도 / chart_source.py: 모델 쌍의 관리도 공급원 / vehicles.py: 분할 차량 ID·차량 텐서 로딩 / roc.py: 차량 단위 ROC 평가 / preprocessing.py: 원본 pkl 로딩·전처리 / plotting.py: 그림 함수 / lstm.py: LSTM 학습 데이터·저장 / kalman.py: 칼만 필터 상태 추정)
 ├── tests/                  pytest 테스트, realdata/baseline.py: 실데이터 기준선 비교 도구
 ├── GLOSSARY.md             용어집 (Run, 관리도, 진단 특징 등)
 ├── .scratch/               리팩토링·버그 수정의 spec과 티켓 (로컬 이슈 트래커)
@@ -316,6 +316,8 @@ python -m pytest
 - `tests/test_diagnosis.py`: 진단 특징 → 관리도 → CI → ROC 테스트. 고정 seed 합성 오차(`tests/synthetic_errors.py`)에 대한 기대값(`tests/fixtures/diagnosis_golden.npz`)과 bit 단위로 비교합니다. 기대값은 Windows·numpy 2.3.5 환경에서 만들었으므로 다른 플랫폼에서는 ULP 수준 차이로 실패할 수 있습니다.
 - `realdata` 마커가 붙은 테스트는 `models/260224_090359`가 있을 때만 돕니다.
 - `tests/make_diagnosis_golden.py`: `test_diagnosis.py`의 기대값을 지금 구현으로 다시 만드는 도구입니다. 진단 계산을 일부러 바꿨을 때만 씁니다(10장). `--check`는 덮어쓰지 않고 비교만 합니다.
+- `tests/test_kalman.py`: 칼만 필터(`mcdl/kalman.py`)가 원본 코드(a93ea3a^의 Function_.py)로 만든 기대값(`tests/fixtures/kalman_golden.npz`)과 bit 단위로 같은지 확인합니다. 입력은 고정 seed 합성 측정값(`tests/synthetic_battery.py`), 기대값 재생성 도구는 `tests/make_kalman_golden.py`입니다.
+- `tests/test_lstm.py`: LSTM 학습 데이터 구성(한 시점 전 → 현재 두 열), 출력 모양, 저장·불러오기를 확인합니다. `test_scripts.py`는 `--lstm-training`이 MC-AE 체크포인트를 바꾸지 않는지도 확인합니다.
 
 **실데이터 기준선 비교**: 리팩토링 전후 수치가 bit 단위로 같은지 확인하는 도구입니다. pytest가 수집하지 않으며 직접 실행합니다.
 
@@ -341,7 +343,7 @@ Zenodo 데이터셋을 받아 `data/` 아래에 다음 구조로 둡니다.
 data/
 ├── QAS/                    차량 ID 0 ~ 392 (393대), 셀 110개
 │   ├── 0/
-│   │   ├── vin_1.pkl       LSTM 입력 (T, 1, 7). 현재 스크립트는 읽지 않음
+│   │   ├── vin_1.pkl       LSTM 입력 (T, 1, 7). Train_ --lstm-training일 때만 읽음
 │   │   ├── vin_2.pkl       U-model 입력 (T, 225)
 │   │   └── vin_3.pkl       X-model 입력 (T, 226)
 │   ├── 1/ ...
@@ -388,7 +390,7 @@ N = 110 (QAS) / 85 (DTI)이며, 열 구간은 `get_input_dimensions()`에 정의
 
 | 파일 | import 하는 모듈 |
 |---|---|
-| `Train_.py` | mcdl.run, mcdl.diagnosis, mcdl.reconstruction, mcdl.vehicles |
+| `Train_.py` | Class_, mcdl.run, mcdl.diagnosis, mcdl.reconstruction, mcdl.vehicles, mcdl.lstm, mcdl.preprocessing |
 | `Test_.py` | mcdl.run, mcdl.reconstruction, mcdl.chart_source, mcdl.vehicles, mcdl.roc, mcdl.plotting |
 | `Test_multi_models.py` | mcdl.run, mcdl.diagnosis, mcdl.reconstruction, mcdl.chart_source, mcdl.vehicles, mcdl.roc, mcdl.plotting |
 | `Test_tsne.py` | mcdl.run, mcdl.reconstruction, mcdl.chart_source, mcdl.vehicles, mcdl.plotting |
@@ -402,7 +404,9 @@ N = 110 (QAS) / 85 (DTI)이며, 열 구간은 `get_input_dimensions()`에 정의
 | `mcdl/diagnosis.py` | (numpy, pandas, scipy만 사용) |
 | `mcdl/roc.py` | (numpy, scikit-learn만 사용) |
 | `mcdl/preprocessing.py` | (numpy, torch만 사용) |
-| `mcdl/plotting.py` | (matplotlib, numpy, pandas, scipy, scikit-learn, torch만 사용) |
+| `mcdl/plotting.py` | (matplotlib, numpy, pandas, scikit-learn만 사용) |
+| `mcdl/lstm.py` | Class_ (+ pandas, torch) |
+| `mcdl/kalman.py` | (numpy만 사용) |
 
 스크립트는 star import(`from … import *`)를 쓰지 않습니다. import 줄에서 무엇에 기대는지 바로 보입니다.
 
@@ -462,6 +466,28 @@ U-model·X-model로 차량 텐서 `[x | y | Δ | q]`를 재구성해 재구성 �
 |---|---|
 | `CombinedAE` | MC-AE 본체 (2장 구조 참고) |
 | `CustomSigmoidFunc` | 디코더 출력 sigmoid `shift + scale·σ(x)` (U·X의 scale·shift는 학습 인자) |
+| `LSTM` | 팩 상태 예측 모델. 양방향 LSTM(입력 7, 은닉 18) + Linear(36 → 2). 입력 (batch, 시점, 7) → 출력 (batch, 시점, 2) |
+
+### mcdl/lstm.py
+
+팩 상태 예측 LSTM의 학습 데이터와 저장·불러오기입니다(논문 원본 코드의 Function_.py에서 복원). Train_ `--lstm-training`이 씁니다.
+
+| 이름 | 설명 |
+|---|---|
+| `prepare_training_data(vin1, device)` | 차량 한 대의 `vin_1` (T, 1, 7) → 입력 (T−1, 1, 7)(한 시점 전 7개 값), 정답 (T−1, 1, 2)(현재 시점의 마지막 두 열) |
+| `series_to_supervised(data, n_in=1, n_out=1)` | 시계열을 [과거 n_in 시점 | 현재부터 n_out 시점] 표로 바꾸는 도우미 |
+| `save_lstm_model(model, models_dir)`, `load_lstm_model(models_dir, device=None)` | 모델 객체째 `lstm.pth`로 저장·불러오기 (원본과 같은 방식, 불러올 때 `Class_.LSTM` 필요) |
+
+### mcdl/kalman.py
+
+칼만 필터로 팩·셀 상태를 추정하는 코드입니다(논문 원본 코드의 Function_.py에서 복원). 데이터의 x(팩 추정값)·Δ(셀 편차 추정값) 열이 이런 모델 기반 추정값이며, 데이터에 이미 계산되어 있어 스크립트는 이 module을 쓰지 않습니다.
+
+| 이름 | 설명 |
+|---|---|
+| `calculate_volt_modepi(volt_all)` | 셀 전압 (N × 셀 DataFrame) → 가중 대표 전압 `volt_modepi`, 셀별 편차 `volt_di` |
+| `solvers(volt_modepi, volt_di, volt_all, soc, b, current, temp_avg)` | 팩: 1차 RC 등가회로 + 적응형 확장 칼만 필터로 [분극 전압, SOC] 추정. 셀: 셀마다 스칼라 칼만 필터로 SOC 편차 추정. `(xipre, xpre, Spre, Upre, Xipre, x, DUi, Xi)`를 돌려줍니다(각 값의 뜻은 docstring) |
+
+`solvers`의 OCV는 SOC 17차 다항식 + 온도 3차 항이며, 계수 `b` 21개는 저장소와 데이터에 없어 배터리별로 따로 구해 넣어야 합니다. 원본 코드로 만든 기대값과 bit 단위로 같은지는 `tests/test_kalman.py`가 확인합니다.
 
 ### mcdl/preprocessing.py
 
@@ -555,6 +581,7 @@ python Train_.py --battery-type QAS --dataset-name 10 --learning-case 1 \
 4. U-model을 학습합니다. `--ae-u-save-per` epoch마다 검증 loss를 계산하고 `net_e<epoch>.pth`를 저장하며, 종료 후 `net.pth`를 저장합니다.
 5. X-model도 같은 방식으로 학습해 `netx_e<epoch>.pth`, `netx.pth`를 저장합니다. U·X 모두 같은 함수(`train_autoencoder`)로 학습합니다.
 6. 최종 모델로 학습 차량의 재구성 오차 → 진단 특징 → PCA를 계산해 `pca_*`를 저장합니다.
+7. `--lstm-training`이면 학습 차량의 `vin_1.pkl`로 팩 상태 예측 LSTM을 학습해 `artifact/lstm.pth`와 `loss_lstm.csv`를 저장합니다. MC-AE 학습이 끝난 뒤에 하므로 MC-AE 결과(체크포인트, 관리도)는 이 옵션과 상관없이 같습니다.
 
 콘솔에는 저장 주기마다 `Epoch | Train Loss | Val Loss`와 총 소요 시간이 출력됩니다.
 
@@ -584,8 +611,12 @@ python Train_.py --battery-type QAS --dataset-name 10 --learning-case 1 \
 | `--no-save` | off | `.pth` 체크포인트 저장 생략 (loss·PCA·sim_config는 저장) |
 | `--seed` | 42 | 난수 시드 |
 | `--debug` | off | 빠른 확인용: 학습·검증 차량 1대씩, `use_dx = False`, `sim_config.txt` 미생성 |
+| `--lstm-training` | off | 팩 상태 예측 LSTM도 학습 (위 동작 순서 7) |
+| `--lstm-epochs` / `--lstm-lr` / `--lstm-batchsize` | 300 / 1e-4 / 100 | LSTM epoch, Adam 학습률, 배치 크기 (매 epoch 셔플) |
 
 **결과물**: `sim_config.txt`, `artifact/*.pth`, `loss_*.csv`, `pca_*` (상세는 [8장](#8-결과물-정리))
+
+**LSTM** (논문 원본 코드에서 복원): 양방향 LSTM(은닉 18) + 선형층으로, 한 시점 전의 팩 측정값 7개(`vin_1.pkl`)로 현재 시점의 대표 셀 전압과 SOC(`vin_1`의 마지막 두 열)를 예측합니다. 데이터의 x 열(팩 추정값 2개) 중 하나가 이런 LSTM 예측값입니다. 저장한 모델은 `mcdl.lstm.load_lstm_model("models/<RUN_ID>/artifact")`로 불러옵니다. 평가 스크립트는 LSTM을 쓰지 않습니다.
 
 ### 7.3 테스트 (단일 조합) — `Test_.py`
 
@@ -721,8 +752,10 @@ models/<RUN_ID>/                                  RUN_ID = 26MMDD_HHMMSS (KST, �
 ├── sim_config.txt                                Train_             학습 설정 전체 (Test 계열이 읽음)
 ├── artifact/
 │   ├── net_e<N>.pth, net.pth                     Train_             U-model state_dict (주기별 / 최종)
-│   └── netx_e<N>.pth, netx.pth                   Train_             X-model state_dict (주기별 / 최종)
+│   ├── netx_e<N>.pth, netx.pth                   Train_             X-model state_dict (주기별 / 최종)
+│   └── lstm.pth                                  Train_             LSTM 모델 객체 (--lstm-training)
 ├── loss_net.csv, loss_netx.csv                   Train_             epoch별 평균 학습 loss
+├── loss_lstm.csv                                 Train_             LSTM epoch별 평균 학습 loss (--lstm-training)
 ├── loss_net_val.csv, loss_netx_val.csv           Train_             save-per 주기마다의 검증 loss
 ├── pca_arrays.npz                                Train_             PCA 결과·관리한계 (최종 모델 기준)
 ├── pca_manifest.json                             Train_             pca_* 타입·shape·경로

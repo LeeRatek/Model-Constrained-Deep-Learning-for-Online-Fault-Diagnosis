@@ -23,9 +23,13 @@ python -m pytest -m "not realdata"   # 실제 데이터가 필요한 테스트�
 | `test_vehicles.py` | 분할 파일 읽기, 차량 원본 읽기·전처리, 차량 데이터 캐시 확인 (`mcdl/vehicles.py`) |
 | `test_train_rows.py` | 학습 데이터를 batch로 꺼내는 `Train_.row_loader`가 예전 방식과 같은 batch를 내는지 확인 |
 | `test_scripts.py` | 실행 스크립트(`Train_.py`, `Test_.py` 등)를 가짜 데이터로 처음부터 끝까지 실행해 보는 smoke 테스트 |
-| `fake_vehicles.py` | (도우미) 테스트용 가짜 차량 원본 데이터와 분할 파일을 만드는 함수 |
+| `test_kalman.py` | 칼만 필터(`mcdl/kalman.py`)가 논문 원본 코드로 만든 기대값과 완전히 같은지 확인 |
+| `test_lstm.py` | LSTM 학습 데이터 구성, 모델 출력 모양, 저장·불러오기 확인 (`mcdl/lstm.py`, `Class_.LSTM`) |
+| `fake_vehicles.py` | (도우미) 테스트용 가짜 차량 원본 데이터(vin_1·vin_2·vin_3)와 분할 파일을 만드는 함수 |
 | `synthetic_errors.py` | (도우미) 진단 계산 테스트용 합성 재구성 오차를 만드는 함수 |
+| `synthetic_battery.py` | (도우미) 칼만 필터 테스트용 합성 측정값(셀 전압·전류·온도·SOC, OCV 계수)을 만드는 함수 |
 | `make_diagnosis_golden.py` | (도구) `test_diagnosis.py`가 쓰는 기대값 파일을 다시 만드는 스크립트 |
+| `make_kalman_golden.py` | (도구) `test_kalman.py`가 쓰는 기대값 파일을 다시 만드는 스크립트 |
 | `fixtures/` | 테스트가 읽어 쓰는 미리 준비된 데이터 파일 |
 | `realdata/baseline.py` | (도구) 실제 데이터로 코드 수정 전후 결과를 비교하는 스크립트 |
 
@@ -38,6 +42,7 @@ python -m pytest -m "not realdata"   # 실제 데이터가 필요한 테스트�
 
 - **fixture 파일**: 테스트가 읽어 쓰려고 미리 저장해 둔 데이터 파일. `fixtures/` 폴더 이름이 여기서 왔습니다.
   - `fixtures/diagnosis_golden.npz`: `test_diagnosis.py`가 비교하는 기대값(아래 golden 값)
+  - `fixtures/kalman_golden.npz`: `test_kalman.py`가 비교하는 기대값. 칼만 필터를 지우기 직전의 원본 코드로 만들었습니다.
   - `fixtures/sim_config_260224_090359.txt`: 실제 학습 결과(Run 260224_090359)의 설정 파일 복사본. `test_run.py`가 씁니다.
 - **pytest fixture**: 함수 위에 `@pytest.fixture`가 붙은 준비 함수. 테스트 함수의 인자 이름이 이 함수 이름과 같으면,
   pytest가 테스트 전에 이 함수를 실행해 그 결과를 인자로 넣어 줍니다. 예: `test_chart_source.py`의 `run`은 가짜 Run 폴더를

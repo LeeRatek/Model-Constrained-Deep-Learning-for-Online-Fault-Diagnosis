@@ -5,7 +5,8 @@
 끝까지 돌아가는지 확인하는 용도다. 차량 ID를 난수 시드로 쓰므로 같은 ID는 언제나 같은 값이 나온다.
 
     fake_vehicle: 차량 한 대의 가짜 vin_2(셀 전압용), vin_3(셀 SOC용) 텐서
-    write_fake_vehicles: 가짜 차량들을 data/QAS/<ID>/vin_2.pkl, vin_3.pkl 파일로 저장
+    fake_vin1: 차량 한 대의 가짜 vin_1(LSTM용 팩 측정값 7개) 텐서
+    write_fake_vehicles: 가짜 차량들을 data/QAS/<ID>/vin_1.pkl, vin_2.pkl, vin_3.pkl 파일로 저장
     write_split: 분할(train/validate/test/fault) 차량 목록 .npy 저장 (data_filter.py가 만드는 것과 같은 형식)
 
 쓰는 곳: test_vehicles.py, test_chart_source.py, test_scripts.py.
@@ -32,15 +33,26 @@ def fake_vehicle(seed, n_steps=N_STEPS):
     return vin_2, vin_3
 
 
+def fake_vin1(seed, n_steps=N_STEPS):
+    """실제 vin_1.pkl과 같은 모양(시점 × 1 × 7, 값 0~1)의 가짜 LSTM 입력을 만든다.
+
+    vin_2·vin_3와 다른 난수 시드(seed + 100000)를 써서, 이 함수를 더해도 기존 가짜 vin_2·vin_3 값은 그대로다.
+    쓰는 곳: write_fake_vehicles, test_lstm.py.
+    """
+    generator = torch.Generator().manual_seed(seed + 100000)
+    return torch.rand(n_steps, 1, 7, dtype=torch.float64, generator=generator)
+
+
 def write_fake_vehicles(data_dir, ids):
-    """data_dir/QAS/<id>/vin_2.pkl, vin_3.pkl을 만든다 (차량 ID를 seed로 쓴다). 실제 원본과 같은 폴더 구조다.
+    """data_dir/QAS/<id>/vin_1.pkl, vin_2.pkl, vin_3.pkl을 만든다 (차량 ID를 seed로 쓴다). 실제 원본과 같은 폴더 구조다.
 
     쓰는 곳: test_vehicles.py, test_chart_source.py, test_scripts.py.
     """
     for vehicle_id in ids:
         folder = data_dir / "QAS" / str(vehicle_id)
         folder.mkdir(parents=True)
-        for name, tensor in zip(("vin_2.pkl", "vin_3.pkl"), fake_vehicle(vehicle_id)):
+        tensors = (fake_vin1(vehicle_id), *fake_vehicle(vehicle_id))
+        for name, tensor in zip(("vin_1.pkl", "vin_2.pkl", "vin_3.pkl"), tensors):
             with open(folder / name, "wb") as f:
                 pickle.dump(tensor, f)
 

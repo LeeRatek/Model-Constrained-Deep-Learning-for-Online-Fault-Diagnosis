@@ -19,9 +19,11 @@ matplotlib.use("Agg")  # 그림 창을 띄우지 않고 파일로만 그린다 (
 import matplotlib.pyplot as plt
 import pandas as pd
 import pytest
+import torch
 
 from fake_vehicles import N_STEPS, write_fake_vehicles, write_split
 from mcdl.diagnosis import ControlChart
+from mcdl.lstm import load_lstm_model
 from mcdl.run import Run
 
 SPLITS = {"train": [0, 1], "validate": [2], "test": [3, 4], "fault": [5, 6]}  # 가짜 분할 (차량 ID)
@@ -143,6 +145,23 @@ def test_train_stops_when_the_named_split_is_missing(workspace):
         run_main("Train_", ["--models-dir", "models_missing", "--dataset-name", "no_such_split", *TRAIN_ARGS])
 
     assert not (workspace / "models_missing").exists()
+
+
+def test_train_lstm_is_saved_and_leaves_mc_ae_unchanged(workspace, trained_run):
+    """--lstm-training이면 LSTM 모델(artifact/lstm.pth)과 loss 기록(loss_lstm.csv)을 저장하고,
+    MC-AE 체크포인트는 LSTM 없이 같은 옵션으로 학습한 Run(trained_run)과 완전히 같은지 본다.
+
+    LSTM은 MC-AE 학습이 모두 끝난 뒤에 학습하므로, 난수를 써도 MC-AE 결과가 바뀌지 않아야 한다.
+    """
+    run_main("Train_", ["--models-dir", "models_lstm", *TRAIN_ARGS, "--lstm-training", "--lstm-epochs", "2"])
+
+    (run_dir,) = (workspace / "models_lstm").iterdir()
+    assert pd.read_csv(run_dir / "loss_lstm.csv").epoch.tolist() == [0, 1]
+    lstm = load_lstm_model(run_dir / "artifact")
+    assert lstm(torch.rand(4, 1, 7, dtype=torch.float64)).shape == (4, 1, 2)
+    for name in ("net.pth", "netx.pth", "net_e0.pth", "netx_e0.pth"):
+        saved, reference = (torch.load(d / "artifact" / name) for d in (run_dir, trained_run))
+        assert all(torch.equal(saved[k], reference[k]) for k in reference), name
 
 
 def test_train_checkpoint_schedule_with_shuffle_and_validation(workspace):

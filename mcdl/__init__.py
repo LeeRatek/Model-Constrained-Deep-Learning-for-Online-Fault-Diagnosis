@@ -20,5 +20,9 @@
     roc.py             차량별 최대 CI와 고장 여부로 ROC 곡선과 AUC를 계산한다.
     plotting.py        그림 함수 모음 (loss 곡선, ROC, 진단 시계열, t-SNE, AUC 히트맵 등).
 
+진단 계산과 따로 쓰는 파일 (논문 원본 코드에서 복원)
+    lstm.py            팩 상태 예측 LSTM의 학습 데이터 만들기와 모델 저장·불러오기 (Train_.py --lstm-training).
+    kalman.py          칼만 필터로 팩 상태와 셀별 SOC 편차를 추정한다. 데이터에 결과가 이미 들어 있어 스크립트는 쓰지 않는다.
+
 자주 나오는 용어는 저장소 루트의 GLOSSARY.md에 풀어서 정리되어 있다.
 """
