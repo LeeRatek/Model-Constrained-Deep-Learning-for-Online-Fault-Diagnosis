@@ -30,11 +30,13 @@ def run(tmp_path, monkeypatch):
     @pytest.fixture가 붙은 함수는 pytest가 테스트 실행 전에 불러, 돌려준 값을 같은 이름의 테스트 인자로 넣어 준다.
     tmp_path(테스트마다 새로 만드는 빈 임시 폴더)와 monkeypatch(테스트 동안만 설정을 바꾸고 끝나면 되돌리는 도구)도
     pytest가 기본으로 주는 fixture다.
-    만드는 것: 임시 폴더에 train 분할 .npy, 가짜 원본 데이터, run/sim_config.txt, 체크포인트 번호 -1·0의
-    U·X 모델 가중치(시드 0의 작은 무작위 값).
+    만드는 것: 임시 폴더에 기본 분할(datasets/basic)의 train .npy, 가짜 원본 데이터, run/sim_config.txt,
+    체크포인트 번호 -1·0의 U·X 모델 가중치(시드 0의 작은 무작위 값).
     """
-    monkeypatch.chdir(tmp_path)  # 분할 경로 "."은 cwd 기준이다
-    write_split(tmp_path, "train", TRAIN_IDS)
+    monkeypatch.chdir(tmp_path)  # 분할 경로 "./datasets/basic"은 작업 폴더 기준이다
+    split_dir = tmp_path / "datasets" / "basic"
+    split_dir.mkdir(parents=True)
+    write_split(split_dir, "train", TRAIN_IDS)
     write_fake_vehicles(tmp_path / "data", TRAIN_IDS)
 
     run_dir = tmp_path / "run"

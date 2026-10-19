@@ -104,7 +104,7 @@ parser.add_argument(
     "--dataset-name",
     type=str,
     default=None,
-    help="Name of the dataset folder (e.g. 'train_0.5_seed42') to load from ./datasets/",
+    help="./datasets/<이름>의 분할을 쓴다. 생략하면 기본 분할 ./datasets/basic",
 )
 parser.add_argument("--no-use-dx", action="store_true")
 parser.add_argument("--no-abs-err", action="store_true")

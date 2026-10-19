@@ -2,8 +2,8 @@
 
 분할(split)
     차량 ID를 용도별로 나눈 목록이다. train(학습), validate(검증), test(정상 평가 차량), fault(고장 차량),
-    normal(정상 전체)이 있고, 저장소 루트나 datasets/<이름>/ 폴더에 <배터리 종류>_filtered_vehicle_ids_<분할>.npy
-    파일로 저장되어 있다(data_filter.py가 만든다).
+    normal(정상 전체)이 있고, datasets/<이름>/ 폴더에 <배터리 종류>_filtered_vehicle_ids_<분할>.npy 파일로
+    저장되어 있다(data_filter.py가 만든다). 이름을 주지 않으면 기본 분할 datasets/basic/을 쓴다(mcdl/run.py).
 
 차량 텐서
     차량 한 대의 데이터는 (U 텐서, X 텐서) 두 개다. U 텐서는 vin_2.pkl을, X 텐서는 vin_3.pkl을 전처리한 것으로
@@ -36,7 +36,7 @@ def split_ids(split_dir, battery_type: str, split: str, *, start: int = 0, end: 
     """분할 파일에서 차량 ID 목록(int)을 읽는다. split은 "train", "validate", "test", "fault", "normal" 중 하나.
 
     start~end 구간만 돌려준다(end 포함, end=-1이면 끝까지). 학습할 때 --vehicle-start/--vehicle-end로
-    train 분할의 일부만 쓰는 데 쓴다. 예: split_ids(".", "QAS", "train", start=0, end=9) → 앞의 10대.
+    train 분할의 일부만 쓰는 데 쓴다. 예: split_ids("./datasets/basic", "QAS", "train", start=0, end=9) → 앞의 10대.
     쓰는 곳: Train_.py, Test_.py, Test_multi_models.py, Test_tsne.py, mcdl/chart_source.py.
     """
     ids = (

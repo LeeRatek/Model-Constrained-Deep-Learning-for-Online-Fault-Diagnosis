@@ -59,6 +59,9 @@ LEGACY_DEFAULTS = {
 # 체크포인트 파일 이름 앞부분. U-model은 net*.pth, X-model은 netx*.pth로 저장된다.
 _FILE_PREFIX = {"U": "net", "X": "netx"}
 
+# --dataset-name을 주지 않았을 때 쓰는 기본 분할 (./datasets/basic). 예전 Run(dataset_name 기록 없음)도 이 분할로 학습했다.
+DEFAULT_SPLIT_NAME = "basic"
+
 
 @dataclass(frozen=True)
 class RunConfig:
@@ -83,7 +86,7 @@ class RunConfig:
     vehicle_end: int
     preprocessing: bool  # learning_case에서 계산: 0~1 정규화를 하는지
     skip_charge_ready: bool  # learning_case에서 계산: 충전 대기 구간을 잘라내는지
-    split_dir: str  # 분할 파일(.npy)이 있는 폴더: "./datasets/<이름>" 또는 저장소 루트 "."
+    split_dir: str  # 분할 파일(.npy)이 있는 폴더: "./datasets/<이름>" (이름이 없으면 "./datasets/basic")
 
     @classmethod
     def from_mapping(cls, values) -> "RunConfig":
@@ -362,15 +365,15 @@ def _build_model(config: RunConfig, model: str):
 
 
 def resolve_split_dir(dataset_name) -> str:
-    """분할(--dataset-name)이 있는 폴더를 정한다. MC-AE 학습·평가와 LSTM 학습이 모두 이 규칙을 쓴다.
+    """분할(--dataset-name)이 있는 폴더 ./datasets/<이름>을 정한다. MC-AE 학습·평가와 LSTM 학습이 모두 이 규칙을 쓴다.
 
-    이름이 없거나 "None"(이름 없이 학습한 Run의 sim_config.txt 기록)이면 저장소 루트("."), 그 밖의 이름은
-    ./datasets/<이름>이다. 그 폴더가 없으면 FileNotFoundError를 낸다(다른 분할로 학습·평가하지 않도록).
+    이름이 없거나 "None"(이름 없이 학습한 Run의 sim_config.txt 기록)이면 기본 분할 ./datasets/basic을 쓴다.
+    폴더가 없으면 FileNotFoundError를 낸다(다른 분할로 학습·평가하지 않도록).
     쓰는 곳: RunConfig.from_mapping(Train_.py·평가 스크립트), Train_lstm.py.
     """
     name = "" if dataset_name is None else str(dataset_name).strip()
     if not name or name.lower() == "none":
-        return "."
+        name = DEFAULT_SPLIT_NAME
     folder = f"./datasets/{name}"
     if not os.path.isdir(folder):
         raise FileNotFoundError(

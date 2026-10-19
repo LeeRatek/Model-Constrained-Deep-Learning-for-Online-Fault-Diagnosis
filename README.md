@@ -21,7 +21,7 @@
 
 ## 1. 빠른 시작
 
-모든 스크립트는 **저장소 루트에서** 실행합니다 (`./data`, `./datasets`, `./*.npy` 상대 경로를 사용).
+모든 스크립트는 **저장소 루트에서** 실행합니다 (`./data`, `./datasets` 상대 경로를 사용).
 
 ```bash
 # 0) (선택) 차량 분할 새로 만들기 → ./datasets/10/   (datasets/2, 5, 10, 15는 이미 포함되어 있음)
@@ -39,7 +39,7 @@ python Test_.py --models-idx <RUN_ID>
 python Test_tsne.py --models-idx <RUN_ID> --u-model-idx -1 --x-model-idx -1 --fault-idx 338 --save
 ```
 
-`--dataset-name`을 생략하면 저장소 루트의 기본 분할(`QAS_filtered_vehicle_ids_*.npy`)을 사용합니다.
+`--dataset-name`을 생략하면 기본 분할 `datasets/basic/`(`QAS_filtered_vehicle_ids_*.npy` 등)을 사용합니다.
 
 처음이라면 위 명령보다 아래 단계별 안내를 먼저 따라 하기를 권합니다.
 
@@ -75,7 +75,7 @@ python -c "from mcdl.preprocessing import safe_load; print(safe_load('data/QAS/0
 
 **3단계 - 작게 학습하기** (약 1.5분)
 
-루트 기본 분할의 학습 차량 중 앞의 10대로 3 epoch만 학습합니다. 검증 차량 50대도 함께 읽습니다.
+기본 분할(`datasets/basic/`)의 학습 차량 중 앞의 10대로 3 epoch만 학습합니다. 검증 차량 50대도 함께 읽습니다.
 
 ```bash
 python Train_.py --vehicle-end 9 --ae-u-epochs 3 --ae-x-epochs 3 --ae-u-save-per 1 --ae-x-save-per 1
@@ -132,8 +132,8 @@ python Plot_AUC_heatmap.py --models-idx <RUN_ID>                     # AUC_summa
 | 증상 | 원인과 해결 |
 |---|---|
 | 출력을 파일로 리디렉션하면 `UnicodeEncodeError: 'cp949' …` | Windows 콘솔 인코딩 문제입니다. `PYTHONIOENCODING=utf-8`을 설정하고 실행합니다 |
-| `FileNotFoundError: …_filtered_vehicle_ids_….npy` | 저장소 루트가 아닌 곳에서 실행했거나, 루트 기본 분할 파일이 없습니다 |
-| `FileNotFoundError: 분할 폴더가 없습니다: ./datasets/<이름>` | `--dataset-name`(평가에서는 sim_config.txt의 `dataset_name`) 폴더가 `datasets/`에 없습니다. 저장소 루트에서 실행했는지, `data_filter.py --dataset-name <이름>`으로 만들었는지 확인합니다 |
+| `FileNotFoundError: …_filtered_vehicle_ids_….npy` | 분할 폴더에 그 배터리 종류·분할의 파일이 없습니다(예: `datasets/10`에는 QAS 분할만 있습니다) |
+| `FileNotFoundError: 분할 폴더가 없습니다: ./datasets/<이름>` | `--dataset-name`(평가에서는 sim_config.txt의 `dataset_name`) 폴더가 `datasets/`에 없습니다. 이름을 주지 않았다면 기본 분할 `datasets/basic/`이 없는 것입니다. 저장소 루트에서 실행했는지, `data_filter.py --dataset-name <이름>`으로 만들었는지 확인합니다 |
 | `FileNotFoundError: data/QAS/<id>/vin_2.pkl` | 2단계 데이터 배치를 확인합니다. 다른 위치에 두었다면 `--source-data-dir` 또는 `SOURCE_DIR`을 씁니다 |
 | `Test_.py`가 끝나지 않음 | ROC 그림 창이 열려 있습니다. 창을 닫거나 `MPLBACKEND=Agg`로 실행합니다 |
 | `Test_multi_models.py`에서 메모리 부족 | `.pt` 캐시를 통째로 올리기 때문입니다(준비물 표). 학습 차량 범위를 줄인 Run으로 먼저 돌려 봅니다 |
@@ -245,8 +245,7 @@ z = fc4(z)                              # --add-one-output-layer 일 때만, Lin
 ├── .scratch/               리팩토링·버그 수정의 spec과 티켓 (로컬 이슈 트래커)
 ├── docs/agents/            에이전트 작업 규칙 (이슈 트래커, triage 라벨, 용어집 위치)
 ├── pytest.ini              pytest 설정 (저장소 루트를 import 경로에 추가)
-├── QAS_filtered_vehicle_ids_{normal,fault,train,validate,test}.npy   QAS 기본 분할
-├── DTI_filtered_vehicle_ids_{normal,fault,train,validate,test}.npy   DTI 기본 분할
+├── datasets/basic/         기본 분할 (QAS·DTI). --dataset-name을 주지 않으면 이 분할을 쓴다
 ├── datasets/{2,5,10,15}/   data_filter.py로 만든 QAS 분할 (학습 비율 2·5·10·15 %)
 ├── backup/                 이전 분할 파일 백업 (20260205/, past/)
 ├── data/                   원본 데이터 (git 제외, 직접 배치)
@@ -256,7 +255,7 @@ z = fc4(z)                              # --add-one-output-layer 일 때만, Lin
 
 ### 차량 분할 파일
 
-| 분할 | QAS 기본 (루트) | DTI 기본 (루트) | `datasets/2` | `datasets/5` | `datasets/10` | `datasets/15` |
+| 분할 | QAS 기본 (`datasets/basic`) | DTI 기본 (`datasets/basic`) | `datasets/2` | `datasets/5` | `datasets/10` | `datasets/15` |
 |---|---|---|---|---|---|---|
 | normal | 309 (ID 0~334) | 77 (ID 0~76) | 309 | 309 | 309 | 309 |
 | fault | 50 (ID 335~392) | 3 (ID 77~79) | 50 | 50 | 50 | 50 |
@@ -265,7 +264,8 @@ z = fc4(z)                              # --add-one-output-layer 일 때만, Lin
 | test | 50 | 19 | 152 | 147 | 140 | 132 |
 
 - normal = train + validate + test입니다. 평가에는 **test(정상) + fault(고장)** 차량을 사용합니다.
-- `datasets/*`는 모두 `--val-ratio 0.5 --seed 42`로 생성되었고, 폴더마다 `dataset_info_QAS.txt`에 분할별 샘플 수가 기록되어 있습니다.
+- `datasets/{2,5,10,15}`는 모두 `--val-ratio 0.5 --seed 42`로 생성되었고, 폴더마다 `dataset_info_QAS.txt`에 분할별 샘플 수가 기록되어 있습니다.
+- `datasets/basic`은 예전에 저장소 루트에 있던 기본 분할을 그대로 옮긴 것입니다. `dataset_name` 기록이 없는 기존 Run(`models/2602*`)은 모두 이 분할로 학습했고, 평가할 때도 이 분할을 읽습니다.
 
 ---
 
@@ -545,7 +545,7 @@ python data_filter.py --dataset-name 10 --train-ratio 0.1 --val-ratio 0.5 --seed
 
 | 옵션 | 기본값 | 설명 |
 |---|---|---|
-| `--dataset-name` | `default` | 저장 폴더 `./datasets/<name>/` |
+| `--dataset-name` | `default` | 저장 폴더 `./datasets/<name>/`. 기본 분할 `basic`을 덮어쓰지 않도록 기본 이름은 `default`입니다 |
 | `--train-ratio` | 없음 | 정상 차량 중 학습 비율. 미지정 시 QAS 109대 / DTI 39대 |
 | `--val-ratio` | 없음 | **학습을 뺀 나머지** 중 검증 비율. 미지정 시 QAS 50대 / DTI 19대. 남은 차량이 test |
 | `--seed` | 42 | 분할 난수 시드 |
@@ -579,7 +579,7 @@ python Train_.py --battery-type QAS --dataset-name 10 --learning-case 1 \
 
 **동작 순서**
 
-1. 학습·검증 차량 리스트를 로드합니다 (`--dataset-name` 또는 루트 기본 분할).
+1. 학습·검증 차량 리스트를 로드합니다 (`--dataset-name` 또는 기본 분할 `datasets/basic`).
 2. 차량별 `vin_2.pkl`, `vin_3.pkl`을 로드하고 전처리합니다.
 3. `models/<RUN_ID>/sim_config.txt`에 전체 인자, 학습 차량 ID, 학습 샘플 수 등을 저장합니다.
 4. U-model을 학습합니다. `--ae-u-save-per` epoch마다 검증 loss를 계산하고 `net_e<epoch>.pth`를 저장하며, 종료 후 `net.pth`를 저장합니다.
@@ -597,7 +597,7 @@ python Train_.py --battery-type QAS --dataset-name 10 --learning-case 1 \
 | 옵션 | 기본값 | 설명 |
 |---|---|---|
 | `--battery-type` | `QAS` | `QAS` 또는 `DTI` |
-| `--dataset-name` | 없음 | `./datasets/<name>/` 분할 사용. 미지정 시 루트 `*.npy`. 폴더가 없으면 학습을 시작하지 않고 오류로 멈춤 |
+| `--dataset-name` | 없음 | `./datasets/<name>/` 분할 사용. 미지정 시 기본 분할 `./datasets/basic/`. 폴더가 없으면 학습을 시작하지 않고 오류로 멈춤 |
 | `--learning-case` | 1 | 전처리 조합 (5장 표) |
 | `--models-dir` / `--source-data-dir` | `./models` / `./data` | 결과 저장 위치 / 원본 데이터 위치 |
 | `--vehicle-start` / `--vehicle-end` | 0 / -1 | 학습 차량 리스트 슬라이스 (end 포함, -1은 끝까지) |
@@ -757,7 +757,7 @@ python Train_lstm.py --dataset-name 10 --epochs 300
 | 옵션 | 기본값 | 설명 |
 |---|---|---|
 | `--battery-type` | `QAS` | `QAS` 또는 `DTI` |
-| `--dataset-name` | 없음 | `./datasets/<name>/` 분할 사용. 미지정 시 루트 `*.npy`. 규칙은 Train_.py와 같음 |
+| `--dataset-name` | 없음 | `./datasets/<name>/` 분할 사용. 미지정 시 기본 분할 `./datasets/basic/`. 규칙은 Train_.py와 같음 |
 | `--vehicle-start` / `--vehicle-end` | 0 / -1 | 학습 차량 리스트 슬라이스 (end 포함, -1은 끝까지) |
 | `--models-dir` / `--source-data-dir` | `./models` / `./data` | 결과 저장 위치 / 원본 데이터 위치 |
 | `--epochs` / `--lr` / `--batchsize` | 300 / 1e-4 / 100 | epoch, Adam 학습률, 배치 크기 (매 epoch 셔플) |
@@ -831,7 +831,7 @@ models/<RUN_ID>/                                  Train_lstm.py로 만든 LSTM �
 
 - **저장소 루트에서 실행**해야 합니다 (상대 경로 사용).
 - **`sim_config.txt`를 지우거나 고치지 마세요.** Test 계열 스크립트가 학습 설정을 복원할 때 이 파일을 읽습니다. 학습 시 준 `--dataset-name`도 여기에 기록되어, 테스트가 같은 분할을 자동으로 사용합니다.
-- **분할 폴더는 학습(Train_, Train_lstm)과 평가가 같은 규칙으로 정합니다.** `dataset_name`이 없거나 `None`이면 루트 기본 분할, 그 밖의 이름(`default` 포함)은 `./datasets/<이름>/`입니다. 그 폴더가 없으면 다른 분할로 넘어가지 않고 오류로 멈춥니다(`mcdl/run.py`의 `resolve_split_dir`). Run을 다른 컴퓨터로 옮겨 평가할 때는 `datasets/<이름>/`도 함께 옮기세요.
+- **분할 폴더는 학습(Train_, Train_lstm)과 평가가 같은 규칙으로 정합니다.** `dataset_name`이 없거나 `None`이면 기본 분할 `./datasets/basic/`, 그 밖의 이름(`default` 포함)은 `./datasets/<이름>/`입니다. 그 폴더가 없으면 다른 분할로 넘어가지 않고 오류로 멈춥니다(`mcdl/run.py`의 `resolve_split_dir`). Run을 다른 컴퓨터로 옮겨 평가할 때는 `datasets/<이름>/`도 함께 옮기세요.
 - **`--debug`를 주면 빠른 확인용으로 동작이 바뀝니다.** 디버거(VS Code 등)로 실행하는 것만으로는 동작이 바뀌지 않습니다. 디버거에서 이 동작을 쓰려면 launch.json의 `args`에 `--debug`를 넣으세요.
 
   | 스크립트 | `--debug`일 때 |

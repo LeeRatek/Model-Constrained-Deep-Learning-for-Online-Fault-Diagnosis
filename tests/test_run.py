@@ -122,7 +122,7 @@ def test_real_sim_config_is_read_as_trained(tmp_path):
     assert config.no_abs_err is False
     assert (config.vehicle_start, config.vehicle_end) == (0, -1)
     assert (config.preprocessing, config.skip_charge_ready) == (False, True)
-    assert config.split_dir == "."  # dataset_name 키가 없는 Run은 루트 분할
+    assert config.split_dir == "./datasets/basic"  # dataset_name 키가 없는 Run은 기본 분할
 
 
 def test_missing_keys_fall_back_to_legacy_defaults(tmp_path):
@@ -164,11 +164,12 @@ def test_learning_case_derives_preprocessing_flags(tmp_path):
         ("10", "10", "./datasets/10"),
         ("05", "05", "./datasets/05"),  # 폴더 이름은 숫자로 바뀌지 않는다
         ("default", "default", "./datasets/default"),  # data_filter.py의 기본 이름도 보통 이름처럼 쓴다
-        ("None", None, "."),  # 이름 없이 학습한 Run은 sim_config.txt에 None으로 기록된다
+        ("None", "basic", "./datasets/basic"),  # 이름 없이 학습한 Run은 sim_config.txt에 None으로 기록된다
+        ("basic", "basic", "./datasets/basic"),
     ],
 )
 def test_split_dir_follows_dataset_name(tmp_path, monkeypatch, dataset_name, make_dir, expected):
-    """dataset_name에 따라 분할 폴더가 정해지는지 본다. 이름이 None이면 루트("."), 그 밖에는 datasets/<이름>.
+    """dataset_name에 따라 분할 폴더가 정해지는지 본다. 이름이 None이면 기본 분할 datasets/basic, 그 밖에는 datasets/<이름>.
 
     monkeypatch.chdir는 테스트 동안만 작업 폴더를 tmp_path로 바꾼다(테스트가 끝나면 원래대로 돌아온다).
     """
@@ -181,9 +182,10 @@ def test_split_dir_follows_dataset_name(tmp_path, monkeypatch, dataset_name, mak
 
 
 def test_missing_split_folder_is_an_error(tmp_path, monkeypatch):
-    """기록된 분할 폴더가 없으면 루트 분할로 넘어가지 않고, 폴더와 sim_config.txt 경로를 밝힌 오류로 멈추는지 본다.
+    """기록된 분할 폴더가 없으면 다른 분할로 넘어가지 않고, 폴더와 sim_config.txt 경로를 밝힌 오류로 멈추는지 본다.
 
-    학습(Train_.py, RunConfig.from_mapping)과 평가(Run)가 같은 규칙을 쓰므로 둘 다 확인한다.
+    학습(Train_.py, RunConfig.from_mapping)과 평가(Run)가 같은 규칙을 쓰므로 둘 다 확인한다. 이름이 없을 때 쓰는
+    기본 분할(datasets/basic)이 없어도 같은 오류다.
     (.scratch/known-bugs/issues/15-train-eval-split-dir-differ.md)
     """
     monkeypatch.chdir(tmp_path)
@@ -194,6 +196,8 @@ def test_missing_split_folder_is_an_error(tmp_path, monkeypatch):
     assert "sim_config.txt" in str(excinfo.value)
     with pytest.raises(FileNotFoundError, match="datasets/11"):
         RunConfig.from_mapping({"battery_type": "QAS", "learning_case": 1, "dataset_name": "11"})
+    with pytest.raises(FileNotFoundError, match="datasets/basic"):
+        RunConfig.from_mapping({"battery_type": "QAS", "learning_case": 1})
 
 
 # ---------------------------------------------------------------- 체크포인트

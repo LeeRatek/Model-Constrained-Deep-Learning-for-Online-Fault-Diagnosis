@@ -40,7 +40,7 @@ parser.add_argument(
     "--dataset-name",
     type=str,
     default=None,
-    help="./datasets/<이름>의 분할을 쓴다. 생략하면 저장소 루트의 기본 분할",
+    help="./datasets/<이름>의 분할을 쓴다. 생략하면 기본 분할 ./datasets/basic",
 )
 parser.add_argument("--vehicle-start", type=int, default=0, help="train 분할에서 쓸 차량 범위의 시작 위치")
 parser.add_argument("--vehicle-end", type=int, default=-1, help="train 분할에서 쓸 차량 범위의 끝 위치 (포함, -1은 끝까지)")

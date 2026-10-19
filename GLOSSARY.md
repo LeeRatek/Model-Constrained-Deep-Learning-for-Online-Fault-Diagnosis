@@ -104,7 +104,7 @@ _Avoid_: 관리한계, limit
 | RUN_ID | 학습을 시작한 시각으로 만든 Run 폴더 이름. `26MMDD_HHMMSS` 형식이다 |
 | `sim_config.txt` | Train_이 Run 폴더에 남기는 학습 설정 기록. 평가 스크립트가 이 파일을 읽어 학습 때와 같은 조건으로 평가한다 |
 | 체크포인트 파일 (`.pth`) | 학습 중 저장한 모델 가중치. `net_e<번호>.pth`(중간), `net.pth`(최종) |
-| 분할 파일 (`.npy`) | 차량 ID 목록을 담은 numpy 파일. `QAS_filtered_vehicle_ids_train.npy`처럼 이름에 배터리 종류와 분할 이름이 들어간다 |
+| 분할 파일 (`.npy`) | 차량 ID 목록을 담은 numpy 파일. `QAS_filtered_vehicle_ids_train.npy`처럼 이름에 배터리 종류와 분할 이름이 들어간다. `datasets/<이름>/` 폴더에 있고, 이름을 주지 않으면 기본 분할 `datasets/basic/`을 쓴다 |
 | learning_case | 전처리 조합 번호(1~4). 충전 대기 구간을 자를지, 0~1로 정규화할지를 정한다 |
 | 캐시 | 오래 걸리는 계산 결과를 파일로 저장해 두고 다음 실행에서 다시 쓰는 것 |
 | `.pt` 캐시 | 전처리를 마친 차량 텐서를 묶어 저장한 파일. `data/` 폴더에 생기며 Test_multi_models가 만든다 |

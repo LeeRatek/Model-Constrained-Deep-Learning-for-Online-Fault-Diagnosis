@@ -50,15 +50,17 @@ def test_import_runs_nothing(name, monkeypatch, capsys):
 
 @pytest.fixture(scope="module")
 def workspace(tmp_path_factory):
-    """가짜 원본 데이터(data/QAS/<id>)와 루트 분할 .npy를 둔 임시 작업 폴더. 스크립트는 상대 경로를 쓰므로
-    이 파일의 테스트가 도는 동안 작업 폴더(cwd)를 여기로 옮겨 둔다.
+    """가짜 원본 데이터(data/QAS/<id>)와 기본 분할 .npy(datasets/basic/)를 둔 임시 작업 폴더. 스크립트는 상대 경로를
+    쓰므로 이 파일의 테스트가 도는 동안 작업 폴더(cwd)를 여기로 옮겨 둔다.
 
     scope="module"이라 이 파일의 테스트 전체가 한 번 만든 폴더를 함께 쓴다(테스트마다 새로 만들지 않는다).
     """
     root = tmp_path_factory.mktemp("workspace")
     write_fake_vehicles(root / "data", [i for ids in SPLITS.values() for i in ids] + [DEBUG_VEHICLE])
+    split_dir = root / "datasets" / "basic"
+    split_dir.mkdir(parents=True)
     for split, ids in SPLITS.items():
-        write_split(root, split, ids)
+        write_split(split_dir, split, ids)
 
     with pytest.MonkeyPatch.context() as mp:
         mp.chdir(root)
@@ -126,11 +128,11 @@ def test_train_debug_uses_one_vehicle_and_writes_no_sim_config(workspace):
 
 def test_train_and_evaluation_read_the_same_named_split(workspace):
     """--dataset-name default(data_filter.py의 기본 이름)로 학습하면 datasets/default 분할로 학습하고,
-    평가 쪽(Run)도 같은 폴더를 읽는지 본다. 예전에는 학습만 이 폴더를 쓰고 평가는 루트 분할을 읽었다
+    평가 쪽(Run)도 같은 폴더를 읽는지 본다. 예전에는 학습만 이 폴더를 쓰고 평가는 기본 분할을 읽었다
     (.scratch/known-bugs/issues/15-train-eval-split-dir-differ.md)."""
     split_dir = workspace / "datasets" / "default"
     split_dir.mkdir(parents=True)
-    write_split(split_dir, "train", [2])  # 루트 분할(학습 차량 2대)과 다른 차량 1대
+    write_split(split_dir, "train", [2])  # 기본 분할(학습 차량 2대)과 다른 차량 1대
     write_split(split_dir, "validate", [3])
 
     run_main("Train_", ["--models-dir", "models_named", "--dataset-name", "default", *TRAIN_ARGS])
@@ -141,7 +143,7 @@ def test_train_and_evaluation_read_the_same_named_split(workspace):
 
 
 def test_train_stops_when_the_named_split_is_missing(workspace):
-    """--dataset-name의 분할 폴더가 없으면 루트 분할로 학습하지 않고, Run 폴더를 만들기 전에 오류로 멈추는지 본다."""
+    """--dataset-name의 분할 폴더가 없으면 기본 분할로 학습하지 않고, Run 폴더를 만들기 전에 오류로 멈추는지 본다."""
     with pytest.raises(FileNotFoundError, match="datasets/no_such_split"):
         run_main("Train_", ["--models-dir", "models_missing", "--dataset-name", "no_such_split", *TRAIN_ARGS])
 
